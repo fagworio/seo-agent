@@ -308,7 +308,10 @@ hermes-seo-agent integration-status --live     # checagens ao vivo (uma chamada 
 ```
 
 Cada fonte reporta `data_status` canônico: `available | partial | missing |
-invalid`. Uma fonte ausente NUNCA vira métrica zero.
+invalid`. Uma fonte ausente NUNCA vira métrica zero. Fontes monitoradas:
+`wordpress`, `sitemap`, `corpus` (docs/seções/entidades, staleness real vs
+unverifiable, cobertura ref, último run), `gsc`, `ga4`, `crux` e `external`
+(Trends).
 
 ### Memória editorial — corpus (M2)
 
@@ -324,6 +327,15 @@ mudou. `stats` mostra `coverage_pct`, `sitemap_without_corpus`,
 `staleness` e o último run (`processed/changed/failed`). **Antes de propor
 "new content", consulte `corpus coverage`** — "não encontrei conteúdo" só
 vale para o que foi indexado.
+
+**Staleness × unverifiable (semântica)**:
+- `staleness` = docs cujo conteúdo MUDOU (hash do corpus difere do inventory) —
+  sinal de que o corpus está desatualizado e precisa de rebuild;
+- `unverifiable_docs` = docs no corpus sem registro no inventory — indica
+  inventory desatualizado, NÃO conteúdo velho (não é stale).
+
+O `integration-status` expõe ambos na fonte `corpus`, para você saber se uma
+falta de match é confiável ou efeito de corpus desatualizado.
 
 ### Tópicos e clusters (M3)
 
