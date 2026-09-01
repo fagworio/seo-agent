@@ -3315,7 +3315,20 @@ def _cmd_brief(args: argparse.Namespace, config: Any) -> int:
         graph = build_topic_graph(storage, min_urls=1)
         ent = canonical_entity(keyword)
         cluster = next((c for c in graph if c["entity"] == ent), None)
-        docs = storage.corpus_search(keyword, limit=5)
+        # M7: busca híbrida (FTS + expansões + entidade + seções) em vez de só
+        # FTS lexical — encontra a SEÇÃO que cobre a intenção.
+        try:
+            from .report.semantic import hybrid_search
+            hybrid = hybrid_search(storage, keyword, limit=10)
+            docs = [{"url": h["url"], "title": h.get("title", ""),
+                     "snippet": h.get("snippet", ""),
+                     "semantic_score": h.get("semantic_score"),
+                     "matched_variants": h.get("matched_variants", []),
+                     "via": h.get("via", "")} for h in hybrid]
+            semantic_explained = True
+        except Exception:
+            docs = storage.corpus_search(keyword, limit=5)
+            semantic_explained = False
         intent = {
             "demand_score": min((impressions or 0) / 500.0, 1.0),
             "relevant": cluster is not None,
@@ -3371,7 +3384,8 @@ def _cmd_brief(args: argparse.Namespace, config: Any) -> int:
         "summary": {"command": "brief", "keyword": keyword,
                     "decision": brief["decision"],
                     "opportunity_type": brief["opportunity_type"],
-                    "recommended_url": brief["recommended_url"] or "(novo conteúdo)"},
+                    "recommended_url": brief["recommended_url"] or "(novo conteúdo)",
+                    "semantic_match": semantic_explained},
         "findings": [], "safe_actions": [], "approval_required": [],
         "brief": brief,
     }
