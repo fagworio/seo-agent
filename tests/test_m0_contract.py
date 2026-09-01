@@ -82,7 +82,9 @@ def test_integration_status_all_sources_present(tmp_path):
         assert statuses["ga4"].data_status == "available"
         assert statuses["gsc"].data_status == "missing"     # sem query_pages
         assert statuses["crux"].configured is True
-        assert statuses["external"].configured is False     # M4 opcional
+        # M4: default scrape (frontend público) -> external configurada
+        assert statuses["external"].configured is True
+        assert statuses["external"].extras["provider"] == "trends_scrape"
 
 
 def test_integration_status_unconfigured_sources(tmp_path):
@@ -114,7 +116,7 @@ def test_config_limits_defaults_and_env(monkeypatch):
 
 
 def test_integration_status_external_with_trends(tmp_path):
-    """M4: com Trends configurado, a fonte external deixa de ser 'missing'."""
+    """M4: Trends configurado (scrape ou api) deixa external não-missing."""
     db = tmp_path / "int-trends.db"
     with Storage(str(db)) as storage:
         config = Config(
@@ -128,5 +130,5 @@ def test_integration_status_external_with_trends(tmp_path):
         ext = statuses["external"]
         assert ext.configured is True
         assert ext.data_status == "partial"      # configurado, aguardando call live
-        assert ext.extras["provider"] == "google_trends"
+        assert ext.extras["provider"] == "trends_scrape"
         assert ext.extras["cost_per_call_cents"] == 0

@@ -33,7 +33,8 @@ def test_noop_provider_never_fabricates():
     p = NoopProvider(None)
     assert p.keyword_metrics("x") == []          # ausência ≠ zero
     assert p.trend_signal("x") == {}
-    assert get_provider(None).name == "none"     # factory default
+    # factory default agora é scrape (frontend público, sem credencial)
+    assert get_provider(None).name == "trends_scrape"
 
 
 def test_evidence_includes_cost_quota_origin():

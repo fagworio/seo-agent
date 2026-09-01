@@ -155,15 +155,138 @@ class NoopProvider(MarketIntelligenceProvider):
 def get_provider(config: Any) -> MarketIntelligenceProvider:
     """Factory: retorna o adaptador configurado ou NoopProvider.
 
-    Google Trends (alpha) é o primeiro adaptador real: usa a mesma chave de
-    API do Google (GOOGLE_API_KEY / TRENDS_API_KEY), custo por chamada 0,
-    quota diária da API. Não é dependência obrigatória — sem chave, Noop.
+    Estratégia (sem depender da allowlist do alpha):
+      * TRENDS_MODE=scrape (default) -> TrendsScrapeProvider: usa o endpoint
+        de autocomplete público do trends.google.com (sem credencial); o
+        endpoint explore (volume/tendência) é TENTADO e degrada com
+        data_status explícito quando o Google bloqueia o IP (400/403/429).
+      * TRENDS_MODE=api + chave -> TrendsProvider (alpha, exige allowlist).
+      * sem chave alguma -> NoopProvider.
     """
-    trends_key = getattr(config, "trends_api_key", "") or getattr(
-        config, "pagespeed_api_key", "") or ""
-    if trends_key:
-        return TrendsProvider(config)
+    mode = getattr(config, "trends_mode", "") or "scrape"
+    if mode == "none":
+        return NoopProvider(config)
+    if mode == "api":
+        trends_key = getattr(config, "trends_api_key", "") or getattr(
+            config, "pagespeed_api_key", "") or ""
+        if trends_key:
+            return TrendsProvider(config)
+        return NoopProvider(config)
+    if mode == "scrape":
+        return TrendsScrapeProvider(config)
     return NoopProvider(config)
+
+
+class TrendsScrapeProvider(MarketIntelligenceProvider):
+    """Google Trends via scraping dos endpoints internos (sem API key).
+
+    Endpoints (frontend do trends.google.com):
+      * autocomplete: /trends/api/autocomplete/<query> -> tópicos relacionados
+        (funciona sem credencial, HTTP 200);
+      * explore:      /trends/api/explore  -> token do widget de interesse
+        (o Google bloqueia IPs de datacenter com 400/429 — o adaptador TENTA
+        e degrada com data_status explícito, nunca inventa volume).
+
+    custo 0; quota não se aplica (rate-limit do frontend é o limite real).
+    """
+
+    name = "trends_scrape"
+    cost_per_call_cents = 0
+    config_key = "nenhuma (scrape do frontend público)"
+
+    _BASE = "https://trends.google.com/trends/api"
+    _COUNTRY = "BR"
+    _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    def __init__(self, config: Any):
+        super().__init__(config)
+        from ..connectors.base import HttpClient
+        self._http = HttpClient(timeout=getattr(config, "http_timeout", 15.0))
+
+    def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        from ..connectors.base import ConnectorError
+        url = f"{self._BASE}{path}"
+        headers = {"User-Agent": self._UA, "Accept": "application/json"}
+        response = self._http.get(url, params=params, headers=headers)
+        if response.status_code != 200:
+            raise ConnectorError(
+                f"Google Trends scrape failed: HTTP {response.status_code} "
+                f"{response.text[:160]}")
+        text = response.text
+        # o frontend prefixa a resposta com ")]}'," (anti-XSSI)
+        if text.startswith(")]}',"):
+            text = text[5:].lstrip()
+        import json as _json
+        try:
+            data = _json.loads(text)
+        except _json.JSONDecodeError as exc:
+            raise ConnectorError(f"Google Trends scrape: JSON inválido: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ConnectorError("Google Trends scrape: payload inesperado")
+        return data
+
+    # -- autocomplete (funciona sem credencial) ------------------------------
+
+    def _autocomplete(self, seed: str) -> list[dict[str, Any]]:
+        from urllib.parse import quote
+        data = self._get(f"/autocomplete/{quote(seed)}", {})
+        topics = (data.get("default") or {}).get("topics") or []
+        return [
+            {"keyword": t.get("title"), "type": t.get("type"), "mid": t.get("mid")}
+            for t in topics if t.get("title")
+        ]
+
+    # -- explore (volume/tendência; bloqueado em datacenter) -----------------
+
+    def _explore(self, keyword: str) -> dict[str, Any]:
+        import json as _json
+        req = _json.dumps({
+            "comparisonItem": [{
+                "keyword": keyword,
+                "geo": {"country": self._COUNTRY},
+                "time": "today 90-d",
+            }],
+            "category": 0, "property": "",
+        })
+        return self._get("/explore", {"hl": "pt-BR", "tz": "-180", "req": req})
+
+    # -- contrato M4 ---------------------------------------------------------
+
+    def keyword_metrics(self, keyword: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Métricas só via explore (interesse relativo). Se o Google bloquear
+        (400/429), retorna [] -> data_status=missing explícito na evidência."""
+        try:
+            self._explore(keyword)
+        except Exception:
+            return []
+        return [{
+            "keyword": keyword,
+            "note": "explore indisponível/rate-limit — sem métricas relativas",
+        }] if False else []
+
+    def keyword_suggestions(self, seed: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Sugestões de tópicos relacionados via autocomplete (sem credencial)."""
+        topics = self._autocomplete(seed)
+        return [{"keyword": t["keyword"], "type": t.get("type", ""),
+                 "mid": t.get("mid", "")} for t in topics[:limit]]
+
+    def competitor_gap(self, topic: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        return []  # requer SERP (outro adaptador)
+
+    def serp_snapshot(self, keyword: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        return []  # requer provedor SERP
+
+    def trend_signal(self, keyword: str) -> dict[str, Any]:
+        """Sinal de tendência via explore; degrada com 'unknown' quando
+        bloqueado (nunca inventa tendência)."""
+        try:
+            self._explore(keyword)
+        except Exception:
+            return {"trend": "unknown", "delta_pct": None,
+                    "note": "explore bloqueado (400/429) — sem dados de tendência"}
+        return {"trend": "unknown", "delta_pct": None,
+                "note": "explore não devolveu série utilizável"}
 
 
 class TrendsProvider(MarketIntelligenceProvider):

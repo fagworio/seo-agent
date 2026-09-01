@@ -3078,18 +3078,20 @@ def _cmd_market(args: argparse.Namespace, config: Any) -> int:
         external_note = ""
         if provider.name != "none":
             try:
+                # autocomplete (scrape) funciona sem credencial; explore
+                # (tendência/volume) degrada quando bloqueado.
+                suggestions = provider.keyword_suggestions(keyword, limit=5)
                 sig = provider.trend_signal(keyword)
-                metrics = provider.keyword_metrics(keyword, limit=1)
-                if sig.get("trend") != "unknown" or metrics:
+                if suggestions or sig.get("trend") != "unknown":
                     external = {
+                        "keyword_suggestions": suggestions,
                         "trend_signal": sig,
-                        "keyword_metrics": metrics[0] if metrics else None,
                         "provider": provider.name,
                         "cost_cents": 0,
                         "quota": {},
-                        "data_status": "available" if metrics else "missing",
+                        "data_status": "available" if suggestions else "missing",
                     }
-            except Exception as exc:  # API não habilitada/quota -> degrade
+            except Exception as exc:  # endpoint bloqueado -> degrade
                 external_note = f"Trends indisponível agora: {str(exc)[:80]}"
         candidate = provider.candidate(storage, keyword, method="keyword_suggestions",
                                        external=external)

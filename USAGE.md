@@ -339,18 +339,27 @@ hermes-seo-agent market status                 # provider, custo, quota
 hermes-seo-agent market candidate "one piece"  # candidato (checa o corpus; nunca pauta)
 ```
 
-A Google Trends API está em **alpha com allowlist por conta**. Para liberar:
+**Duas formas de obter dados do Trends:**
 
-1. Acesse <https://developers.google.com/search/apis/trends?hl=pt-br>;
-2. Preencha o **formulário de inscrição como testador alfa** (seção "Ter
-   acesso antecipado à versão Alfa");
-3. Quando a conta for aprovada, a chave `GOOGLE_API_KEY` (ou `TRENDS_API_KEY`)
-   do `.env` passa a funcionar — **não é preciso gerar chave nova**;
-4. Confirme com `integration-status --live` (a fonte `external` sai de
-   `invalid` para `available`).
+1. **Scrape do frontend público (default, sem credencial)** — `TRENDS_MODE=scrape`:
+   usa o endpoint de autocomplete de `trends.google.com` para **sugestões de
+   tópicos relacionados** (funciona sem chave nem allowlist). O endpoint de
+   volume/tendência (`explore`) é TENTADO, mas o Google bloqueia IPs de
+   datacenter (400/429) — nesse caso o `trend_signal` degrada com nota
+   explícita ("sem dados de tendência"), nunca inventa volume.
+2. **API oficial (alpha, exige allowlist)** — `TRENDS_MODE=api`:
+   A Google Trends API está em **alpha com allowlist por conta**. Para liberar:
+   1. Acesse <https://developers.google.com/search/apis/trends?hl=pt-br>;
+   2. Preencha o **formulário de inscrição como testador alfa** (seção "Ter
+      acesso antecipado à versão Alfa");
+   3. Quando a conta for aprovada, a chave `GOOGLE_API_KEY` (ou `TRENDS_API_KEY`)
+      do `.env` passa a funcionar — **não é preciso gerar chave nova**;
+   4. Confirme com `integration-status --live` (a fonte `external` sai de
+      `invalid` para `available`).
 
-Enquanto não autorizado, o `market candidate` degrada com `external_note` e o
-candidato é gerado só pela checagem interna (seguro).
+Use `TRENDS_MODE=none` para desligar a fonte externa. O `market candidate`
+sempre checa o corpus interno antes de qualquer sugestão — a evidência externa
+é um sinal adicional, nunca pauta automática.
 
 ### Rankability (M5)
 

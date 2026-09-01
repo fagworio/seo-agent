@@ -10,6 +10,7 @@ from hermes_seo_agent.connectors.base import HttpClient
 from hermes_seo_agent.services.market_intelligence import (
     NoopProvider,
     TrendsProvider,
+    TrendsScrapeProvider,
     _parse_timeline,
     get_provider,
 )
@@ -105,8 +106,13 @@ def test_trends_http_error_becomes_missing_not_zero():
 
 
 def test_get_provider_uses_trends_when_key_set():
-    assert isinstance(get_provider(_config("k")), TrendsProvider)
-    assert isinstance(get_provider(Config(wordpress_url="http://x")), NoopProvider)
+    # com chave, o default é scrape (sem depender da allowlist)
+    assert isinstance(get_provider(_config("k")), TrendsScrapeProvider)
+    # sem chave também: scrape é o default (frontend público)
+    assert isinstance(get_provider(Config(wordpress_url="http://x")), TrendsScrapeProvider)
+    # TRENDS_MODE=none desliga explicitamente
+    assert isinstance(get_provider(Config(wordpress_url="http://x", trends_mode="none")),
+                      NoopProvider)
 
 
 def test_trends_evidence_cost_zero_and_origin():
@@ -120,3 +126,52 @@ def test_trends_evidence_cost_zero_and_origin():
     assert ev["cost_cents"] == 0
     assert ev["quota"]["daily"]["used"] == 5
     assert ev["data_status"] == "available"
+
+
+# -- TrendsScrapeProvider (frontend público, sem credencial) ----------------
+
+def test_scrape_provider_uses_autocomplete_without_key():
+    from hermes_seo_agent.services.market_intelligence import TrendsScrapeProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/autocomplete/" in str(request.url)
+        assert "key=" not in str(request.url)   # sem API key
+        return httpx.Response(200, text=")]}',\n" + json.dumps({
+            "default": {"topics": [
+                {"mid": "/m/01_f03", "title": "One Piece", "type": "Manga series"},
+                {"mid": "/m/032th_", "title": "One-piece swimsuit", "type": "Suit"},
+            ]},
+        }))
+
+    p = TrendsScrapeProvider(_config())
+    p._http = HttpClient(transport=httpx.MockTransport(handler))
+    topics = p.keyword_suggestions("one piece")
+    assert topics[0]["keyword"] == "One Piece"
+    assert topics[0]["type"] == "Manga series"
+    assert topics[1]["keyword"] == "One-piece swimsuit"
+
+
+def test_scrape_provider_degrades_when_explore_blocked():
+    from hermes_seo_agent.services.market_intelligence import TrendsScrapeProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/explore" in str(request.url):
+            return httpx.Response(400, text="<html>Error 400</html>")
+        return httpx.Response(200, text=")]}',\n" + json.dumps({"default": {"topics": []}}))
+
+    p = TrendsScrapeProvider(_config())
+    p._http = HttpClient(transport=httpx.MockTransport(handler))
+    # explore bloqueado -> metrics vazia (missing), tendência unknown — nunca zero
+    assert p.keyword_metrics("gojo") == []
+    sig = p.trend_signal("gojo")
+    assert sig["trend"] == "unknown"
+    assert "bloqueado" in sig["note"]
+
+
+def test_get_provider_mode_scrape_default():
+    cfg = Config(wordpress_url="http://x", trends_api_key="k")
+    assert isinstance(get_provider(cfg), TrendsScrapeProvider)  # default scrape
+    cfg2 = Config(wordpress_url="http://x", trends_api_key="k", trends_mode="api")
+    assert isinstance(get_provider(cfg2), TrendsProvider)       # api explícito
+    assert isinstance(get_provider(Config(wordpress_url="http://x", trends_mode="none")),
+                      NoopProvider)

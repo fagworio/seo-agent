@@ -36,6 +36,7 @@ class Config:
     crux_api_key: str = ""
     ga4_property_id: str = ""
     trends_api_key: str = ""        # Google Trends Data API (alpha) — fallback GOOGLE_API_KEY
+    trends_mode: str = "scrape"     # scrape (frontend público, sem credencial) | api (alpha, allowlist)
 
     # URL Inspection budget
     url_inspection_daily_budget: int = 1800
@@ -187,6 +188,7 @@ def load_config() -> Config:
         crux_api_key=_env("CRUX_API_KEY") or _env("GOOGLE_API_KEY"),
         ga4_property_id=_env("GA4_PROPERTY_ID"),
         trends_api_key=_env("TRENDS_API_KEY") or _env("GOOGLE_API_KEY"),
+        trends_mode=_env("TRENDS_MODE", "scrape"),
         url_inspection_daily_budget=_int("URL_INSPECTION_DAILY_BUDGET", 1800, 1, 100_000),
         url_inspection_grace_period_hours=_int(
             "URL_INSPECTION_GRACE_PERIOD_HOURS", 24, 0, 24 * 365

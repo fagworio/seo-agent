@@ -233,17 +233,18 @@ class IntegrationStatusService:
                              f"CrUX indisponível agora: {exc}",
                              extras={"note": "eventualmente consistente"})
 
-        # External (M4): uma chamada real de trend_signal para confirmar a
-        # autorização — 403 de allowlist vira data_status invalid com motivo.
+        # External (M4): uma chamada real — autocomplete funciona sem
+        # credencial; explore (tendência/volume) pode estar bloqueado e
+        # degrada com data_status explícito.
         from .market_intelligence import get_provider
         provider = get_provider(self.config)
         if provider.name != "none":
             try:
-                sig = provider.trend_signal("one piece")
+                topics = provider.keyword_suggestions("one piece", limit=3)
                 self._update(out, "external", "available",
-                             f"{provider.name} OK; trend={sig.get('trend')}",
+                             f"{provider.name} OK; {len(topics)} sugestões",
                              extras={"provider": provider.name,
-                                     "trend_signal": sig})
+                                     "suggestions": len(topics)})
             except Exception as exc:
                 self._update(out, "external", "invalid",
                              f"{provider.name} bloqueado/indisponível: {str(exc)[:120]}",
