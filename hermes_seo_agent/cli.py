@@ -3061,13 +3061,34 @@ def _cmd_market(args: argparse.Namespace, config: Any) -> int:
             print(json.dumps({"status": "error", "error": "informe a keyword"},
                              ensure_ascii=False))
             return 2
-        candidate = provider.candidate(storage, keyword, method="keyword_suggestions")
+        external = None
+        external_note = ""
+        if provider.name != "none":
+            try:
+                sig = provider.trend_signal(keyword)
+                metrics = provider.keyword_metrics(keyword, limit=1)
+                if sig.get("trend") != "unknown" or metrics:
+                    external = {
+                        "trend_signal": sig,
+                        "keyword_metrics": metrics[0] if metrics else None,
+                        "provider": provider.name,
+                        "cost_cents": 0,
+                        "quota": {},
+                        "data_status": "available" if metrics else "missing",
+                    }
+            except Exception as exc:  # API não habilitada/quota -> degrade
+                external_note = f"Trends indisponível agora: {str(exc)[:80]}"
+        candidate = provider.candidate(storage, keyword, method="keyword_suggestions",
+                                       external=external)
+        if external_note:
+            candidate["external_note"] = external_note
         result = {
             "status": "ok",
             "summary": {"command": "market", "action": "candidate",
                         "keyword": keyword,
                         "corpus_covers": candidate["corpus_covers"],
-                        "suggested_action": candidate["suggested_action"]},
+                        "suggested_action": candidate["suggested_action"],
+                        "external_available": external is not None},
             "findings": [], "safe_actions": [], "approval_required": [],
             "candidate": candidate,
         }
