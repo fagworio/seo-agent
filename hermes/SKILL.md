@@ -109,18 +109,25 @@ browser tool. The CLI does the mechanics; you interpret and report.
 - `integration-status [--live]` — saúde de TODAS as fontes com data_status
   canônico (available|partial|missing|invalid). Uma fonte ausente NUNCA vira
   métrica zero.
-- `corpus rebuild/search/coverage/stats` — memória editorial (M2): corpus FTS5
-  por documento/seção/entidade. Rebuild é incremental com checkpoint e expõe
-  coverage/failures/staleness. ANTES de decidir "new content", confira
-  `corpus coverage <termo>` — "não encontrei conteúdo" só vale para o que foi
-  indexado.
+- `corpus rebuild/search/coverage/stats` — memória editorial (M2): corpus
+  FTS5 por documento/seção/entidade. Rebuild é incremental com checkpoint e
+  expõe coverage/failures/staleness (staleness = conteúdo que MUDOU;
+  unverifiable = inventory desatualizado). ANTES de decidir "new content",
+  confira `corpus coverage <termo>` — "não encontrei conteúdo" só vale para
+  o que foi indexado.
+- Busca SEMÂNTICA leve (M7): `decide`/`brief`/`register` usam a mesma
+  cobertura híbrida (FTS + expansão de consulta com aliases/sinônimos/
+  perguntas + entidade + seções) — uma intenção com vocabulário diferente
+  do corpo ainda encontra a seção que a cobre. Nunca invente match.
 - `topics graph|coverage <tema>` — clusters por entidade (M3): posts,
   indexáveis, links, impressões, Top3/Top10, frescor, GA4.
 - `market status|candidate <keyword>` — inteligência externa opcional (M4):
-  hoje Google Trends (alpha). Candidato externo SEMPRE passa por checagem
-  contra o corpus e gera sugestão de pesquisa, NUNCA pauta automática. Se o
-  Trends retornar 403 ("GetGraph blocked"), a conta não está na allowlist do
-  alpha — reporte, não invente volume.
+  Google Trends via scrape do frontend público (default, sem credencial —
+  autocomplete de sugestões) ou via API alpha (`TRENDS_MODE=api`, exige
+  allowlist). Candidato externo SEMPRE passa por checagem contra o corpus e
+  gera sugestão de pesquisa, NUNCA pauta automática. Volume/tendência só
+  quando a API alpha estiver autorizada; scrape degrada com nota explícita —
+  reporte, não invente volume.
 - `rankability <tema>` — perfil de autoridade por cluster (M5): score
   calibrável (não "probabilidade"), cada fator explicado.
 - `decide <keyword>` — árvore de decisão editorial (M6): demanda →
@@ -128,8 +135,9 @@ browser tool. The CLI does the mechanics; you interpret and report.
   cannibalization_review/monitorar/descartar. CandidateScore (5 fatores) e
   ActionScore (impacto×confiança×facilidade) são SEPARADOS.
 - `brief <keyword>` — brief de pesquisa estruturado (M7): URL recomendada ou
-  justificativa, diferenciação, subtópicos, risco de duplicação, links
-  internos, critérios de aceite. Revisão humana obrigatória.
+  justificativa, diferenciação, subtópicos (GSC + seções internas + tópicos
+  EXTERNOS do Trends como sinal), risco de duplicação, links internos,
+  critérios de aceite. Revisão humana obrigatória; LLM só para síntese.
 - `outcomes register|list|measure --id N --days 28|56|90|recalibrate` — M8:
   register grava decisão+scores+baseline automático; measure exige a janela
   completa e deriva verdict de GSC+GA4; recalibrate só SUGERE ajustes (pesos
