@@ -3234,8 +3234,8 @@ def _cmd_decide(args: argparse.Namespace, config: Any) -> int:
         relevant = cluster is not None
         competing = len(cluster["urls"]) if cluster else 0
 
-        # cobertura do corpus (FTS)
-        docs = storage.corpus_search(keyword, limit=5)
+        # cobertura do corpus (M7: busca híbrida, fallback FTS)
+        docs, _semantic = _corpus_covers(storage, keyword)
         corpus_covers = len(docs) > 0
         coverage_sufficient = corpus_covers and len(docs) >= 1 and (impressions or 0) < 300
         stale = False  # determinação de stale fica no M7 (data de modificação)
@@ -3451,7 +3451,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 graph = build_topic_graph(storage, min_urls=1)
                 ent = canonical_entity(keyword)
                 cluster = next((c for c in graph if c["entity"] == ent), None)
-                docs = storage.corpus_search(keyword, limit=5)
+                docs, _semantic = _corpus_covers(storage, keyword)
                 intent = {
                     "demand_score": min((impressions or 0) / 500.0, 1.0),
                     "relevant": cluster is not None,
@@ -3649,6 +3649,21 @@ def _static_host(config: Any) -> str:
 def _expected_canonical(url: str, config: Any) -> str:
     """Expected canonical of a sitemap URL is the URL itself (static site)."""
     return url
+
+
+def _corpus_covers(storage: Any, keyword: str, *, limit: int = 5
+                   ) -> tuple[list[dict[str, Any]], bool]:
+    """Cobertura do corpus por uma keyword — busca híbrida (M7) com fallback
+    ao FTS lexical. Unifica decide/brief/register para a MESMA definição de
+    'existe conteúdo compatível' (evita new_content falso por falta de match
+    exato)."""
+    try:
+        from .report.semantic import hybrid_search
+        docs = hybrid_search(storage, keyword, limit=limit)
+        return docs, True
+    except Exception:
+        docs = storage.corpus_search(keyword, limit=limit)
+        return docs, False
 
 
 def _finding(f: dict[str, Any], url: str) -> dict[str, Any]:

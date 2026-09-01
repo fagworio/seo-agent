@@ -111,3 +111,20 @@ def test_hybrid_empty_keyword(tmp_path):
     with Storage(str(db)) as storage:
         _seed(storage)
         assert hybrid_search(storage, "") == []
+
+
+def test_corpus_covers_helper_unifies_decide_register(tmp_path):
+    """Consistência M7: decide/register/brief usam a MESMA definição de
+    cobertura (híbrida) — uma keyword sem match lexical exato mas com match
+    semântico NÃO vira 'new_content' falso."""
+    from hermes_seo_agent.cli import _corpus_covers
+    db = tmp_path / "sem5.db"
+    with Storage(str(db)) as storage:
+        _seed(storage)
+        docs, semantic = _corpus_covers(storage, "quantos anos tem o luffy")
+        assert len(docs) > 0
+        assert semantic is True
+        assert any(d["url"] == "https://x.com/one-piece/" for d in docs)
+        # lexical puro (fallback) só se a semântica falhar
+        docs2, semantic2 = _corpus_covers(storage, "futebol")
+        assert len(docs2) >= 1
