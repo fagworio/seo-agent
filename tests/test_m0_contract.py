@@ -111,3 +111,22 @@ def test_config_limits_defaults_and_env(monkeypatch):
     cfg2 = load_config()
     assert cfg2.max_queries_per_source == 99
     assert cfg2.external_budget_cents == 1234
+
+
+def test_integration_status_external_with_trends(tmp_path):
+    """M4: com Trends configurado, a fonte external deixa de ser 'missing'."""
+    db = tmp_path / "int-trends.db"
+    with Storage(str(db)) as storage:
+        config = Config(
+            wordpress_url="http://localhost",
+            static_site_url="https://www.unicorniohater.com.br",
+            trends_api_key="trends-key",
+            sqlite_path=str(db),
+        )
+        service = IntegrationStatusService(config, storage)
+        statuses = {s.source: s for s in service.check()}
+        ext = statuses["external"]
+        assert ext.configured is True
+        assert ext.data_status == "partial"      # configurado, aguardando call live
+        assert ext.extras["provider"] == "google_trends"
+        assert ext.extras["cost_per_call_cents"] == 0

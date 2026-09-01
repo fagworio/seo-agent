@@ -144,10 +144,22 @@ class IntegrationStatusService:
         )
 
     def _external(self) -> SourceStatus:
+        # M4: fonte externa real quando há adaptador configurado (ex.: Trends).
+        from .market_intelligence import get_provider
+        provider = get_provider(self.config)
+        if provider.name == "none":
+            return SourceStatus(
+                "external", False, "missing",
+                detail="nenhum provedor externo configurado (M4 opcional)",
+                limitations="exige autorização, quota e custo configurados",
+            )
         return SourceStatus(
-            "external", False, "missing",
-            detail="nenhum provedor externo configurado (M4 opcional)",
-            limitations="exige autorização, quota e custo configurados",
+            "external", True, "partial",
+            detail=f"provedor {provider.name} configurado",
+            limitations=f"custo {provider.cost_per_call_cents} centavos/chamada; "
+                        "quota diária; evidência relativa (não volume absoluto)",
+            extras={"provider": provider.name,
+                    "cost_per_call_cents": provider.cost_per_call_cents},
         )
 
     # -- checagens ao vivo (opcionais) --------------------------------------
@@ -220,6 +232,22 @@ class IntegrationStatusService:
                 self._update(out, "crux", "partial",
                              f"CrUX indisponível agora: {exc}",
                              extras={"note": "eventualmente consistente"})
+
+        # External (M4): uma chamada real de trend_signal para confirmar a
+        # autorização — 403 de allowlist vira data_status invalid com motivo.
+        from .market_intelligence import get_provider
+        provider = get_provider(self.config)
+        if provider.name != "none":
+            try:
+                sig = provider.trend_signal("one piece")
+                self._update(out, "external", "available",
+                             f"{provider.name} OK; trend={sig.get('trend')}",
+                             extras={"provider": provider.name,
+                                     "trend_signal": sig})
+            except Exception as exc:
+                self._update(out, "external", "invalid",
+                             f"{provider.name} bloqueado/indisponível: {str(exc)[:120]}",
+                             extras={"provider": provider.name})
 
     def _update(self, out: list[SourceStatus], source: str, status: str,
                 detail: str, extras: dict[str, Any] | None = None) -> None:
