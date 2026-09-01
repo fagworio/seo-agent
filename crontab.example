@@ -1,0 +1,15 @@
+# Hermes SEO Agent — crontab de exemplo (fallback quando o Hermes gateway não é usado).
+# O comando `schedule` decide a fase por horário (watchdog, como o publish-cron do
+# unicornio-agent): audit+report sempre; inspect diário na janela --inspect-hours;
+# deep report semanal no --deep-weekday. Ajuste os caminhos e horários.
+
+# ── a cada 6h: auditoria + relatório (e inspeção GSC na janela) ──
+0 */6 * * * cd /home/joaofagner/workfolder/seo-agent && .venv/bin/hermes-seo-agent schedule --inspect-hours 6 --deep-weekday 1 >> state/schedule.log 2>&1
+
+# ── diário 06:10: fila de URL Inspection (se DRY_RUN=false + credenciais GSC) ──
+10 6 * * * cd /home/joaofagner/workfolder/seo-agent && .venv/bin/hermes-seo-agent inspect >> state/inspect.log 2>&1
+
+# ── semanal (segunda 07:00): telemetria + alerta webhook se threshold passar ──
+0 7 * * 1 cd /home/joaofagner/workfolder/seo-agent && .venv/bin/hermes-seo-agent telemetry --notify >> state/telemetry.log 2>&1
+
+# Instale com: crontab crontab.example   (ou: crontab -e e cole as linhas)

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-seo-agent"
+version = "0.1.0"
+description = "Autonomous SEO audit module for the Hermes Agent pipeline (UnicornioHater)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+google = [
+    "google-auth>=2.0",
+]
+
+[project.scripts]
+hermes-seo-agent = "hermes_seo_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hermes_seo_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

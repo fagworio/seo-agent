@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# State / reports / produção
+state/
+*.db
+reports/
+seo-fixes-titles*.json
+title-opportunities-fixes.json
+
+# Resíduo duplicado na raiz (cópia de hermes_seo_agent/report)
+report/
+
+# Hermes
+.hermes/

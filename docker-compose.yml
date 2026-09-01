@@ -1,0 +1,15 @@
+# Hermes SEO Agent — execução agendada em container.
+# Uso: cp .env.example .env (edite credenciais) && docker compose up -d
+services:
+  seo-agent:
+    build: .
+    image: hermes-seo-agent:latest
+    env_file: .env
+    volumes:
+      - ./state:/app/state
+    # Watchdog: roda a fase certa por horário (audit a cada execução;
+    # inspect diário às 06:00; deep report semanal).
+    command: ["schedule", "--inspect-hours", "6", "--deep-weekday", "1"]
+    # Para rodar uma vez e sair:
+    # command: ["cycle", "--limit", "500"]
+    restart: unless-stopped
