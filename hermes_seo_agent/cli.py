@@ -961,8 +961,11 @@ def _cmd_history(args: argparse.Namespace, config: Any) -> int:
     """Per-page before/after history (agent + human readable)."""
     from .report.history import summarize_page
 
+    # --limit default é 0 ("0 = config max" do parser global), mas aqui 0
+    # viraria literal `LIMIT 0` no SQL e esconderia todo o histórico.
+    limit = args.limit if args.limit and args.limit > 0 else 50
     with Storage(config.sqlite_path) as storage:
-        digest = summarize_page(storage, args.url, limit=args.limit)
+        digest = summarize_page(storage, args.url, limit=limit)
     result = {
         "status": "ok",
         "summary": {"command": "history", "url": args.url,
@@ -1038,8 +1041,12 @@ def _word_count(html: str) -> int:
 def _title_matches_visible(expected: str, visible: str) -> bool:
     """O título renderizado confere com o esperado, tolerando sufixo de marca
     ou template (ex.: 'Título | Unicórnio Hater') e diferenças de acentuação:
-    normaliza (lowercase, sem acentos, espaços colapsados) e aceita contenção
-    nas duas direções (min 3 chars significativos)."""
+    normaliza (lowercase, sem acentos, espaços colapsados) e aceita
+    igualdade ou sufixo de marca após o título. Conteúdo extra que NÃO
+    começa por separador de marca (ex.: título antigo mais longo que o novo,
+    '...série até o momento — UnicórnioHater') NÃO conta como confirmação —
+    senão o rebuild pendente nunca é detectado quando o novo título é
+    prefixo do antigo."""
     import re
     import unicodedata
 
@@ -1052,7 +1059,17 @@ def _title_matches_visible(expected: str, visible: str) -> bool:
     exp, vis = norm(expected), norm(visible)
     if len(exp) < 3 or len(vis) < 3:
         return bool(exp) and exp == vis
-    return exp in vis or vis in exp
+    if exp == vis:
+        return True
+    if vis in exp:
+        # renderizado é um prefixo/truncamento do esperado — aceita.
+        return True
+    if exp in vis:
+        # esperado é prefixo do renderizado: só vale se o resto for marca
+        # (separador típico) — conteúdo extra real indica rebuild pendente.
+        rest = vis[vis.index(exp) + len(exp):].lstrip()
+        return bool(rest) and rest[0] in {"|", "-", "—", "–", ":"}
+    return False
 
 
 def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:

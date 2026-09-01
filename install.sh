@@ -74,7 +74,17 @@ pip_install() {
 
 if [ "$DO_VENV" = true ]; then
   log_info "Setting up Python venv at $ROOT/.venv ..."
-  python3 -m venv "$ROOT/.venv"
+  if ! python3 -m venv "$ROOT/.venv" 2>/dev/null; then
+    # ensurepip ausente (python3 sem python3-venv). Fallback: uv cria o venv
+    # com pip incluso sem depender de ensurepip; último recurso: get-pip.py.
+    if command -v uv >/dev/null 2>&1; then
+      log_warn "ensurepip indisponível — usando 'uv venv' (cria .venv com pip)"
+      uv venv "$ROOT/.venv" --clear --seed --python "$(command -v python3)"
+    else
+      python3 -m venv --without-pip "$ROOT/.venv"
+      curl -sS https://bootstrap.pypa.io/get-pip.py | "$ROOT/.venv/bin/python" -
+    fi
+  fi
   "$ROOT/.venv/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
   pip_install
   log_success "Package installed: $("$ROOT/.venv/bin/hermes-seo-agent" --help >/dev/null 2>&1 && echo 'hermes-seo-agent OK' || echo 'entrypoint not found (check pip log)')"
