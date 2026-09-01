@@ -87,3 +87,27 @@ def test_brief_llm_role_is_scoped():
     )
     assert "síntese opcional" in brief["llm_role"]
     assert "sem autoridade para executar" in brief["llm_role"]
+
+
+def test_brief_external_suggestions_as_subtopics():
+    """M4/M7: sugestões externas do Trends entram como subtópicos marcados
+    (sinal de demanda), nunca como pauta."""
+    external = {
+        "provider": "trends_scrape",
+        "keyword_suggestions": [
+            {"keyword": "One Piece season 2", "type": "TV series season"},
+            {"keyword": "One-piece swimsuit", "type": "Suit"},
+        ],
+        "data_status": "available",
+    }
+    brief = build_research_brief(
+        keyword="one piece", intent={}, decision=_decision(),
+        corpus_docs=_corpus_docs(), corpus_sections={}, gsc_queries=[],
+        entities=[], cluster=None, ga4=None, external=external,
+    )
+    joined = " ".join(brief["subtopics_questions"])
+    assert "tópico externo (trends_scrape)" in joined
+    assert "One Piece season 2" in joined
+    # evidência externa registrada, sem autoridade de execução
+    assert brief["evidence"]["external"]["provider"] == "trends_scrape"
+    assert brief["human_review_required"] is True

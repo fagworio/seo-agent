@@ -69,7 +69,8 @@ def build_research_brief(*, keyword: str, intent: dict[str, Any],
             f"nenhum conteúdo interno cobre '{keyword}' — criar conteúdo novo "
             f"pertence ao território; URL e publicação exigem revisão humana"),
         "differentiation": _differentiation(corpus_docs, keyword),
-        "subtopics_questions": subtopics,
+        "subtopics_questions": _subtopics_with_external(
+            keyword, gsc_queries, corpus_sections, external),
         "duplication_risk": duplication_risk,
         "internal_links_recommended": internal_links,
         "acceptance_criteria": _acceptance(opportunity_type, keyword),
@@ -118,6 +119,16 @@ def _intent_type(intent: dict[str, Any]) -> str:
 def _subtopics(keyword: str, gsc_queries: list[dict[str, Any]],
                corpus_sections: dict[str, list[dict[str, Any]]]) -> list[str]:
     """Perguntas/subtópicos derivados das queries GSC + seções internas."""
+    return _subtopics_with_external(keyword, gsc_queries, corpus_sections, None)
+
+
+def _subtopics_with_external(keyword: str, gsc_queries: list[dict[str, Any]],
+                             corpus_sections: dict[str, list[dict[str, Any]]],
+                             external: dict[str, Any] | None) -> list[str]:
+    """Subtópicos de queries GSC + seções internas + sugestões EXTERNAS (M4).
+
+    Sugestões externas entram como tópicos de demanda (sinal), nunca como
+    pauta; são marcadas para o editor saber a origem."""
     subtopics: list[str] = []
     seen: set[str] = set()
     for q in gsc_queries:
@@ -133,6 +144,15 @@ def _subtopics(keyword: str, gsc_queries: list[dict[str, Any]],
             seen.add(heading)
         if len(subtopics) >= 12:
             break
+    if external:
+        provider = external.get("provider", "externo")
+        for sug in (external.get("keyword_suggestions") or [])[:4]:
+            title = sug.get("keyword") or ""
+            if title and title not in seen:
+                subtopics.append(f"tópico externo ({provider}): {title}")
+                seen.add(title)
+            if len(subtopics) >= 16:
+                break
     if not subtopics:
         subtopics.append(f"definir perguntas de suporte para '{keyword}'")
     return subtopics

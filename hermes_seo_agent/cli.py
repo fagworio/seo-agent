@@ -3372,11 +3372,29 @@ def _cmd_brief(args: argparse.Namespace, config: Any) -> int:
             from .report.topics import cluster_coverage
             cluster_summary = cluster_coverage(storage, ent)
 
+        # Evidência externa (M4): sugestões do Trends como sinal adicional —
+        # NUNCA vira pauta; só enriquece o brief com demanda externa.
+        external = None
+        try:
+            from .services.market_intelligence import get_provider
+            provider = get_provider(config)
+            if provider.name != "none":
+                ext_sug = provider.keyword_suggestions(keyword, limit=5)
+                if ext_sug:
+                    external = {
+                        "provider": provider.name,
+                        "keyword_suggestions": ext_sug[:5],
+                        "data_status": "available",
+                        "note": "sugestões de tópicos do Google Trends (autocomplete)",
+                    }
+        except Exception:
+            external = None
+
         brief = build_research_brief(
             keyword=keyword, intent=intent, decision=decision,
             corpus_docs=docs, corpus_sections=corpus_sections,
             gsc_queries=gsc_queries, entities=entities,
-            cluster=cluster_summary, ga4=ga4,
+            cluster=cluster_summary, ga4=ga4, external=external,
         )
 
     result = {
