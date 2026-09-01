@@ -55,9 +55,14 @@ def test_combined_verdict_priority():
     # melhor em qualquer uma -> improved
     assert combined_verdict(
         {"verdict": "improved"}, {"verdict": "neutral"}) == "improved"
-    # dados insuficientes em uma dimensão -> insufficient (não inventa)
+    # uma dimensão insuficiente NÃO invalida a outra (mede com o que há)
     assert combined_verdict(
-        {"verdict": "improved"}, {"verdict": "insufficient_data"}) == "insufficient_data"
+        {"verdict": "improved"}, {"verdict": "insufficient_data"}) == "improved"
+    assert combined_verdict(
+        {"verdict": "insufficient_data"}, {"verdict": "worsened"}) == "worsened"
+    # apenas quando TODAS são insuficientes
+    assert combined_verdict(
+        {"verdict": "insufficient_data"}, {"verdict": "insufficient_data"}) == "insufficient_data"
     assert combined_verdict(
         {"verdict": "neutral"}, {"verdict": "neutral"}) == "neutral"
     assert combined_verdict(

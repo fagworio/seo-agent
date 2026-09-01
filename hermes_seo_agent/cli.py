@@ -291,7 +291,7 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="list | register | measure <id> | recalibrate")
             p.add_argument("keyword", nargs="?", default="",
                            help="keyword (register)")
-            p.add_argument("item_id", nargs="?", type=int, default=None,
+            p.add_argument("--id", dest="item_id", type=int, default=None,
                            help="id do outcome (measure)")
             p.add_argument("--type", default="", help="opportunity_type (register)")
             p.add_argument("--decision", default="", help="decisão M6 (register)")
@@ -304,6 +304,10 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--url", default="", help="URL da ação implementada")
             p.add_argument("--verdict", default="",
                            help="improved|neutral|worsened|insufficient_data (measure)")
+            p.add_argument("--days", dest="measure_days", type=int, default=0,
+                           help="janela de medição: 28|56|90 (measure)")
+            p.add_argument("--trend", default="",
+                           help="growing|declining|stable (usado no register)")
         if name in {"audit", "report", "cycle"}:
             p.set_defaults(func=_cmd_audit)
         elif name == "inspect":
@@ -2883,45 +2887,79 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
     with Storage(config.sqlite_path) as storage:
         if args.action == "stats":
             stats = storage.corpus_stats()
+            report = storage.corpus_coverage_report()
+            runs = storage.corpus_run_summary()
             result = {"status": "ok",
-                      "summary": {"command": "corpus", "action": "stats", **stats},
+                      "summary": {"command": "corpus", "action": "stats", **stats,
+                                  "coverage_pct": report.get("coverage_pct"),
+                                  "last_run_status": (
+                                      runs["runs"][0]["status"] if runs["runs"] else None)},
                       "findings": [], "safe_actions": [], "approval_required": [],
-                      "stats": stats}
+                      "stats": stats, "coverage": report, "runs": runs}
             _emit(result, force_json=True)
             return 0
 
         if args.action == "rebuild":
-            # Incremental por content_hash: só reindexa o que mudou desde o
-            # último build (ou docs novas). Reutiliza o sitemap como fonte.
+            # Crawl incremental com CHECKPOINT: roda o sitemap todo, registra o
+            # run (processed/changed/failed), registra falhas por URL e só
+            # reindexa o que mudou (content_hash). Se o processo cair, o run
+            # fica 'running' e o próximo rebuild continua (sem reindexar o que
+            # já está igual — o idempotente por hash garante).
             with StaticSiteClient(config) as static:
                 urls = static.all_sitemap_urls()
             cap = args.limit or config.max_corpus_docs
             urls = urls[:cap]
+            run_id = storage.start_corpus_run(total_urls=len(urls))
             changed: list[Any] = []
+            processed = failed = 0
             built_at = _now()
-            with StaticSiteClient(config) as static:
-                for url in urls:
-                    try:
-                        page = static.fetch_page(url)
-                    except Exception:
-                        continue
-                    body = getattr(page, "body_text", "") or ""
-                    import hashlib
-                    h = hashlib.sha256(body.encode("utf-8")).hexdigest()
-                    row = storage.conn.execute(
-                        "SELECT content_hash FROM corpus_documents WHERE url = ?",
-                        (url,),
-                    ).fetchone()
-                    if row and row[0] == h:
-                        continue  # inalterado
-                    changed.append(page)
-            counts = build_corpus(storage, changed, built_at=built_at)
+            try:
+                with StaticSiteClient(config) as static:
+                    for url in urls:
+                        try:
+                            page = static.fetch_page(url)
+                        except Exception as exc:
+                            failed += 1
+                            storage.record_corpus_failure(run_id, url, str(exc)[:200])
+                            storage.update_corpus_run(
+                                run_id, processed=processed, changed=len(changed),
+                                failed=failed)
+                            continue
+                        processed += 1
+                        body = getattr(page, "body_text", "") or ""
+                        import hashlib
+                        h = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                        row = storage.conn.execute(
+                            "SELECT content_hash FROM corpus_documents WHERE url = ?",
+                            (url,),
+                        ).fetchone()
+                        if row and row[0] == h:
+                            storage.update_corpus_run(
+                                run_id, processed=processed, changed=len(changed),
+                                failed=failed)
+                            continue  # inalterado
+                        changed.append(page)
+                        storage.update_corpus_run(
+                            run_id, processed=processed, changed=len(changed),
+                            failed=failed)
+                counts = build_corpus(storage, changed, built_at=built_at)
+                status = "ok" if not failed else "partial"
+                storage.finish_corpus_run(run_id, status=status)
+            except Exception as exc:  # noqa: BLE001 — checkpoint registra a queda
+                storage.finish_corpus_run(run_id, status="failed", error=str(exc)[:300])
+                print(json.dumps({"status": "error", "error": f"rebuild falhou: {exc}"},
+                                 ensure_ascii=False))
+                return 2
+            report = storage.corpus_coverage_report(urls)
             result = {
                 "status": "ok",
                 "summary": {"command": "corpus", "action": "rebuild",
-                            "checked": len(urls), "changed": len(changed),
+                            "run_id": run_id, "total": len(urls),
+                            "processed": processed, "changed": len(changed),
+                            "failed": failed, "run_status": status,
                             **counts},
                 "findings": [], "safe_actions": [], "approval_required": [],
+                "coverage": report,
             }
             _emit(result, force_json=True)
             return 0
@@ -3340,28 +3378,113 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 print(json.dumps({"status": "error", "error": "informe a keyword"},
                                  ensure_ascii=False))
                 return 2
+            # Ligação automática decisão → outcome: recalcula a decisão M6 com
+            # os sinais reais e grava evidência + CandidateScore + ActionScore.
+            evidence: dict[str, Any] = {}
+            candidate_score = action_score = None
+            decision_name = args.decision or "expand_existing"
+            opportunity_type = args.type or "expand_existing"
+            try:
+                from .report.decision_engine import decide, candidate_score as _cs, \
+                    action_score as _as
+                from .report.topics import build_topic_graph, canonical_entity
+                ws = storage.latest_window_start()
+                impressions = None
+                if ws:
+                    row = storage.conn.execute(
+                        "SELECT SUM(impressions) FROM query_pages "
+                        "WHERE window_start = ? AND query LIKE ?",
+                        (ws, f"%{keyword}%"),
+                    ).fetchone()
+                    if row and row[0]:
+                        impressions = float(row[0])
+                graph = build_topic_graph(storage, min_urls=1)
+                ent = canonical_entity(keyword)
+                cluster = next((c for c in graph if c["entity"] == ent), None)
+                docs = storage.corpus_search(keyword, limit=5)
+                intent = {
+                    "demand_score": min((impressions or 0) / 500.0, 1.0),
+                    "relevant": cluster is not None,
+                    "corpus_covers": len(docs) > 0,
+                    "coverage_sufficient": False,
+                    "competing_urls": len(cluster["urls"]) if cluster else 0,
+                    "is_question": keyword.lower().startswith(
+                        ("como ", "qual ", "quais ", "quando ", "onde ",
+                         "quanto ", "quem ", "o que ", "por que ")),
+                    "stale": False, "trend": args.trend or "",
+                    "confidence": 0.6 if (impressions or 0) >= 500 else 0.4,
+                }
+                outcome_dec = decide(intent)
+                decision_name = outcome_dec["decision"]
+                opportunity_type = outcome_dec["opportunity_type"]
+                candidate_score = outcome_dec["candidate_score"]["score"]
+                action_score = outcome_dec["action_score"]["score"]
+                evidence = {
+                    "demand_score": intent["demand_score"],
+                    "relevant": intent["relevant"],
+                    "corpus_covers": intent["corpus_covers"],
+                    "competing_urls": intent["competing_urls"],
+                    "rankability": None,
+                    "impressions_gsc": impressions,
+                    "decision_reason": outcome_dec["reason"],
+                }
+            except Exception as exc:  # noqa: BLE001 — register manual segue sem scores
+                evidence = {"error": f"scores indisponíveis: {exc}"}
+            # Baseline automático no momento da aprovação/implementação.
+            baseline = None
+            approved = args.human_decision == "approved"
+            if approved and args.url and config.google_credentials:
+                try:
+                    gsc = SearchConsoleClient(config)
+                    end = date.today()
+                    start = end - timedelta(days=config.search_analytics_days)
+                    baseline = {
+                        "gsc": gsc.page_metrics(
+                            args.url, start_date=start.isoformat(),
+                            end_date=end.isoformat()) or None,
+                        "ga4": storage.ga4_metrics_for_url(args.url) or None,
+                        "captured_at": _now(),
+                    }
+                except Exception:
+                    baseline = None
             oid = storage.save_opportunity_outcome(
                 keyword=keyword,
-                opportunity_type=args.type or "expand_existing",
-                decision=args.decision or "expand_existing",
+                opportunity_type=opportunity_type,
+                decision=decision_name,
+                evidence=evidence,
+                candidate_score=candidate_score,
+                action_score=action_score,
                 human_decision=args.human_decision,
                 rejection_reason=args.rejection_reason,
                 implemented_action=args.implemented_action,
                 url=args.url,
-                implemented_at=_now() if args.human_decision == "approved" else "",
+                baseline=baseline,
+                implemented_at=_now() if approved else "",
             )
             result = {
                 "status": "ok",
                 "summary": {"command": "outcomes", "action": "register",
-                            "outcome_id": oid, "keyword": keyword},
+                            "outcome_id": oid, "keyword": keyword,
+                            "decision": decision_name,
+                            "opportunity_type": opportunity_type,
+                            "candidate_score": candidate_score,
+                            "action_score": action_score,
+                            "baseline_captured": baseline is not None},
                 "findings": [], "safe_actions": [], "approval_required": [],
+                "baseline": baseline,
             }
             _emit(result, force_json=True)
             return 0
 
-        # measure <id> — integra GSC + GA4 (A5) quando há URL implementada.
+        # measure <id> --days N — janela obrigatória + verdict automático.
         if not args.item_id:
-            print(json.dumps({"status": "error", "error": "informe o id: outcomes measure <id>"},
+            print(json.dumps({"status": "error", "error": "informe o id: outcomes measure <id> --days 28"},
+                             ensure_ascii=False))
+            return 2
+        days = getattr(args, "measure_days", 0) or 28
+        if days not in (28, 56, 90):
+            print(json.dumps({"status": "error",
+                              "error": "days deve ser 28, 56 ou 90"},
                              ensure_ascii=False))
             return 2
         items = storage.list_opportunity_outcomes(limit=1000)
@@ -3370,28 +3493,66 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
             print(json.dumps({"status": "error", "error": "outcome não encontrado"},
                              ensure_ascii=False))
             return 2
+        if outcome["measured"][f"{days}d"]:
+            print(json.dumps({"status": "error",
+                              "error": f"outcome já medido na janela {days}d"},
+                             ensure_ascii=False))
+            return 2
+        # enforcement: implemented_at + N dias
+        ref = outcome.get("implemented_at")
+        if not ref:
+            print(json.dumps({"status": "error",
+                              "error": "outcome não foi aprovado/implementado (sem implemented_at)"},
+                             ensure_ascii=False))
+            return 2
+        impl_date = datetime.datetime.fromisoformat(ref.replace("Z", "+00:00")).date()
+        elapsed = (date.today() - impl_date).days
+        if elapsed < days:
+            print(json.dumps({"status": "error",
+                              "error": f"janela {days}d ainda não completou "
+                                       f"({elapsed}d desde a implementação)"},
+                             ensure_ascii=False))
+            return 2
+        # verdict automático: compara baseline GSC+GA4 com o atual
         verdict = args.verdict
-        results: dict[str, dict[str, Any]] = {}
+        result_payload: dict[str, Any] = {}
         url = outcome.get("url", "")
-        if verdict in ("improved", "neutral", "worsened") and url and config.google_credentials:
-            gsc = SearchConsoleClient(config)
-            end = date.today()
-            start = end - timedelta(days=config.search_analytics_days)
-            now_metrics = gsc.page_metrics(url, start_date=start.isoformat(),
-                                           end_date=end.isoformat()) or {}
-            results["28d"] = {"gsc": now_metrics,
-                              "ga4": storage.ga4_metrics_for_url(url) or None}
+        baseline = outcome.get("baseline") or {}
+        if not verdict and url and config.google_credentials and baseline:
+            try:
+                from .report.impact import impact_deltas
+                from .report.impact_ga4 import (
+                    baseline_gsc, baseline_ga4, combined_verdict,
+                    engagement_deltas,
+                )
+                gsc = SearchConsoleClient(config)
+                end = date.today()
+                start = end - timedelta(days=config.search_analytics_days)
+                now_metrics = gsc.page_metrics(url, start_date=start.isoformat(),
+                                               end_date=end.isoformat()) or {}
+                now_ga4 = storage.ga4_metrics_for_url(url) or None
+                gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
+                ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
+                verdict = combined_verdict(gsc_deltas, ga4_deltas)
+                result_payload = {
+                    "gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
+                    "now_gsc": now_metrics, "now_ga4": now_ga4,
+                    "elapsed_days": elapsed,
+                }
+            except Exception:
+                verdict = verdict or "insufficient_data"
         storage.set_outcome_verdict(
             args.item_id, verdict=verdict or "insufficient_data",
-            result_28d=results.get("28d"),
+            days=days, result=result_payload or None,
         )
         result = {
             "status": "ok",
             "summary": {"command": "outcomes", "action": "measure",
-                        "outcome_id": args.item_id, "verdict": verdict
-                        or "insufficient_data"},
+                        "outcome_id": args.item_id, "days": days,
+                        "verdict": verdict or "insufficient_data",
+                        "elapsed_days": elapsed},
             "findings": [], "safe_actions": [], "approval_required": [],
-            "measured": results,
+            "measured": result_payload,
         }
         _emit(result, force_json=True)
         return 0

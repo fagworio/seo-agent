@@ -69,12 +69,20 @@ def engagement_verdict(d: dict[str, Any]) -> str:
 def combined_verdict(gsc: dict[str, Any], ga4: dict[str, Any]) -> str:
     """Verdict integrado: piora em qualquer dimensão domina; melhoras somam.
 
-    Ordem de severidade: worsened > improved > mixed > neutral.
+    Ordem de severidade: worsened > improved > mixed > neutral. Dimensão
+    insuficiente (dado ausente) NÃO invalida a outra: mede-se com o que há —
+    só vira insufficient_data quando TODAS as dimensões são insuficientes.
     """
     g = gsc.get("verdict", "neutral")
     e = ga4.get("verdict", "neutral")
-    if "insufficient_data" in (g, e):
+    g_ok = g != "insufficient_data"
+    e_ok = e != "insufficient_data"
+    if not g_ok and not e_ok:
         return "insufficient_data"
+    if not g_ok:
+        return e  # só GA4 disponível
+    if not e_ok:
+        return g  # só GSC disponível
     # piora em qualquer uma das duas dimensões é o sinal mais forte
     if g == "worsened" or e == "worsened":
         return "worsened"

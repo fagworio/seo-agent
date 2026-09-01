@@ -11,8 +11,8 @@ def _register(storage: Storage, *, keyword="gojo idade", otype="expand_existing"
         human_decision="approved", implemented_action="expand",
         url="https://x.com/a/", implemented_at="2026-01-01T00:00:00+00:00",
     )
-    storage.set_outcome_verdict(oid, verdict=verdict,
-                                result_28d={"gsc": {"clicks": 10}})
+    storage.set_outcome_verdict(oid, verdict=verdict, days=28,
+                                result={"gsc": {"clicks": 10}})
     return oid
 
 

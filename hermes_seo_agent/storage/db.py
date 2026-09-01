@@ -304,7 +304,11 @@ CREATE TABLE IF NOT EXISTS opportunity_outcomes (
     rejection_reason TEXT,
     implemented_action TEXT,           -- o que foi feito (title/expand/refresh…)
     url TEXT,
+    baseline_json TEXT,                -- GSC+GA4 no momento da aprovação/implementação
     implemented_at TEXT,
+    measured_28d INTEGER NOT NULL DEFAULT 0,
+    measured_56d INTEGER NOT NULL DEFAULT 0,
+    measured_90d INTEGER NOT NULL DEFAULT 0,
     result_28d_json TEXT,
     result_56d_json TEXT,
     result_90d_json TEXT,
@@ -313,6 +317,25 @@ CREATE TABLE IF NOT EXISTS opportunity_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_outcomes_keyword ON opportunity_outcomes(keyword);
 CREATE INDEX IF NOT EXISTS idx_outcomes_verdict ON opportunity_outcomes(verdict);
+CREATE TABLE IF NOT EXISTS corpus_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,               -- running | ok | partial | failed
+    total_urls INTEGER NOT NULL DEFAULT 0,
+    processed INTEGER NOT NULL DEFAULT 0,
+    changed INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS corpus_run_failures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_corpus_failures_run ON corpus_run_failures(run_id);
 CREATE INDEX IF NOT EXISTS idx_findings_cycle ON findings(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON inspection_queue(status, priority);
@@ -361,6 +384,12 @@ class Storage:
                 ("responsible", "TEXT"), ("deadline", "TEXT"),
                 ("rejection_reason", "TEXT"),
                 ("hypothesis_key", "TEXT"), ("evidence_fingerprint", "TEXT"),
+            ],
+            "opportunity_outcomes": [
+                ("baseline_json", "TEXT"),
+                ("measured_28d", "INTEGER NOT NULL DEFAULT 0"),
+                ("measured_56d", "INTEGER NOT NULL DEFAULT 0"),
+                ("measured_90d", "INTEGER NOT NULL DEFAULT 0"),
             ],
         }
         editorial_extra = [
@@ -1282,6 +1311,94 @@ class Storage:
             pass
         return {"documents": docs, "sections": secs, "entities": ents, "fts_docs": fts}
 
+    # -- corpus runs: checkpoint, failures e cobertura (endurecimento M2) -----
+
+    def start_corpus_run(self, *, total_urls: int) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO corpus_runs (status, total_urls, started_at) "
+            "VALUES ('running', ?, ?)",
+            (total_urls, _now()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_corpus_run(self, run_id: int, *, processed: int, changed: int,
+                          failed: int) -> None:
+        self.conn.execute(
+            "UPDATE corpus_runs SET processed = ?, changed = ?, failed = ? WHERE id = ?",
+            (processed, changed, failed, run_id),
+        )
+        self.conn.commit()
+
+    def finish_corpus_run(self, run_id: int, *, status: str, error: str = "") -> None:
+        self.conn.execute(
+            "UPDATE corpus_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+            (status, _now(), error, run_id),
+        )
+        self.conn.commit()
+
+    def record_corpus_failure(self, run_id: int, url: str, error: str) -> None:
+        self.conn.execute(
+            "INSERT INTO corpus_run_failures (run_id, url, error, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (run_id, url, error, _now()),
+        )
+        self.conn.commit()
+
+    def corpus_run_summary(self) -> dict[str, Any]:
+        """Últimos runs + falhas (para operar o crawl incremental)."""
+        runs = self.conn.execute(
+            "SELECT id, status, total_urls, processed, changed, failed, "
+            "started_at, finished_at, error FROM corpus_runs "
+            "ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        last_run_id = runs[0][0] if runs else None
+        failures = []
+        if last_run_id:
+            failures = [
+                {"url": r[0], "error": r[1]} for r in self.conn.execute(
+                    "SELECT url, error FROM corpus_run_failures "
+                    "WHERE run_id = ? ORDER BY id DESC LIMIT 50",
+                    (last_run_id,),
+                ).fetchall()
+            ]
+        return {
+            "runs": [
+                {"id": r[0], "status": r[1], "total_urls": r[2], "processed": r[3],
+                 "changed": r[4], "failed": r[5], "started_at": r[6],
+                 "finished_at": r[7], "error": r[8] or ""}
+                for r in runs
+            ],
+            "last_run_failures": failures,
+            "last_run_failure_count": len(failures),
+        }
+
+    def corpus_coverage_report(self, sitemap_urls: list[str] | None = None
+                               ) -> dict[str, Any]:
+        """Cobertura do corpus vs sitemap publicado (endurecimento M2)."""
+        indexed = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents").fetchone()[0]
+        staleness = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents d WHERE NOT EXISTS ("
+            "SELECT 1 FROM editorial_inventory i WHERE i.url = d.url "
+            "AND i.content_hash = d.content_hash)"
+        ).fetchone()[0]
+        report: dict[str, Any] = {
+            "indexed_docs": indexed,
+            "staleness": staleness,
+            "sitemap_total": len(sitemap_urls or []),
+        }
+        if sitemap_urls:
+            corpus_urls = {r[0] for r in self.conn.execute(
+                "SELECT url FROM corpus_documents").fetchall()}
+            sitemap_set = set(sitemap_urls)
+            report["sitemap_without_corpus"] = len(sitemap_set - corpus_urls)
+            report["corpus_outside_sitemap"] = len(corpus_urls - sitemap_set)
+            report["coverage_pct"] = round(
+                (len(sitemap_set & corpus_urls) / len(sitemap_set)) * 100, 1
+            ) if sitemap_set else 0.0
+        return report
+
     # -- M8: opportunity outcomes e aprendizado ------------------------------
 
     def save_opportunity_outcome(self, *, keyword: str, opportunity_type: str,
@@ -1292,33 +1409,57 @@ class Storage:
                                  rejection_reason: str = "",
                                  implemented_action: str = "",
                                  url: str = "",
+                                 baseline: dict[str, Any] | None = None,
                                  implemented_at: str = "") -> int:
         import json as _json
         cur = self.conn.execute(
             "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
             "evidence_json, candidate_score, action_score, human_decision, "
-            "rejection_reason, implemented_action, url, implemented_at, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "rejection_reason, implemented_action, url, baseline_json, "
+            "implemented_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (keyword, opportunity_type, decision,
              _json.dumps(evidence, ensure_ascii=False, default=str) if evidence else None,
              candidate_score, action_score, human_decision, rejection_reason,
-             implemented_action, url, implemented_at, _now()),
+             implemented_action, url,
+             _json.dumps(baseline, ensure_ascii=False, default=str) if baseline else None,
+             implemented_at, _now()),
         )
         self.conn.commit()
         return cur.lastrowid
 
-    def set_outcome_verdict(self, outcome_id: int, *, verdict: str,
-                            result_28d: dict[str, Any] | None = None,
-                            result_56d: dict[str, Any] | None = None,
-                            result_90d: dict[str, Any] | None = None) -> None:
+    def set_outcome_baseline(self, outcome_id: int, baseline: dict[str, Any]) -> None:
         import json as _json
         self.conn.execute(
-            "UPDATE opportunity_outcomes SET verdict = ?, result_28d_json = ?, "
-            "result_56d_json = ?, result_90d_json = ? WHERE id = ?",
+            "UPDATE opportunity_outcomes SET baseline_json = ? WHERE id = ?",
+            (_json.dumps(baseline, ensure_ascii=False, default=str), outcome_id),
+        )
+        self.conn.commit()
+
+    def set_outcome_verdict(self, outcome_id: int, *, verdict: str,
+                            days: int | None = None,
+                            result: dict[str, Any] | None = None) -> None:
+        """Registra o resultado de uma janela (28/56/90) e o verdict.
+
+        ``days`` marca qual janela foi medida (flag measured_{days}d) e grava
+        o resultado no campo correspondente. Um outcome já medido em uma janela
+        NÃO é re-medido (enforcement de agendamento).
+        """
+        import json as _json
+        if days not in (28, 56, 90):
+            raise ValueError("days deve ser 28, 56 ou 90")
+        col = f"result_{days}d_json"
+        flag = f"measured_{days}d"
+        row = self.conn.execute(
+            f"SELECT {flag} FROM opportunity_outcomes WHERE id = ?", (outcome_id,)
+        ).fetchone()
+        if row and row[0]:
+            raise ValueError(f"outcome {outcome_id} já medido na janela {days}d")
+        self.conn.execute(
+            f"UPDATE opportunity_outcomes SET verdict = ?, {col} = ?, {flag} = 1 "
+            "WHERE id = ?",
             (verdict,
-             _json.dumps(result_28d, ensure_ascii=False, default=str) if result_28d else None,
-             _json.dumps(result_56d, ensure_ascii=False, default=str) if result_56d else None,
-             _json.dumps(result_90d, ensure_ascii=False, default=str) if result_90d else None,
+             _json.dumps(result, ensure_ascii=False, default=str) if result else None,
              outcome_id),
         )
         self.conn.commit()
@@ -1327,7 +1468,9 @@ class Storage:
                                   limit: int = 200) -> list[dict[str, Any]]:
         sql = ("SELECT id, keyword, opportunity_type, decision, evidence_json, "
                "candidate_score, action_score, human_decision, rejection_reason, "
-               "implemented_action, url, implemented_at, verdict, created_at "
+               "implemented_action, url, baseline_json, implemented_at, verdict, "
+               "measured_28d, measured_56d, measured_90d, "
+               "result_28d_json, result_56d_json, result_90d_json, created_at "
                "FROM opportunity_outcomes")
         params: list[Any] = []
         if verdict:
@@ -1345,8 +1488,16 @@ class Storage:
                 "candidate_score": r[5], "action_score": r[6],
                 "human_decision": r[7] or "", "rejection_reason": r[8] or "",
                 "implemented_action": r[9] or "", "url": r[10] or "",
-                "implemented_at": r[11] or "", "verdict": r[12] or "",
-                "created_at": r[13] or "",
+                "baseline": _json.loads(r[11]) if r[11] else None,
+                "implemented_at": r[12] or "", "verdict": r[13] or "",
+                "measured": {"28d": bool(r[14]), "56d": bool(r[15]),
+                             "90d": bool(r[16])},
+                "results": {
+                    "28d": _json.loads(r[17]) if r[17] else None,
+                    "56d": _json.loads(r[18]) if r[18] else None,
+                    "90d": _json.loads(r[19]) if r[19] else None,
+                },
+                "created_at": r[20] or "",
             }
             for r in rows
         ]
