@@ -1025,6 +1025,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                      config=config)
         steps.append("ga4-collect")
 
+    # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
+    #    — só se não houver um run ativo (checkpoint evita concorrência).
+    if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
+        with Storage(config.sqlite_path) as storage:
+            last_run = storage.corpus_run_summary()["runs"]
+            active = last_run and last_run[0]["status"] == "running"
+        if not active:
+            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0),
+                         config=config)
+            steps.append("corpus-rebuild")
+
     result = {
         "status": "ok",
         "summary": {"command": "schedule", "steps": steps,
