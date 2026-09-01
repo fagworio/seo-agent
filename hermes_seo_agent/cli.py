@@ -2889,13 +2889,26 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
             stats = storage.corpus_stats()
             report = storage.corpus_coverage_report()
             runs = storage.corpus_run_summary()
+            # cobertura offline: usa o total do último run como referência do
+            # sitemap (sem re-fetch); o rebuild online calcula o coverage real.
+            last_run = runs["runs"][0] if runs["runs"] else None
+            sitemap_ref = report.get("sitemap_total") or (
+                (last_run or {}).get("total_urls") or 0)
+            indexed = stats["documents"]
+            offline_coverage = round(
+                (indexed / sitemap_ref) * 100, 1) if sitemap_ref else None
             result = {"status": "ok",
                       "summary": {"command": "corpus", "action": "stats", **stats,
-                                  "coverage_pct": report.get("coverage_pct"),
+                                  "sitemap_total_ref": sitemap_ref,
+                                  "coverage_pct_ref": offline_coverage,
                                   "last_run_status": (
-                                      runs["runs"][0]["status"] if runs["runs"] else None)},
+                                      last_run.get("status") if last_run else None)},
                       "findings": [], "safe_actions": [], "approval_required": [],
-                      "stats": stats, "coverage": report, "runs": runs}
+                      "stats": stats, "coverage": report, "runs": runs,
+                      "coverage_note": (
+                          "cobertura offline usa o total do último run como "
+                          "referência; rode corpus rebuild para o valor real vs "
+                          "sitemap atual" if offline_coverage is not None else "")}
             _emit(result, force_json=True)
             return 0
 
