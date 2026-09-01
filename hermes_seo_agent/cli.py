@@ -101,6 +101,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ("editorial-backlog", "E3: generate revisable pautas (content ideas)"),
         ("interlinks", "E4: internal link suggestions (same-cluster)"),
         ("backlog", "E5: editorial workflow (list/approve/reject/publish/measure)"),
+        ("ga4", "A0+: GA4 data contract, collection and calibration"),
+        ("opportunity-feed", "P1: unified opportunity read model (DTO feed)"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -223,6 +225,19 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="comma-separated hours (local) for the daily GSC inspect")
             p.add_argument("--deep-weekday", type=int, default=1,
                            help="weekday (0=Mon..6=Sun) for the weekly deep report")
+        if name == "ga4":
+            p.add_argument("action", nargs="?", default="status",
+                           choices=["status", "collect", "report"],
+                           help="status | collect | report")
+            p.add_argument("--days", type=int, default=28,
+                           help="janela em dias (fechada, terminando ontem)")
+            p.add_argument("--store", action="store_true",
+                           help="persistir a coleta no SQLite (A1)")
+        if name == "opportunity-feed":
+            p.add_argument("--source", default="",
+                           help="filtrar por fonte: checklist|content_brief|backlog|interlink")
+            p.add_argument("--status", default="",
+                           help="filtrar por status (ex.: pending, proposed)")
         if name in {"audit", "report", "cycle"}:
             p.set_defaults(func=_cmd_audit)
         elif name == "inspect":
@@ -275,6 +290,10 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_backlog)
         elif name == "schedule":
             p.set_defaults(func=_cmd_schedule)
+        elif name == "ga4":
+            p.set_defaults(func=_cmd_ga4)
+        elif name == "opportunity-feed":
+            p.set_defaults(func=_cmd_opportunity_feed)
         else:
             p.set_defaults(func=_cmd_inventory)
 
@@ -911,6 +930,14 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                                                write=True, json=True), config=config)
         steps.append("deep_report")
         steps.append("post-audit-deep")
+
+    # 4) Weekly GA4 collection (A2): janela fechada, persistida; degrada em
+    #    silêncio quando GA4_PROPERTY_ID não está configurado.
+    if config.ga4_property_id and now.weekday() == args.deep_weekday \
+            and now.hour == min(inspect_hours or {6}):
+        run_silently(_cmd_ga4, args=_ns(action="collect", days=28, store=True),
+                     config=config)
+        steps.append("ga4-collect")
 
     result = {
         "status": "ok",
@@ -1768,11 +1795,16 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
                     end = date.today()
                     start = end - timedelta(days=config.search_analytics_days)
                     try:
-                        baseline = gsc.page_metrics(
+                        baseline_gsc = gsc.page_metrics(
                             item["url"], start_date=start.isoformat(), end_date=end.isoformat()
                         ) or None
                     except ConnectorError:
-                        baseline = None
+                        baseline_gsc = None
+                    # GA4 (A5): baseline de engajamento da janela persistida mais
+                    # recente — só quando há dado disponível (ausência ≠ zero).
+                    baseline_ga4 = storage.ga4_metrics_for_url(item["url"]) or None
+                    if baseline_gsc is not None or baseline_ga4 is not None:
+                        baseline = {"gsc": baseline_gsc, "ga4": baseline_ga4}
             if args.action == "done":
                 item = storage.get_checklist_item(args.item_id)
                 # "Nunca contra {}": item mensurável (com URL) exige baseline real.
@@ -1851,6 +1883,9 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
 
         if args.action == "measure":
             from .report.impact import impact_deltas
+            from .report.impact_ga4 import (
+                baseline_ga4, baseline_gsc, combined_verdict, engagement_deltas,
+            )
             item = storage.get_checklist_item(args.item_id or 0)
             if not item or not item.get("url") or not config.google_credentials:
                 print(json.dumps({"status": "error",
@@ -1885,18 +1920,34 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
                                            "(done exige baseline GSC para itens mensuráveis)"},
                                  ensure_ascii=False))
                 return 2
-            deltas = impact_deltas(baseline, now_metrics)
+            # Aquisição orgânica (GSC): antes x depois.
+            gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
+            # Engajamento (GA4): baseline persistido x janela mais recente.
+            now_ga4 = storage.ga4_metrics_for_url(item["url"]) or None
+            ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
+            verdict = combined_verdict(gsc_deltas, ga4_deltas)
             result = {
                 "status": "ok",
                 "summary": {"command": "checklist", "action": "measure",
-                            "item_id": item["id"], "verdict": deltas["verdict"],
+                            "item_id": item["id"], "verdict": verdict,
                             "elapsed_days": elapsed_days},
                 "findings": [], "safe_actions": [], "approval_required": [],
                 "measurement": {
                     "url": item["url"], "item": item["item"],
                     "intervention_type": item.get("intervention_type", ""),
                     "implemented_at": item.get("implemented_at"),
-                    "baseline": baseline, "now": now_metrics, "deltas": deltas,
+                    "acquisition": {           # GSC: aquisição orgânica
+                        "baseline": baseline_gsc(baseline), "now": now_metrics,
+                        "deltas": gsc_deltas,
+                    },
+                    "engagement": {            # GA4: engajamento pós-clique
+                        "baseline": baseline_ga4(baseline), "now": now_ga4,
+                        "deltas": ga4_deltas,
+                    },
+                    "verdict": verdict,
+                    "causal_claim": False,     # nunca declara causalidade
+                    "note": "comparação antes/depois em períodos equivalentes; "
+                            "sem atribuição causal",
                 },
             }
             _emit(result, force_json=True)
@@ -2142,17 +2193,55 @@ def _cmd_content_brief(args: argparse.Namespace, config: Any) -> int:
                     "item": item["item"], "reason": item["evidence"],
                     "action": item["action"], "gain_clicks": None,
                 } for item in brief["suggestions"])
-                # Score explicável: impacto × confiança × facilidade.
+
+                # GA4 (A4): blocos + regras A3 + sugestões pós-clique. Melhora o
+                # julgamento, não substitui GSC — nada nasce de amostra pequena
+                # ou métrica indisponível.
+                ga4_blocks: dict[str, Any] = {}
+                ga4_delta: dict[str, Any] = {"delta": 0.0, "reason": ""}
+                ga4_findings: list[dict[str, Any]] = []
+                try:
+                    ga4_now = storage.ga4_metrics_for_url(url)
+                    ga4_windows = storage.ga4_windows()
+                    ga4_prev = None
+                    if ga4_now and len(ga4_windows) >= 2 and ga4_windows[-1] == ga4_now["window_start"]:
+                        ga4_prev = storage.ga4_metrics_for_url(
+                            url, window_start=ga4_windows[-2])
+                    gsc_metrics = {"impressions": impressions, "clicks": clicks}
+                    if ga4_now:
+                        from .report.ga4_evidence import (
+                            confidence_delta_for_ga4, editorial_suggestions,
+                            ga4_brief_blocks,
+                        )
+                        from .report.ga4_rules import evaluate_url
+                        ga4_findings = evaluate_url(
+                            gsc=gsc_metrics, ga4=ga4_now, ga4_prev=ga4_prev)
+                        ga4_blocks = ga4_brief_blocks(
+                            gsc=gsc_metrics, ga4=ga4_now, ga4_prev=ga4_prev,
+                            findings=ga4_findings)
+                        checklist.extend(editorial_suggestions(
+                            gsc=gsc_metrics, ga4=ga4_now, findings=ga4_findings))
+                        ga4_delta = confidence_delta_for_ga4(
+                            ga4=ga4_now, ga4_prev=ga4_prev, findings=ga4_findings)
+                except Exception:
+                    ga4_blocks = {}
+
+                # Score explicável: impacto × confiança × facilidade. GA4 ajusta
+                # a CONFIANÇA com explicação (nunca um quarto multiplicador).
                 from .report.scoring import confidence_for, score_factors
                 enriched = []
                 for item in checklist:
+                    base_conf = confidence_for(
+                        has_queries=demand["has_queries"], impressions=impressions,
+                        word_count=page_words,
+                    )
+                    evidence_quality = min(base_conf + ga4_delta["delta"], 1.0)
                     factors = score_factors(
                         item=item["item"], gain_clicks=item.get("gain_clicks"),
-                        evidence_quality=confidence_for(
-                            has_queries=demand["has_queries"], impressions=impressions,
-                            word_count=page_words,
-                        ),
+                        evidence_quality=evidence_quality,
                     )
+                    if ga4_delta["delta"] > 0:
+                        factors["score_breakdown"]["confianca_note"] = ga4_delta["reason"]
                     enriched.append({**item, **factors})
                 checklist = enriched
                 if not checklist:
@@ -2174,6 +2263,7 @@ def _cmd_content_brief(args: argparse.Namespace, config: Any) -> int:
                         (i.get("score") or 0.0) for i in checklist
                     ),
                     "content_brief": brief,
+                    "ga4": ga4_blocks,
                     "checklist": checklist,
                     "total_gain_clicks": total_gain(checklist),
                 })
@@ -2453,6 +2543,232 @@ def _cmd_backlog(args: argparse.Namespace, config: Any) -> int:
         "summary": {"command": "backlog", "action": args.action,
                     "item_id": args.item_id, "ok": ok},
         "findings": [], "safe_actions": [], "approval_required": [],
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_ga4(args: argparse.Namespace, config: Any) -> int:
+    """A0/A1/A2: GA4 data contract — status, coleta persistida e calibração.
+
+    - status (A0): credencial, Property ID, período, linhas, canônicas/unmatched,
+      quota.
+    - collect --store (A1/A2): janela FECHADA (últimos N dias terminando ontem),
+      persiste execuções vazias/parciais, cobertura e aviso de queda.
+    - report (A2): relatório de calibração GSC × GA4 (sinais correlacionados,
+      nunca contagem 1:1).
+    """
+    if not config.ga4_property_id:
+        print(json.dumps({"status": "error",
+                          "error": "GA4 não configurado (GA4_PROPERTY_ID)"},
+                         ensure_ascii=False))
+        return 2
+
+    end = date.today() - timedelta(days=1)          # janela fechada: termina ontem
+    start = end - timedelta(days=args.days - 1)
+
+    client = AnalyticsClient(config)
+    if args.action == "status":
+        try:
+            status = client.status(start_date=start.isoformat(),
+                                   end_date=end.isoformat())
+        except ConnectorError as exc:
+            print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+            return 2
+        result = {
+            "status": "ok",
+            "summary": {"command": "ga4", "action": "status",
+                        "property_id": status["property_id"],
+                        "window": status["window"],
+                        "rows_returned": status["rows_returned"],
+                        "canonical_urls": status["canonical_urls"],
+                        "unmatched": len(status["unmatched"])},
+            "findings": [], "safe_actions": [], "approval_required": [],
+            "ga4_status": status,
+        }
+        _emit(result, force_json=True)
+        return 0
+
+    if args.action == "collect":
+        return _cmd_ga4_collect(args, config, client, start=start, end=end)
+
+    if args.action == "report":
+        return _cmd_ga4_report(args, config, client, start=start, end=end)
+
+    print(json.dumps({"status": "error", "error": f"ga4 {args.action} desconhecido"},
+                     ensure_ascii=False))
+    return 2
+
+
+def _cmd_ga4_collect(args: argparse.Namespace, config: Any, client: AnalyticsClient,
+                     *, start: date, end: date) -> int:
+    """A2: coleta semanal de janela fechada, persistida (vazias/parciais também)."""
+    from urllib.parse import urlsplit
+
+    ws, we = start.isoformat(), end.isoformat()
+    # URLs canônicas conhecidas (sitemap) para medir cobertura sem descartar unmatched.
+    known: set[str] = set()
+    try:
+        with StaticSiteClient(config) as static:
+            known = {u.rstrip("/") + "/" for u in static.all_sitemap_urls()}
+    except Exception:
+        pass
+
+    try:
+        result = client.organic_landing_performance(
+            start_date=ws, end_date=we, known_urls=known,
+        )
+    except ConnectorError as exc:
+        if args.store:
+            with Storage(config.sqlite_path) as storage:
+                storage.save_ga4_collection_run(
+                    source_scope="organic_landing", window_start=ws, window_end=we,
+                    status="failed", rows_received=0, rows_matched=0,
+                    rows_unmatched=0, error=str(exc),
+                )
+        print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+        return 2
+
+    rows = result["rows"]
+    unmatched = result["unmatched"]
+    matched = sum(1 for r in rows if r["matched_sitemap"])
+    warnings: list[str] = []
+    run_status = "ok"
+    if not rows:
+        run_status = "empty"
+        warnings.append("nenhuma landing orgânica retornada na janela")
+    elif unmatched or (rows and not matched):
+        run_status = "partial"
+    if rows and matched and len(rows) >= 10 and matched / len(rows) < 0.7:
+        warnings.append(
+            f"cobertura canônica baixa: {matched}/{len(rows)} linhas casam com o "
+            "sitemap — verifique domínio/propriedade GA4")
+
+    if args.store:
+        with Storage(config.sqlite_path) as storage:
+            prev = storage.ga4_collection_health()["organic_landing"]
+            prev_matched = prev[0]["rows_matched"] if prev else 0
+            saved = storage.save_ga4_page_metrics(
+                rows, window_start=ws, window_end=we, source_scope="organic_landing",
+            )
+            storage.save_ga4_collection_run(
+                source_scope="organic_landing", window_start=ws, window_end=we,
+                status=run_status, rows_received=len(rows), rows_matched=matched,
+                rows_unmatched=len(unmatched),
+            )
+            if prev_matched and matched and matched < prev_matched * 0.7:
+                warnings.append(
+                    f"cobertura caiu vs janela anterior: {matched} vs {prev_matched} "
+                    "(possível problema de configuração ou tráfego)")
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "ga4", "action": "collect",
+                    "window": {"start": ws, "end": we},
+                    "run_status": run_status,
+                    "rows_received": len(rows),
+                    "rows_matched": matched,
+                    "rows_unmatched": len(unmatched),
+                    "stored": bool(args.store)},
+        "findings": [],
+        "safe_actions": [],
+        "approval_required": [],
+        "warnings": warnings,
+        "unmatched": unmatched[:20],
+        "quota": result["quota"],
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_ga4_report(args: argparse.Namespace, config: Any, client: AnalyticsClient,
+                    *, start: date, end: date) -> int:
+    """A2: relatório de calibração GSC × GA4 (janela fechada, sinais correlacionados)."""
+    if not config.google_credentials:
+        print(json.dumps({"status": "error",
+                          "error": "GSC não configurado para calibração"},
+                         ensure_ascii=False))
+        return 2
+    ws, we = start.isoformat(), end.isoformat()
+    try:
+        ga4 = client.organic_landing_performance(start_date=ws, end_date=we)
+        gsc = SearchConsoleClient(config)
+        gsc_rows = gsc.search_analytics_by_page(start_date=ws, end_date=we)
+    except ConnectorError as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+        return 2
+
+    gsc_by_url = {}
+    for r in gsc_rows:
+        url = (r.get("keys") or [""])[0].rstrip("/") + "/"
+        gsc_by_url[url] = r
+
+    calib = []
+    ga4_by_url = {r["url"]: r for r in ga4["rows"]}
+    for url, gr in sorted(gsc_by_url.items(), key=lambda kv: -float(kv[1].get("impressions", 0))):
+        g4 = ga4_by_url.get(url)
+        calib.append({
+            "url": url,
+            "gsc_clicks": float(gr.get("clicks", 0)),
+            "gsc_impressions": float(gr.get("impressions", 0)),
+            "ga4_organic_sessions": g4["sessions"] if g4 else None,
+            "ga4_engagement_rate": g4["engagement_rate"] if g4 else None,
+            "coverage": "matched" if g4 else "no_ga4_row",
+            "measurement_status": g4["measurement_status"] if g4 else "missing",
+            "note": None,
+        })
+
+    # Aviso de divergência esperada: GSC e GA4 não contam 1:1.
+    notes: list[str] = []
+    if calib:
+        with_sessions = [c for c in calib if c["ga4_organic_sessions"] is not None]
+        if with_sessions:
+            clicks = sum(c["gsc_clicks"] for c in with_sessions)
+            sess = sum(c["ga4_organic_sessions"] for c in with_sessions)
+            if sess > 0:
+                ratio = clicks / sess
+                if ratio < 0.3 or ratio > 3.0:
+                    notes.append(
+                        f"razão GSC clicks/GA4 sessões = {ratio:.2f} fora do esperado "
+                        "(0.3–3.0): divergência natural entre as plataformas; não é 1:1")
+        unmatched = len(ga4["unmatched"])
+        if unmatched:
+            notes.append(f"{unmatched} landing(s) GA4 sem correspondência no domínio")
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "ga4", "action": "report",
+                    "window": {"start": ws, "end": we},
+                    "pages": len(calib), "with_ga4": len([c for c in calib
+                                                          if c["ga4_organic_sessions"] is not None])},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "calibration": calib[: (args.limit or 50)],
+        "notes": notes,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_opportunity_feed(args: argparse.Namespace, config: Any) -> int:
+    """P1: feed unificado de oportunidades (OpportunityDTO read model)."""
+    from .services.opportunity import OpportunityFeedService
+
+    with Storage(config.sqlite_path) as storage:
+        service = OpportunityFeedService(storage)
+        items = service.feed(
+            source=args.source or None,
+            status=args.status or None,
+            limit=args.limit or 200,
+        )
+    by_source: dict[str, int] = {}
+    for it in items:
+        by_source[it["source"]] = by_source.get(it["source"], 0) + 1
+    result = {
+        "status": "ok",
+        "summary": {"command": "opportunity-feed", "items": len(items),
+                    "by_source": by_source},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "opportunities": items,
     }
     _emit(result, force_json=True)
     return 0

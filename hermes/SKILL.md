@@ -66,9 +66,23 @@ browser tool. The CLI does the mechanics; you interpret and report.
     marks an item completed (manual flow). Re-runs never duplicate items.
 13. `hermes-seo-agent impact` — after improvements + Google reindexation,
     compares GSC before × after (position/clicks/CTR) per page.
-14. Report **JSON outcomes** to the pipeline (status, summary, findings,
+14. `hermes-seo-agent ga4 status` — GA4 data contract (A0): property, window,
+    rows returned, canonical/unmatched URLs, quota. No GA4_PROPERTY_ID →
+    clear error, never fake zeros.
+15. `hermes-seo-agent ga4 collect --store` — weekly closed-window (28d ending
+    yesterday) organic landing collection (A1/A2); persists empty/partial runs
+    and warns on coverage drop. `schedule` runs it weekly when configured.
+16. `hermes-seo-agent ga4 report` — calibration GSC × GA4 per URL (clicks vs
+    sessions). Correlated signals, NOT 1:1 — report divergence as expected.
+17. `hermes-seo-agent content-brief` — adds GA4 blocks (organic_landing,
+    engagement, trend, data_quality) + post-click suggestions when data exists;
+    GA4 adjusts confidence with an explanation (A4).
+18. `hermes-seo-agent opportunity-feed [--source X]` — unified read model (P1):
+    checklist + content_briefs + backlog + interlinks + GSC + GA4 as DTOs.
+19. `hermes-seo-agent checklist measure <id>` — integrated measurement (A5):
+    acquisition (GSC) + engagement (GA4) + combined verdict; no causality.
+20. Report **JSON outcomes** to the pipeline (status, summary, findings,
     safe_actions, approval_required). Keep `approval_required` untouched.
-
 ## Fluxo de melhorias (manual-first, verificado depois)
 
 1. `post-audit --limit 20` → lista de posts com estimativas de ganho.
@@ -76,6 +90,19 @@ browser tool. The CLI does the mechanics; you interpret and report.
    conteúdo) e marque `checklist done <id>`.
 3. Depois que o Google reindexar (`reindex-status` mostra `last_crawl_time`),
    rode `impact` para confirmar o ganho (posição/cliques/CTR antes × depois).
+
+## GA4 como sinal editorial (A0–A5)
+
+- GA4 complementa GSC (comportamento pós-clique), nunca o substitui.
+- Regras determinísticas (A3): organic_low_engagement, engagement_declining,
+  search_click_engagement_gap — cada finding com evidência, janela, amostra,
+  limiar, status do dado e limitações.
+- Nunca sugira ação a partir de amostra pequena ou métrica indisponível
+  (measurement_status != available ⇒ sem finding).
+- low_value_page / remoção / noindex / redirect continuam decisão humana —
+  nunca gatilho automático.
+- Divergência GSC clicks × GA4 sessions é esperada; reporte como sinal
+  correlacionado, não como bug.
 
 ## Output contract
 

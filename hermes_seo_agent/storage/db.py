@@ -218,6 +218,36 @@ CREATE TABLE IF NOT EXISTS editorial_events (
     details_json TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ga4_collection_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_scope TEXT NOT NULL,             -- organic_landing | page_engagement
+    window_start TEXT NOT NULL,
+    window_end TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    status TEXT NOT NULL,                   -- ok | partial | empty | failed
+    rows_received INTEGER NOT NULL DEFAULT 0,
+    rows_matched INTEGER NOT NULL DEFAULT 0,
+    rows_unmatched INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ga4_runs_scope ON ga4_collection_runs(source_scope, window_start);
+CREATE TABLE IF NOT EXISTS ga4_page_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    window_start TEXT NOT NULL,
+    window_end TEXT NOT NULL,
+    source_scope TEXT NOT NULL,             -- organic_landing | page_engagement
+    channel TEXT NOT NULL DEFAULT 'Organic Search',
+    sessions REAL,
+    engaged_sessions REAL,
+    engagement_rate REAL,
+    engagement_time REAL,
+    key_events REAL,
+    measurement_status TEXT NOT NULL,       -- available | missing | invalid | partial
+    collected_at TEXT NOT NULL,
+    UNIQUE(url, window_start, window_end, source_scope, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_ga4_url ON ga4_page_metrics(url, window_start);
 CREATE INDEX IF NOT EXISTS idx_editorial_events_backlog ON editorial_events(backlog_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_findings_cycle ON findings(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
@@ -888,6 +918,156 @@ class Storage:
             "SELECT DISTINCT window_start FROM query_pages ORDER BY window_start"
         ).fetchall()
         return [r[0] for r in rows]
+
+    # -- GA4 (A1: histórico persistido) --------------------------------------
+
+    def save_ga4_collection_run(self, *, source_scope: str, window_start: str,
+                                window_end: str, status: str, rows_received: int,
+                                rows_matched: int, rows_unmatched: int,
+                                error: str = "") -> None:
+        self.conn.execute(
+            "INSERT INTO ga4_collection_runs (source_scope, window_start, window_end, "
+            "collected_at, status, rows_received, rows_matched, rows_unmatched, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (source_scope, window_start, window_end, _now(), status,
+             rows_received, rows_matched, rows_unmatched, error),
+        )
+        self.conn.commit()
+
+    def save_ga4_page_metrics(self, rows: list[dict[str, Any]], *,
+                              window_start: str, window_end: str,
+                              source_scope: str,
+                              channel: str = "Organic Search") -> int:
+        """Upsert: mesma URL+janela+scope+channel sobrescreve (janela fechada)."""
+        saved = 0
+        for row in rows:
+            try:
+                self.conn.execute(
+                    "INSERT INTO ga4_page_metrics (url, window_start, window_end, "
+                    "source_scope, channel, sessions, engaged_sessions, "
+                    "engagement_rate, engagement_time, key_events, "
+                    "measurement_status, collected_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(url, window_start, window_end, source_scope, channel) "
+                    "DO UPDATE SET sessions = excluded.sessions, "
+                    "engaged_sessions = excluded.engaged_sessions, "
+                    "engagement_rate = excluded.engagement_rate, "
+                    "engagement_time = excluded.engagement_time, "
+                    "key_events = excluded.key_events, "
+                    "measurement_status = excluded.measurement_status, "
+                    "collected_at = excluded.collected_at",
+                    (row["url"], window_start, window_end, source_scope, channel,
+                     row.get("sessions"), row.get("engaged_sessions"),
+                     row.get("engagement_rate"), row.get("engagement_time"),
+                     row.get("key_events"), row.get("measurement_status", "missing"),
+                     _now()),
+                )
+                saved += 1
+            except Exception:
+                continue
+        self.conn.commit()
+        return saved
+
+    def latest_ga4_window(self, *, source_scope: str = "organic_landing") -> str | None:
+        row = self.conn.execute(
+            "SELECT MAX(window_start) FROM ga4_page_metrics WHERE source_scope = ?",
+            (source_scope,),
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def ga4_windows(self, *, source_scope: str = "organic_landing") -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT window_start FROM ga4_page_metrics "
+            "WHERE source_scope = ? ORDER BY window_start",
+            (source_scope,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def ga4_metrics_for_url(self, url: str, *,
+                            source_scope: str = "organic_landing",
+                            window_start: str | None = None) -> dict[str, Any] | None:
+        """Métricas GA4 de UMA URL em UMA janela (mais recente por padrão).
+        NUNCA soma janelas nem mistura canais — retorna None quando não há
+        dado (ausência ≠ zero)."""
+        ws = window_start or self.latest_ga4_window(source_scope=source_scope)
+        if not ws:
+            return None
+        row = self.conn.execute(
+            "SELECT url, window_start, window_end, source_scope, channel, sessions, "
+            "engaged_sessions, engagement_rate, engagement_time, key_events, "
+            "measurement_status, collected_at FROM ga4_page_metrics "
+            "WHERE url = ? AND source_scope = ? AND window_start = ?",
+            (url, source_scope, ws),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "url": row[0], "window_start": row[1], "window_end": row[2],
+            "source_scope": row[3], "channel": row[4],
+            "sessions": row[5], "engaged_sessions": row[6],
+            "engagement_rate": row[7], "engagement_time": row[8],
+            "key_events": row[9], "measurement_status": row[10],
+            "collected_at": row[11],
+        }
+
+    def ga4_trend_for_url(self, url: str, *, window_a: str, window_b: str,
+                          source_scope: str = "organic_landing") -> dict[str, Any]:
+        """Compara a MESMA URL entre duas janelas equivalentes (mesmo scope)."""
+        def _agg(window: str) -> dict[str, Any]:
+            row = self.conn.execute(
+                "SELECT sessions, engaged_sessions, engagement_rate "
+                "FROM ga4_page_metrics WHERE url = ? AND source_scope = ? "
+                "AND window_start = ?",
+                (url, source_scope, window),
+            ).fetchone()
+            if not row:
+                return {"sessions": None, "engaged_sessions": None,
+                        "engagement_rate": None}
+            return {"sessions": row[0], "engaged_sessions": row[1],
+                    "engagement_rate": row[2]}
+
+        a = _agg(window_a)
+        b = _agg(window_b)
+        delta_pct = None
+        if a["sessions"] not in (None, 0):
+            delta_pct = round(
+                ((b["sessions"] or 0) - a["sessions"]) / a["sessions"] * 100, 1
+            )
+        trend = "stable"
+        if delta_pct is not None:
+            if delta_pct <= -30:
+                trend = "declining"
+            elif delta_pct >= 30:
+                trend = "growing"
+        return {
+            "url": url, "window_a": window_a, "window_b": window_b,
+            "source_scope": source_scope,
+            "sessions_a": a["sessions"], "sessions_b": b["sessions"],
+            "engaged_sessions_a": a["engaged_sessions"],
+            "engaged_sessions_b": b["engaged_sessions"],
+            "engagement_rate_a": a["engagement_rate"],
+            "engagement_rate_b": b["engagement_rate"],
+            "delta_pct": delta_pct, "trend": trend,
+        }
+
+    def ga4_collection_health(self) -> dict[str, Any]:
+        """Cobertura e saúde das coletas por scope (últimas 5 execuções)."""
+        health: dict[str, Any] = {}
+        for scope in ("organic_landing", "page_engagement"):
+            runs = self.conn.execute(
+                "SELECT source_scope, window_start, window_end, status, "
+                "rows_received, rows_matched, rows_unmatched, error "
+                "FROM ga4_collection_runs WHERE source_scope = ? "
+                "ORDER BY window_start DESC LIMIT 5",
+                (scope,),
+            ).fetchall()
+            health[scope] = [
+                {"window_start": r[1], "window_end": r[2], "status": r[3],
+                 "rows_received": r[4], "rows_matched": r[5],
+                 "rows_unmatched": r[6], "error": r[7]}
+                for r in runs
+            ]
+        return health
 
     def queries_for_url(self, url: str, *, limit: int = 15,
                         window_start: str | None = None) -> list[dict[str, Any]]:
