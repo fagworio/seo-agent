@@ -180,8 +180,14 @@ def _quoted(site_url: str) -> str:
     return quote(site_url.rstrip("/"), safe="")
 
 
-def _default_token_provider(config: Config) -> Callable[[], str]:
-    """Lazy google-auth service-account provider; clear error when unconfigured."""
+def _default_token_provider(config: Config,
+                            scopes: list[str] | None = None) -> Callable[[], str]:
+    """Lazy google-auth service-account provider; clear error when unconfigured.
+
+    ``scopes`` defaulta para o escopo do Search Console; conectores de outras
+    APIs (ex.: GA4 analytics.readonly) passam os próprios escopos para que o
+    token JWT carregue a permissão certa — um token GSC NÃO autoriza GA4.
+    """
 
     def provide() -> str:
         if not config.google_credentials:
@@ -197,7 +203,7 @@ def _default_token_provider(config: Config) -> Callable[[], str]:
                 "google-auth is required for GSC: pip install 'hermes-seo-agent[google]'"
             ) from exc
         creds = service_account.Credentials.from_service_account_file(
-            config.google_credentials, scopes=[_SCOPE]
+            config.google_credentials, scopes=scopes or [_SCOPE]
         )
         creds.refresh(Request())
         return creds.token

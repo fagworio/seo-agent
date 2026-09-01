@@ -39,7 +39,7 @@ _ORGANIC_METRICS = (
     "sessions",
     "engagedSessions",
     "engagementRate",
-    "engagementTime",
+    "userEngagementDuration",
     "keyEvents",
 )
 
@@ -56,7 +56,11 @@ class AnalyticsClient:
         if not config.ga4_property_id:
             raise ConnectorError("GA4 not configured: set GA4_PROPERTY_ID")
         self.property = f"properties/{config.ga4_property_id}"
-        self.token_provider = token_provider or _default_token_provider(config)
+        # Token com escopo analytics.readonly — o provider do GSC emitiria
+        # webmasters.readonly, que NÃO autoriza a GA4 Data API.
+        self.token_provider = token_provider or _default_token_provider(
+            config, scopes=[_SCOPE]
+        )
         self.http = http or HttpClient(timeout=config.http_timeout)
 
     # -- low-level -----------------------------------------------------------
@@ -163,7 +167,7 @@ class AnalyticsClient:
                 "sessions": m["sessions"]["value"],
                 "engaged_sessions": m["engagedSessions"]["value"],
                 "engagement_rate": m["engagementRate"]["value"],
-                "engagement_time": m["engagementTime"]["value"],
+                "engagement_time": m["userEngagementDuration"]["value"],
                 "key_events": m["keyEvents"]["value"],
                 "measurement_status": measurement_status,
             })
@@ -198,7 +202,7 @@ class AnalyticsClient:
                 "sessions": m["sessions"]["value"],
                 "engaged_sessions": m["engagedSessions"]["value"],
                 "engagement_rate": m["engagementRate"]["value"],
-                "engagement_time": m["engagementTime"]["value"],
+                "engagement_time": m["userEngagementDuration"]["value"],
                 "key_events": m["keyEvents"]["value"],
                 "measurement_status": _row_status(statuses),
             })

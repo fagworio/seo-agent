@@ -164,7 +164,7 @@ def test_pagination_uses_rowcount_and_offset(monkeypatch):
     result = client._paginate(
         {"dateRanges": [], "dimensions": [{"name": "landingPagePlusQueryString"}],
          "metrics": [{"name": m} for m in ("sessions", "engagedSessions",
-                                           "engagementRate", "engagementTime",
+                                           "engagementRate", "userEngagementDuration",
                                            "keyEvents")]},
         row_limit=2,
     )
@@ -214,3 +214,44 @@ def test_ga4_requires_property_id(monkeypatch):
     config = load_config()
     with pytest.raises(ConnectorError):
         AnalyticsClient(config, token_provider=lambda: "t")
+
+
+def test_ga4_token_uses_analytics_scope_not_gsc(monkeypatch):
+    """Regressão: o token GA4 precisa do escopo analytics.readonly — o provider
+    do GSC (webmasters.readonly) NÃO autoriza a GA4 Data API."""
+    from hermes_seo_agent.connectors import analytics as analytics_mod
+    from hermes_seo_agent.connectors import search_console as sc_mod
+
+    captured = {}
+
+    class _FakeCreds:
+        def __init__(self, *, scopes):
+            captured["scopes"] = scopes
+
+        def refresh(self, req):
+            pass
+
+        @property
+        def token(self):
+            return "ga4-token"
+
+    def _fake_creds_from_file(path, *, scopes):
+        return _FakeCreds(scopes=scopes)
+
+    monkeypatch.setattr("google.oauth2.service_account.Credentials",
+                        type("C", (), {"from_service_account_file":
+                                       staticmethod(_fake_creds_from_file)}))
+    monkeypatch.setattr("google.auth.transport.requests.Request",
+                        type("R", (), {"__init__": lambda self: None}))
+
+    config = _make_config(monkeypatch)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-sa.json")
+    config = load_config()
+    # provider default do AnalyticsClient (sem token_provider injetado)
+    provider = analytics_mod._default_token_provider(config, scopes=[analytics_mod._SCOPE])
+    assert provider() == "ga4-token"
+    assert captured["scopes"] == ["https://www.googleapis.com/auth/analytics.readonly"]
+    # e o provider GSC segue com o escopo dele
+    gsc_provider = sc_mod._default_token_provider(config)
+    assert gsc_provider() == "ga4-token"
+    assert captured["scopes"] == ["https://www.googleapis.com/auth/webmasters.readonly"]
