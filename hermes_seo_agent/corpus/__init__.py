@@ -1,0 +1,1 @@
+"""Corpus editorial (M2)."""

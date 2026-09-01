@@ -103,6 +103,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ("backlog", "E5: editorial workflow (list/approve/reject/publish/measure)"),
         ("ga4", "A0+: GA4 data contract, collection and calibration"),
         ("opportunity-feed", "P1: unified opportunity read model (DTO feed)"),
+        ("integration-status", "M0: health of all data sources (data_status)"),
+        ("corpus", "M2: editorial memory — rebuild/search/coverage (FTS5)"),
+        ("topics", "M3: entities, topic graph and cluster coverage"),
+        ("market", "M4: optional external intelligence (keywords/SERP)"),
+        ("rankability", "M5: topical rankability profile per cluster"),
+        ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
+        ("brief", "M7: semantic research brief (human review)"),
+        ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -238,6 +246,64 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="filtrar por fonte: checklist|content_brief|backlog|interlink")
             p.add_argument("--status", default="",
                            help="filtrar por status (ex.: pending, proposed)")
+        if name == "integration-status":
+            p.add_argument("--live", action="store_true",
+                           help="fazer checagens ao vivo (rede); default: só estado persistido")
+        if name == "corpus":
+            p.add_argument("action", nargs="?", default="stats",
+                           choices=["rebuild", "search", "coverage", "stats"],
+                           help="rebuild | search <termo> | coverage <termo> | stats")
+            p.add_argument("term", nargs="?", default="",
+                           help="termo de busca (search/coverage)")
+        if name == "topics":
+            p.add_argument("action", nargs="?", default="graph",
+                           choices=["graph", "coverage"],
+                           help="graph | coverage <tema>")
+            p.add_argument("term", nargs="?", default="",
+                           help="tema/entidade para coverage")
+        if name == "market":
+            p.add_argument("action", nargs="?", default="status",
+                           choices=["status", "candidate"],
+                           help="status | candidate <keyword>")
+            p.add_argument("term", nargs="?", default="",
+                           help="keyword para candidate")
+        if name == "rankability":
+            p.add_argument("term", help="tema/entidade do cluster")
+            p.add_argument("--external-difficulty", type=float, default=None,
+                           help="dificuldade externa 0..1 (M4, opcional)")
+        if name == "decide":
+            p.add_argument("keyword", help="intenção/keyword a decidir")
+            p.add_argument("--impressions", type=float, default=None,
+                           help="impressões GSC da intenção (demanda)")
+            p.add_argument("--clicks", type=float, default=None,
+                           help="cliques GSC da intenção")
+            p.add_argument("--trend", default="",
+                           help="growing|declining|stable (tendência)")
+        if name == "brief":
+            p.add_argument("keyword", help="keyword da oportunidade")
+            p.add_argument("--impressions", type=float, default=None,
+                           help="impressões GSC (demanda)")
+            p.add_argument("--trend", default="",
+                           help="growing|declining|stable")
+        if name == "outcomes":
+            p.add_argument("action", nargs="?", default="list",
+                           choices=["list", "register", "measure", "recalibrate"],
+                           help="list | register | measure <id> | recalibrate")
+            p.add_argument("keyword", nargs="?", default="",
+                           help="keyword (register)")
+            p.add_argument("item_id", nargs="?", type=int, default=None,
+                           help="id do outcome (measure)")
+            p.add_argument("--type", default="", help="opportunity_type (register)")
+            p.add_argument("--decision", default="", help="decisão M6 (register)")
+            p.add_argument("--human-decision", default="",
+                           help="approved|rejected|snoozed|skipped (register)")
+            p.add_argument("--rejection-reason", default="",
+                           help="motivo da rejeição")
+            p.add_argument("--implemented-action", default="",
+                           help="o que foi feito (title/expand/refresh…)")
+            p.add_argument("--url", default="", help="URL da ação implementada")
+            p.add_argument("--verdict", default="",
+                           help="improved|neutral|worsened|insufficient_data (measure)")
         if name in {"audit", "report", "cycle"}:
             p.set_defaults(func=_cmd_audit)
         elif name == "inspect":
@@ -294,6 +360,22 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_ga4)
         elif name == "opportunity-feed":
             p.set_defaults(func=_cmd_opportunity_feed)
+        elif name == "integration-status":
+            p.set_defaults(func=_cmd_integration_status)
+        elif name == "corpus":
+            p.set_defaults(func=_cmd_corpus)
+        elif name == "topics":
+            p.set_defaults(func=_cmd_topics)
+        elif name == "market":
+            p.set_defaults(func=_cmd_market)
+        elif name == "rankability":
+            p.set_defaults(func=_cmd_rankability)
+        elif name == "decide":
+            p.set_defaults(func=_cmd_decide)
+        elif name == "brief":
+            p.set_defaults(func=_cmd_brief)
+        elif name == "outcomes":
+            p.set_defaults(func=_cmd_outcomes)
         else:
             p.set_defaults(func=_cmd_inventory)
 
@@ -2772,6 +2854,547 @@ def _cmd_opportunity_feed(args: argparse.Namespace, config: Any) -> int:
     }
     _emit(result, force_json=True)
     return 0
+
+
+def _cmd_integration_status(args: argparse.Namespace, config: Any) -> int:
+    """M0: saúde de todas as fontes (data_status padronizado)."""
+    from .services.integration_status import IntegrationStatusService
+
+    with Storage(config.sqlite_path) as storage:
+        service = IntegrationStatusService(config, storage)
+        sources = service.check(live=getattr(args, "live", False))
+    summary = {s.source: s.data_status for s in sources}
+    result = {
+        "status": "ok",
+        "summary": {"command": "integration-status", "sources": summary},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "sources": [s.to_dict() for s in sources],
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
+    """M2: memória editorial — rebuild (incremental por content_hash),
+    search (FTS5/BM25) e coverage (documentos/seções que cobrem um termo)."""
+    from .corpus.builder import build_corpus
+    from .corpus.builder import extract_sections as _extract_sections  # noqa: F401
+
+    with Storage(config.sqlite_path) as storage:
+        if args.action == "stats":
+            stats = storage.corpus_stats()
+            result = {"status": "ok",
+                      "summary": {"command": "corpus", "action": "stats", **stats},
+                      "findings": [], "safe_actions": [], "approval_required": [],
+                      "stats": stats}
+            _emit(result, force_json=True)
+            return 0
+
+        if args.action == "rebuild":
+            # Incremental por content_hash: só reindexa o que mudou desde o
+            # último build (ou docs novas). Reutiliza o sitemap como fonte.
+            with StaticSiteClient(config) as static:
+                urls = static.all_sitemap_urls()
+            cap = args.limit or config.max_corpus_docs
+            urls = urls[:cap]
+            changed: list[Any] = []
+            built_at = _now()
+            with StaticSiteClient(config) as static:
+                for url in urls:
+                    try:
+                        page = static.fetch_page(url)
+                    except Exception:
+                        continue
+                    body = getattr(page, "body_text", "") or ""
+                    import hashlib
+                    h = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    row = storage.conn.execute(
+                        "SELECT content_hash FROM corpus_documents WHERE url = ?",
+                        (url,),
+                    ).fetchone()
+                    if row and row[0] == h:
+                        continue  # inalterado
+                    changed.append(page)
+            counts = build_corpus(storage, changed, built_at=built_at)
+            result = {
+                "status": "ok",
+                "summary": {"command": "corpus", "action": "rebuild",
+                            "checked": len(urls), "changed": len(changed),
+                            **counts},
+                "findings": [], "safe_actions": [], "approval_required": [],
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        if args.action in ("search", "coverage"):
+            term = (args.term or "").strip()
+            if not term:
+                print(json.dumps({"status": "error", "error": "informe o termo"},
+                                 ensure_ascii=False))
+                return 2
+            if args.action == "search":
+                items = storage.corpus_search(term, limit=args.limit or 20)
+                result = {"status": "ok",
+                          "summary": {"command": "corpus", "action": "search",
+                                      "term": term, "results": len(items)},
+                          "findings": [], "safe_actions": [], "approval_required": [],
+                          "results": items}
+            else:
+                items = storage.corpus_coverage(term, limit=args.limit or 20)
+                result = {"status": "ok",
+                          "summary": {"command": "corpus", "action": "coverage",
+                                      "term": term, "documents": len(items)},
+                          "findings": [], "safe_actions": [], "approval_required": [],
+                          "coverage": items}
+            _emit(result, force_json=True)
+            return 0
+
+    print(json.dumps({"status": "error", "error": f"corpus {args.action} desconhecido"},
+                     ensure_ascii=False))
+    return 2
+
+
+def _cmd_topics(args: argparse.Namespace, config: Any) -> int:
+    """M3: tópicos, entidades e clusters — topic_graph + cobertura por cluster."""
+    from .report.topics import build_topic_graph, cluster_coverage
+
+    with Storage(config.sqlite_path) as storage:
+        if args.action == "graph":
+            clusters = build_topic_graph(storage, min_urls=1)
+            result = {
+                "status": "ok",
+                "summary": {"command": "topics", "action": "graph",
+                            "clusters": len(clusters)},
+                "findings": [], "safe_actions": [], "approval_required": [],
+                "clusters": [
+                    {"entity": c["entity"], "urls": len(c["urls"]),
+                     "corpus_urls": c["corpus_urls"],
+                     "gsc_query_urls": c["gsc_query_urls"],
+                     "evidence": c["evidence"]}
+                    for c in clusters[: (args.limit or 100)]
+                ],
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        term = (args.term or "").strip()
+        if not term:
+            print(json.dumps({"status": "error", "error": "informe o tema"},
+                             ensure_ascii=False))
+            return 2
+        coverage = cluster_coverage(storage, term)
+        result = {
+            "status": "ok",
+            "summary": {"command": "topics", "action": "coverage",
+                        "entity": coverage["entity"],
+                        "posts": coverage["posts"],
+                        "impressions": coverage["impressions"]},
+            "findings": [], "safe_actions": [], "approval_required": [],
+            "coverage": coverage,
+        }
+        _emit(result, force_json=True)
+        return 0
+
+
+def _cmd_market(args: argparse.Namespace, config: Any) -> int:
+    """M4: inteligência externa opcional — status e candidato de pesquisa."""
+    from .services.market_intelligence import get_provider
+
+    provider = get_provider(config)
+    with Storage(config.sqlite_path) as storage:
+        if args.action == "status":
+            result = {
+                "status": "ok",
+                "summary": {"command": "market", "action": "status",
+                            "provider": provider.name,
+                            "configured": provider.name != "none",
+                            "cost_per_call_cents": provider.cost_per_call_cents},
+                "findings": [], "safe_actions": [], "approval_required": [],
+                "provider": {"name": provider.name,
+                             "config_key": provider.config_key,
+                             "cost_per_call_cents": provider.cost_per_call_cents,
+                             "note": "nenhum adaptador configurado; M4 é opcional"},
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        keyword = (args.term or "").strip()
+        if not keyword:
+            print(json.dumps({"status": "error", "error": "informe a keyword"},
+                             ensure_ascii=False))
+            return 2
+        candidate = provider.candidate(storage, keyword, method="keyword_suggestions")
+        result = {
+            "status": "ok",
+            "summary": {"command": "market", "action": "candidate",
+                        "keyword": keyword,
+                        "corpus_covers": candidate["corpus_covers"],
+                        "suggested_action": candidate["suggested_action"]},
+            "findings": [], "safe_actions": [], "approval_required": [],
+            "candidate": candidate,
+        }
+        _emit(result, force_json=True)
+        return 0
+
+
+def _cmd_rankability(args: argparse.Namespace, config: Any) -> int:
+    """M5: perfil de rankability de um cluster (score calibrável, fatores explicados)."""
+    import datetime as _dt
+
+    from .report.rankability import rankability_profile
+    from .report.topics import cluster_coverage
+
+    term = (args.term or "").strip()
+    if not term:
+        print(json.dumps({"status": "error", "error": "informe o tema"},
+                         ensure_ascii=False))
+        return 2
+
+    with Storage(config.sqlite_path) as storage:
+        cov = cluster_coverage(storage, term)
+        # posições das queries do cluster (janela mais recente)
+        ws = storage.latest_window_start()
+        positions: list[float] = []
+        total_queries = 0
+        for url in cov["urls"]:
+            if not ws:
+                break
+            for r in storage.conn.execute(
+                "SELECT position FROM query_pages WHERE url = ? AND window_start = ?",
+                (url, ws),
+            ).fetchall():
+                if r[0] is not None:
+                    positions.append(float(r[0]))
+                    total_queries += 1
+        # crescimento: sessões GA4 (ou impressões) entre as 2 últimas janelas
+        growth = None
+        windows = storage.ga4_windows()
+        if len(windows) >= 2:
+            a = b = 0.0
+            for url in cov["urls"]:
+                for w in (windows[-2], windows[-1]):
+                    m = storage.ga4_metrics_for_url(url, window_start=w)
+                    if m and m.get("sessions") is not None:
+                        if w == windows[-2]:
+                            a += m["sessions"]
+                        else:
+                            b += m["sessions"]
+            if a:
+                growth = round((b - a) / a * 100, 1)
+        # frescor: dias desde o build mais recente do cluster
+        days_since = None
+        freshest = cov.get("freshest_crawl", "")
+        if freshest:
+            try:
+                built = _dt.datetime.fromisoformat(freshest.replace("Z", "+00:00"))
+                days_since = max((_dt.datetime.now(_dt.timezone.utc) - built).days, 0)
+            except ValueError:
+                pass
+        # GA4 agregado do cluster
+        rates = []
+        for url in cov["urls"]:
+            m = storage.ga4_metrics_for_url(url)
+            if m and m.get("engagement_rate") is not None and \
+                    m.get("measurement_status") == "available":
+                rates.append(m["engagement_rate"])
+        ga4_rate = (sum(rates) / len(rates)) if rates else None
+
+        cluster_metrics = {
+            "posts": cov["posts"], "impressions": cov["impressions"],
+            "clicks": cov["clicks"], "top10_queries": cov["top10_queries"],
+            "internal_links": cov["internal_links"],
+            "positions": positions, "total_queries": total_queries,
+            "days_since_update": days_since,
+            "ga4_engagement_rate": ga4_rate,
+            "ga4_status": cov["ga4_status"],
+        }
+        profile = rankability_profile(
+            cluster_metrics, growth_delta_pct=growth,
+            external_difficulty=getattr(args, "external_difficulty", None),
+        )
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "rankability", "term": term,
+                    "rankability_score": profile["rankability_score"],
+                    "label": profile["label"]},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "profile": profile,
+        "cluster": {**cov, "growth_delta_pct": growth},
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_decide(args: argparse.Namespace, config: Any) -> int:
+    """M6: árvore de decisão editorial + CandidateScore/ActionScore separados."""
+    from .report.decision_engine import decide
+    from .report.topics import build_topic_graph, canonical_entity
+
+    keyword = (args.keyword or "").strip()
+    if not keyword:
+        print(json.dumps({"status": "error", "error": "informe a keyword"},
+                         ensure_ascii=False))
+        return 2
+
+    with Storage(config.sqlite_path) as storage:
+        # demanda: impressões da keyword na janela mais recente (GSC persistido)
+        ws = storage.latest_window_start()
+        impressions = args.impressions
+        clicks = args.clicks
+        if impressions is None and ws:
+            row = storage.conn.execute(
+                "SELECT SUM(impressions), SUM(clicks) FROM query_pages "
+                "WHERE window_start = ? AND query LIKE ?",
+                (ws, f"%{keyword}%"),
+            ).fetchone()
+            if row and row[0]:
+                impressions = float(row[0])
+                clicks = float(row[1] or 0)
+        demand_score = min((impressions or 0) / 500.0, 1.0) if impressions else 0.0
+
+        # relevância: a keyword pertence a algum cluster do topic_graph?
+        graph = build_topic_graph(storage, min_urls=1)
+        ent = canonical_entity(keyword)
+        cluster = next((c for c in graph if c["entity"] == ent), None)
+        relevant = cluster is not None
+        competing = len(cluster["urls"]) if cluster else 0
+
+        # cobertura do corpus (FTS)
+        docs = storage.corpus_search(keyword, limit=5)
+        corpus_covers = len(docs) > 0
+        coverage_sufficient = corpus_covers and len(docs) >= 1 and (impressions or 0) < 300
+        stale = False  # determinação de stale fica no M7 (data de modificação)
+
+        # rankability do cluster, se existir
+        rankability_score = None
+        if cluster:
+            from .report.topics import cluster_coverage
+            cov = cluster_coverage(storage, ent)
+            cluster_metrics = {
+                "posts": cov["posts"], "impressions": cov["impressions"],
+                "clicks": cov["clicks"], "top10_queries": cov["top10_queries"],
+                "internal_links": cov["internal_links"],
+                "positions": [], "total_queries": 0,
+                "days_since_update": None,
+                "ga4_engagement_rate": None, "ga4_status": cov["ga4_status"],
+            }
+            from .report.rankability import rankability_profile
+            rankability_score = rankability_profile(cluster_metrics)["rankability_score"]
+
+        intent = {
+            "demand_score": round(demand_score, 2),
+            "relevant": relevant,
+            "corpus_covers": corpus_covers,
+            "coverage_sufficient": coverage_sufficient,
+            "competing_urls": competing,
+            "is_question": keyword.lower().startswith(
+                ("como ", "qual ", "quais ", "quando ", "onde ", "quanto ",
+                 "quem ", "o que ", "por que ")),
+            "stale": stale,
+            "rankability_score": rankability_score,
+            "trend": args.trend or "",
+            "confidence": 0.6 if (impressions or 0) >= 500 else 0.4,
+            "demand_source": "gsc" if impressions else "external",
+            "demand_evidence": {"impressions": impressions, "clicks": clicks},
+        }
+        outcome = decide(intent)
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "decide", "keyword": keyword,
+                    "decision": outcome["decision"],
+                    "opportunity_type": outcome["opportunity_type"],
+                    "candidate_score": outcome["candidate_score"]["score"],
+                    "action_score": outcome["action_score"]["score"]},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "decision": outcome,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_brief(args: argparse.Namespace, config: Any) -> int:
+    """M7: brief de pesquisa semântico (determinístico, revisão humana)."""
+    from .report.decision_engine import decide
+    from .report.research_brief import build_research_brief
+    from .report.topics import build_topic_graph, canonical_entity
+
+    keyword = (args.keyword or "").strip()
+    if not keyword:
+        print(json.dumps({"status": "error", "error": "informe a keyword"},
+                         ensure_ascii=False))
+        return 2
+
+    with Storage(config.sqlite_path) as storage:
+        # decisão (M6) com os mesmos sinais
+        ws = storage.latest_window_start()
+        impressions = args.impressions
+        if impressions is None and ws:
+            row = storage.conn.execute(
+                "SELECT SUM(impressions) FROM query_pages "
+                "WHERE window_start = ? AND query LIKE ?",
+                (ws, f"%{keyword}%"),
+            ).fetchone()
+            if row and row[0]:
+                impressions = float(row[0])
+        graph = build_topic_graph(storage, min_urls=1)
+        ent = canonical_entity(keyword)
+        cluster = next((c for c in graph if c["entity"] == ent), None)
+        docs = storage.corpus_search(keyword, limit=5)
+        intent = {
+            "demand_score": min((impressions or 0) / 500.0, 1.0),
+            "relevant": cluster is not None,
+            "corpus_covers": len(docs) > 0,
+            "coverage_sufficient": False,
+            "competing_urls": len(cluster["urls"]) if cluster else 0,
+            "is_question": keyword.lower().startswith(
+                ("como ", "qual ", "quais ", "quando ", "onde ", "quanto ",
+                 "quem ", "o que ", "por que ")),
+            "stale": False,
+            "trend": args.trend or "",
+            "confidence": 0.6 if (impressions or 0) >= 500 else 0.4,
+        }
+        decision = decide(intent)
+        # seções internas relacionadas
+        corpus_sections: dict[str, list[dict[str, Any]]] = {}
+        for d in docs:
+            corpus_sections[d["url"]] = storage.corpus_sections_for_url(d["url"])
+        # queries GSC da keyword
+        gsc_queries = []
+        if ws:
+            gsc_queries = storage.conn.execute(
+                "SELECT query, SUM(impressions) AS impressions, SUM(clicks) AS clicks "
+                "FROM query_pages WHERE window_start = ? AND query LIKE ? "
+                "GROUP BY query ORDER BY impressions DESC LIMIT 10",
+                (ws, f"%{keyword}%"),
+            ).fetchall()
+            gsc_queries = [{"query": r[0], "impressions": r[1], "clicks": r[2]}
+                           for r in gsc_queries]
+        # entidades do cluster
+        entities = []
+        for url in (cluster["urls"] if cluster else []):
+            entities.extend(storage.corpus_entities_for_url(url))
+        # GA4 da URL recomendada (ou do primeiro doc)
+        ga4 = None
+        if docs:
+            ga4 = storage.ga4_metrics_for_url(docs[0]["url"])
+        # cluster metrics resumidas
+        cluster_summary = None
+        if cluster:
+            from .report.topics import cluster_coverage
+            cluster_summary = cluster_coverage(storage, ent)
+
+        brief = build_research_brief(
+            keyword=keyword, intent=intent, decision=decision,
+            corpus_docs=docs, corpus_sections=corpus_sections,
+            gsc_queries=gsc_queries, entities=entities,
+            cluster=cluster_summary, ga4=ga4,
+        )
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "brief", "keyword": keyword,
+                    "decision": brief["decision"],
+                    "opportunity_type": brief["opportunity_type"],
+                    "recommended_url": brief["recommended_url"] or "(novo conteúdo)"},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "brief": brief,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
+    """M8: outcomes de oportunidades — registrar decisão humana, medir 28/56/90d
+    e recalibrar pesos por regras simples (determinístico, sem modelo ainda)."""
+    with Storage(config.sqlite_path) as storage:
+        if args.action == "recalibrate":
+            stats = storage.recalibration_stats()
+            result = {
+                "status": "ok",
+                "summary": {"command": "outcomes", "action": "recalibrate",
+                            "total_measured": stats["total_measured"]},
+                "findings": [], "safe_actions": [], "approval_required": [],
+                "recalibration": stats,
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        if args.action == "list":
+            items = storage.list_opportunity_outcomes(
+                verdict=args.verdict or None, limit=args.limit or 200)
+            result = {
+                "status": "ok",
+                "summary": {"command": "outcomes", "action": "list",
+                            "items": len(items)},
+                "findings": [], "safe_actions": [], "approval_required": [],
+                "outcomes": items,
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        if args.action == "register":
+            keyword = (args.keyword or "").strip()
+            if not keyword:
+                print(json.dumps({"status": "error", "error": "informe a keyword"},
+                                 ensure_ascii=False))
+                return 2
+            oid = storage.save_opportunity_outcome(
+                keyword=keyword,
+                opportunity_type=args.type or "expand_existing",
+                decision=args.decision or "expand_existing",
+                human_decision=args.human_decision,
+                rejection_reason=args.rejection_reason,
+                implemented_action=args.implemented_action,
+                url=args.url,
+                implemented_at=_now() if args.human_decision == "approved" else "",
+            )
+            result = {
+                "status": "ok",
+                "summary": {"command": "outcomes", "action": "register",
+                            "outcome_id": oid, "keyword": keyword},
+                "findings": [], "safe_actions": [], "approval_required": [],
+            }
+            _emit(result, force_json=True)
+            return 0
+
+        # measure <id> — integra GSC + GA4 (A5) quando há URL implementada.
+        if not args.item_id:
+            print(json.dumps({"status": "error", "error": "informe o id: outcomes measure <id>"},
+                             ensure_ascii=False))
+            return 2
+        items = storage.list_opportunity_outcomes(limit=1000)
+        outcome = next((o for o in items if o["id"] == args.item_id), None)
+        if not outcome:
+            print(json.dumps({"status": "error", "error": "outcome não encontrado"},
+                             ensure_ascii=False))
+            return 2
+        verdict = args.verdict
+        results: dict[str, dict[str, Any]] = {}
+        url = outcome.get("url", "")
+        if verdict in ("improved", "neutral", "worsened") and url and config.google_credentials:
+            gsc = SearchConsoleClient(config)
+            end = date.today()
+            start = end - timedelta(days=config.search_analytics_days)
+            now_metrics = gsc.page_metrics(url, start_date=start.isoformat(),
+                                           end_date=end.isoformat()) or {}
+            results["28d"] = {"gsc": now_metrics,
+                              "ga4": storage.ga4_metrics_for_url(url) or None}
+        storage.set_outcome_verdict(
+            args.item_id, verdict=verdict or "insufficient_data",
+            result_28d=results.get("28d"),
+        )
+        result = {
+            "status": "ok",
+            "summary": {"command": "outcomes", "action": "measure",
+                        "outcome_id": args.item_id, "verdict": verdict
+                        or "insufficient_data"},
+            "findings": [], "safe_actions": [], "approval_required": [],
+            "measured": results,
+        }
+        _emit(result, force_json=True)
+        return 0
 
 
 # -- helpers ----------------------------------------------------------------

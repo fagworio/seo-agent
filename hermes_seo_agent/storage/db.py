@@ -248,7 +248,71 @@ CREATE TABLE IF NOT EXISTS ga4_page_metrics (
     UNIQUE(url, window_start, window_end, source_scope, channel)
 );
 CREATE INDEX IF NOT EXISTS idx_ga4_url ON ga4_page_metrics(url, window_start);
+CREATE TABLE IF NOT EXISTS corpus_documents (
+    url TEXT PRIMARY KEY,
+    title TEXT,
+    seo_title TEXT,
+    h1 TEXT,
+    body_text TEXT,
+    category TEXT,
+    tags_json TEXT,
+    published_at TEXT,
+    modified_at TEXT,
+    canonical TEXT,
+    is_noindex INTEGER NOT NULL DEFAULT 0,
+    status_code INTEGER,
+    content_hash TEXT,
+    built_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS corpus_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    heading TEXT,
+    heading_level INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    text TEXT,
+    hash TEXT,
+    UNIQUE(url, position)
+);
+CREATE INDEX IF NOT EXISTS idx_corpus_sections_url ON corpus_sections(url);
+CREATE TABLE IF NOT EXISTS corpus_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    entity TEXT NOT NULL,
+    entity_type TEXT NOT NULL,       -- person | work | franchise | game | platform | term
+    count INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(url, entity, entity_type)
+);
+CREATE INDEX IF NOT EXISTS idx_corpus_entities_entity ON corpus_entities(entity);
+CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(
+    url UNINDEXED,
+    title,
+    h1,
+    body,
+    tokenize='porter unicode61'
+);
 CREATE INDEX IF NOT EXISTS idx_editorial_events_backlog ON editorial_events(backlog_id, created_at);
+CREATE TABLE IF NOT EXISTS opportunity_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL,
+    opportunity_type TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    evidence_json TEXT,                -- evidência e scores no momento da sugestão
+    candidate_score REAL,
+    action_score REAL,
+    human_decision TEXT,               -- approved | rejected | snoozed | skipped
+    rejection_reason TEXT,
+    implemented_action TEXT,           -- o que foi feito (title/expand/refresh…)
+    url TEXT,
+    implemented_at TEXT,
+    result_28d_json TEXT,
+    result_56d_json TEXT,
+    result_90d_json TEXT,
+    verdict TEXT,                      -- improved | neutral | worsened | insufficient_data
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_outcomes_keyword ON opportunity_outcomes(keyword);
+CREATE INDEX IF NOT EXISTS idx_outcomes_verdict ON opportunity_outcomes(verdict);
 CREATE INDEX IF NOT EXISTS idx_findings_cycle ON findings(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON inspection_queue(status, priority);
@@ -266,6 +330,20 @@ class Storage:
 
     def _migrate(self) -> None:
         """Add columns to pre-existing databases (CREATE TABLE is a no-op there)."""
+        # FTS5 contentless (content='') não devolve os valores no SELECT —
+        # recria como FTS5 padrão para o corpus buscar por título/corpo.
+        try:
+            row = self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='corpus_fts'"
+            ).fetchone()
+            if row and "content='" in (row[0] or ""):
+                self.conn.execute("DROP TABLE corpus_fts")
+                self.conn.execute(
+                    "CREATE VIRTUAL TABLE corpus_fts USING fts5("
+                    "url UNINDEXED, title, h1, body, tokenize='porter unicode61')"
+                )
+        except Exception:
+            pass
         additions = {
             "editorial_backlog": [
                 ("responsible", "TEXT"), ("deadline", "TEXT"),
@@ -1068,6 +1146,250 @@ class Storage:
                 for r in runs
             ]
         return health
+
+    # -- corpus (M2: memória editorial) --------------------------------------
+
+    def save_corpus_document(self, *, url: str, title: str, h1: str, body_text: str,
+                             canonical: str = "", is_noindex: int = 0,
+                             status_code: int = 0, content_hash: str = "",
+                             built_at: str = "") -> None:
+        self.conn.execute(
+            "INSERT INTO corpus_documents (url, title, h1, body_text, canonical, "
+            "is_noindex, status_code, content_hash, built_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET title=excluded.title, h1=excluded.h1, "
+            "body_text=excluded.body_text, canonical=excluded.canonical, "
+            "is_noindex=excluded.is_noindex, status_code=excluded.status_code, "
+            "content_hash=excluded.content_hash, built_at=excluded.built_at",
+            (url, title, h1, body_text, canonical, is_noindex, status_code,
+             content_hash, built_at),
+        )
+        self.conn.commit()
+
+    def replace_corpus_sections(self, url: str, sections: list[dict[str, Any]]) -> None:
+        self.conn.execute("DELETE FROM corpus_sections WHERE url = ?", (url,))
+        for sec in sections:
+            self.conn.execute(
+                "INSERT INTO corpus_sections (url, heading, heading_level, position, "
+                "text, hash) VALUES (?, ?, ?, ?, ?, ?)",
+                (url, sec.get("heading", ""), sec.get("heading_level", 2),
+                 sec.get("position", 0), sec.get("text", ""), sec.get("hash", "")),
+            )
+        self.conn.commit()
+
+    def replace_corpus_entities(self, url: str, entities: list[dict[str, Any]]) -> None:
+        self.conn.execute("DELETE FROM corpus_entities WHERE url = ?", (url,))
+        for ent in entities:
+            self.conn.execute(
+                "INSERT INTO corpus_entities (url, entity, entity_type, count) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(url, entity, entity_type) DO UPDATE SET count=excluded.count",
+                (url, ent.get("entity", ""), ent.get("entity_type", "term"),
+                 ent.get("count", 1)),
+            )
+        self.conn.commit()
+
+    def index_corpus_document(self, url: str, title: str, h1: str, body: str) -> None:
+        # FTS5 contentless: DELETE + INSERT reindexa a doc.
+        self.conn.execute("DELETE FROM corpus_fts WHERE url = ?", (url,))
+        self.conn.execute(
+            "INSERT INTO corpus_fts (url, title, h1, body) VALUES (?, ?, ?, ?)",
+            (url, title, h1, body),
+        )
+        self.conn.commit()
+
+    def corpus_search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        """BM25 search sobre documentos (title+h1+body) — retorna doc + snippet."""
+        q = query.strip()
+        if not q:
+            return []
+        try:
+            rows = self.conn.execute(
+                "SELECT url, title, snippet(corpus_fts, 3, '[', ']', '…', 24) AS snip, "
+                "bm25(corpus_fts) AS score FROM corpus_fts WHERE corpus_fts MATCH ? "
+                "ORDER BY score LIMIT ?",
+                (q, limit),
+            ).fetchall()
+        except Exception:
+            return []
+        return [{"url": r[0], "title": r[1], "snippet": r[2] or "", "bm25": r[3]}
+                for r in rows]
+
+    def corpus_sections_for_url(self, url: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT heading, heading_level, position, text FROM corpus_sections "
+            "WHERE url = ? ORDER BY position",
+            (url,),
+        ).fetchall()
+        return [{"heading": r[0], "heading_level": r[1], "position": r[2],
+                 "text": r[3]} for r in rows]
+
+    def corpus_entities_for_url(self, url: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT entity, entity_type, count FROM corpus_entities "
+            "WHERE url = ? ORDER BY count DESC",
+            (url,),
+        ).fetchall()
+        return [{"entity": r[0], "entity_type": r[1], "count": r[2]} for r in rows]
+
+    def corpus_coverage(self, term: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Cobertura de um termo: documentos + seções + entidades que o contêm."""
+        term = term.strip()
+        if not term:
+            return []
+        docs = []
+        # busca textual (FTS) + entidade + heading
+        try:
+            for r in self.conn.execute(
+                "SELECT url, title FROM corpus_fts WHERE corpus_fts MATCH ? LIMIT ?",
+                (term, limit),
+            ).fetchall():
+                docs.append({"url": r[0], "title": r[1] or "",
+                             "via": "fts", "sections": []})
+        except Exception:
+            pass
+        seen = {d["url"] for d in docs}
+        for r in self.conn.execute(
+            "SELECT DISTINCT url FROM corpus_entities WHERE entity LIKE ? LIMIT ?",
+            (f"%{term}%", limit),
+        ).fetchall():
+            if r[0] not in seen:
+                docs.append({"url": r[0], "title": "", "via": "entity", "sections": []})
+                seen.add(r[0])
+        # seções específicas que cobrem o termo (matching por heading/texto) —
+        # uma seção que casa CRIA a entrada mesmo sem match FTS/entidade.
+        for r in self.conn.execute(
+            "SELECT s.url, s.heading, s.position FROM corpus_sections s "
+            "WHERE s.heading LIKE ? OR s.text LIKE ? LIMIT ?",
+            (f"%{term}%", f"%{term}%", limit),
+        ).fetchall():
+            entry = next((d for d in docs if d["url"] == r[0]), None)
+            if entry is None:
+                entry = {"url": r[0], "title": "", "via": "section",
+                         "sections": []}
+                docs.append(entry)
+            entry["sections"].append({"heading": r[1] or "", "position": r[2]})
+        return docs
+
+    def corpus_stats(self) -> dict[str, Any]:
+        docs = self.conn.execute("SELECT COUNT(*) FROM corpus_documents").fetchone()[0]
+        secs = self.conn.execute("SELECT COUNT(*) FROM corpus_sections").fetchone()[0]
+        ents = self.conn.execute("SELECT COUNT(*) FROM corpus_entities").fetchone()[0]
+        fts = 0
+        try:
+            fts = self.conn.execute("SELECT COUNT(*) FROM corpus_fts").fetchone()[0]
+        except Exception:
+            pass
+        return {"documents": docs, "sections": secs, "entities": ents, "fts_docs": fts}
+
+    # -- M8: opportunity outcomes e aprendizado ------------------------------
+
+    def save_opportunity_outcome(self, *, keyword: str, opportunity_type: str,
+                                 decision: str, evidence: dict[str, Any] | None = None,
+                                 candidate_score: float | None = None,
+                                 action_score: float | None = None,
+                                 human_decision: str = "",
+                                 rejection_reason: str = "",
+                                 implemented_action: str = "",
+                                 url: str = "",
+                                 implemented_at: str = "") -> int:
+        import json as _json
+        cur = self.conn.execute(
+            "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+            "evidence_json, candidate_score, action_score, human_decision, "
+            "rejection_reason, implemented_action, url, implemented_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (keyword, opportunity_type, decision,
+             _json.dumps(evidence, ensure_ascii=False, default=str) if evidence else None,
+             candidate_score, action_score, human_decision, rejection_reason,
+             implemented_action, url, implemented_at, _now()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def set_outcome_verdict(self, outcome_id: int, *, verdict: str,
+                            result_28d: dict[str, Any] | None = None,
+                            result_56d: dict[str, Any] | None = None,
+                            result_90d: dict[str, Any] | None = None) -> None:
+        import json as _json
+        self.conn.execute(
+            "UPDATE opportunity_outcomes SET verdict = ?, result_28d_json = ?, "
+            "result_56d_json = ?, result_90d_json = ? WHERE id = ?",
+            (verdict,
+             _json.dumps(result_28d, ensure_ascii=False, default=str) if result_28d else None,
+             _json.dumps(result_56d, ensure_ascii=False, default=str) if result_56d else None,
+             _json.dumps(result_90d, ensure_ascii=False, default=str) if result_90d else None,
+             outcome_id),
+        )
+        self.conn.commit()
+
+    def list_opportunity_outcomes(self, *, verdict: str | None = None,
+                                  limit: int = 200) -> list[dict[str, Any]]:
+        sql = ("SELECT id, keyword, opportunity_type, decision, evidence_json, "
+               "candidate_score, action_score, human_decision, rejection_reason, "
+               "implemented_action, url, implemented_at, verdict, created_at "
+               "FROM opportunity_outcomes")
+        params: list[Any] = []
+        if verdict:
+            sql += " WHERE verdict = ?"
+            params.append(verdict)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        import json as _json
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            {
+                "id": r[0], "keyword": r[1], "opportunity_type": r[2],
+                "decision": r[3],
+                "evidence": _json.loads(r[4]) if r[4] else None,
+                "candidate_score": r[5], "action_score": r[6],
+                "human_decision": r[7] or "", "rejection_reason": r[8] or "",
+                "implemented_action": r[9] or "", "url": r[10] or "",
+                "implemented_at": r[11] or "", "verdict": r[12] or "",
+                "created_at": r[13] or "",
+            }
+            for r in rows
+        ]
+
+    def recalibration_stats(self) -> dict[str, Any]:
+        """Regras simples de recalibração a partir de outcomes medidos (M8).
+
+        Para cada opportunity_type com >= 3 outcomes com verdict, calcula a
+        taxa de 'improved' — a ideia: tipos que nunca melhoram podem ter o
+        peso/prioridade reduzidos de forma EXPLICÁVEL. Sem modelo estatístico
+        ainda (só após volume suficiente).
+        """
+        rows = self.conn.execute(
+            "SELECT opportunity_type, verdict, COUNT(*) FROM opportunity_outcomes "
+            "WHERE verdict IS NOT NULL AND verdict != '' "
+            "GROUP BY opportunity_type, verdict"
+        ).fetchall()
+        by_type: dict[str, dict[str, int]] = {}
+        for otype, verdict, count in rows:
+            by_type.setdefault(otype, {})[verdict] = count
+        per_type: list[dict[str, Any]] = []
+        for otype, counts in sorted(by_type.items()):
+            total = sum(counts.values())
+            improved = counts.get("improved", 0)
+            worsened = counts.get("worsened", 0)
+            rate = improved / total if total else 0.0
+            per_type.append({
+                "opportunity_type": otype,
+                "measured": total,
+                "improved": improved,
+                "worsened": worsened,
+                "improved_rate": round(rate, 2),
+                "suggested_weight_adjustment": (
+                    -0.1 if (total >= 3 and rate < 0.3)
+                    else (0.0 if total < 3 else 0.05)
+                ),
+                "note": ("poucos casos (>= 3 p/ recalibrar)" if total < 3
+                         else "sem modelo estatístico ainda — regras simples"),
+            })
+        return {"by_type": per_type,
+                "total_measured": sum(sum(c.values()) for c in by_type.values()),
+                "rule": "tipos com >=3 outcomes e <30% improved perdem 0.1 de peso; "
+                        ">=3 e >=50% ganham 0.05"}
 
     def queries_for_url(self, url: str, *, limit: int = 15,
                         window_start: str | None = None) -> list[dict[str, Any]]:
