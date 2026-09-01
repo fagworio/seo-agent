@@ -8,15 +8,17 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# State / reports / produção
-state/
+# State / reports / produção (ANCORADOS na raiz: /state/ não casa com
+# hermes_seo_agent/... — um padrão sem barra inicial ignoraria diretórios
+# homônimos em qualquer nível, como aconteceu com hermes_seo_agent/report/)
+/state/
 *.db
-reports/
-seo-fixes-titles*.json
-title-opportunities-fixes.json
+/reports/
+/seo-fixes-titles*.json
+/title-opportunities-fixes.json
 
-# Resíduo duplicado na raiz (cópia de hermes_seo_agent/report)
-report/
+# Resíduo duplicado na raiz (cópia de hermes_seo_agent/report) — âncora na raiz
+/report/
 
 # Hermes
 .hermes/
