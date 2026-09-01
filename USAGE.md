@@ -291,11 +291,113 @@ crontab crontab.example
 O `schedule` decide a fase por horário:
 - **sempre**: audit + report (limit `MAX_URLS_PER_RUN`);
 - **diário às 06:00** (`--inspect-hours 6`): inspeção GSC;
-- **semanal (segunda)** (`--deep-weekday 1`): opportunities + deep report.
+- **semanal (segunda)** (`--deep-weekday 1`): opportunities + deep report + coleta GA4.
 
 ---
 
-## 8. Onde está o estado
+## 8. Opportunity Agent (M0–M8)
+
+Camada consultiva: sugere, prioriza, mede e aprende — **nunca publica conteúdo
+nem altera links automaticamente**. Todas as decisões ficam para revisão humana.
+
+### Saúde das fontes (M0)
+
+```bash
+hermes-seo-agent integration-status            # estado persistido (sem rede)
+hermes-seo-agent integration-status --live     # checagens ao vivo (uma chamada por fonte)
+```
+
+Cada fonte reporta `data_status` canônico: `available | partial | missing |
+invalid`. Uma fonte ausente NUNCA vira métrica zero.
+
+### Memória editorial — corpus (M2)
+
+```bash
+hermes-seo-agent corpus rebuild --limit N      # crawl incremental com checkpoint
+hermes-seo-agent corpus search "termo"
+hermes-seo-agent corpus coverage "tema"        # quais SEÇÕES cobrem o tema
+hermes-seo-agent corpus stats                  # coverage %, falhas, staleness
+```
+
+O rebuild é idempotente por `content_hash`: re-executar só reindexa o que
+mudou. `stats` mostra `coverage_pct`, `sitemap_without_corpus`,
+`staleness` e o último run (`processed/changed/failed`). **Antes de propor
+"new content", consulte `corpus coverage`** — "não encontrei conteúdo" só
+vale para o que foi indexado.
+
+### Tópicos e clusters (M3)
+
+```bash
+hermes-seo-agent topics graph                  # clusters por entidade
+hermes-seo-agent topics coverage "nintendo"    # posts, indexáveis, links, Top3/10, GA4
+```
+
+### Inteligência externa — Google Trends (M4)
+
+```bash
+hermes-seo-agent market status                 # provider, custo, quota
+hermes-seo-agent market candidate "one piece"  # candidato (checa o corpus; nunca pauta)
+```
+
+A Google Trends API está em **alpha com allowlist por conta**. Para liberar:
+
+1. Acesse <https://developers.google.com/search/apis/trends?hl=pt-br>;
+2. Preencha o **formulário de inscrição como testador alfa** (seção "Ter
+   acesso antecipado à versão Alfa");
+3. Quando a conta for aprovada, a chave `GOOGLE_API_KEY` (ou `TRENDS_API_KEY`)
+   do `.env` passa a funcionar — **não é preciso gerar chave nova**;
+4. Confirme com `integration-status --live` (a fonte `external` sai de
+   `invalid` para `available`).
+
+Enquanto não autorizado, o `market candidate` degrada com `external_note` e o
+candidato é gerado só pela checagem interna (seguro).
+
+### Rankability (M5)
+
+```bash
+hermes-seo-agent rankability "nintendo" [--external-difficulty 0.5]
+```
+
+Score calibrável (não "probabilidade"), cada fator com explicação.
+
+### Decision engine (M6)
+
+```bash
+hermes-seo-agent decide "jujutsu kaisen" [--impressions 500] [--trend growing]
+```
+
+Árvore: demanda → relevância → cobertura → `new_content` / `expand_existing` /
+`refresh` / `internal_link` / `cannibalization_review` / `monitor` / `discard`.
+`CandidateScore` (5 fatores) e `ActionScore` (impacto×confiança×facilidade)
+são **separados**.
+
+### Brief de pesquisa (M7)
+
+```bash
+hermes-seo-agent brief "jujutsu kaisen"
+```
+
+URL recomendada (ou justificativa p/ novo), diferenciação, subtópicos, risco
+de duplicação, links internos, critérios de aceite. Revisão humana obrigatória.
+
+### Medição e aprendizado (M8)
+
+```bash
+hermes-seo-agent outcomes register "gojo idade" --human-decision approved \
+    --implemented-action expand --url https://...   # baseline automático + scores
+hermes-seo-agent outcomes list
+hermes-seo-agent outcomes measure --id 1 --days 28   # exige janela completa
+hermes-seo-agent outcomes recalibrate                # só SUGERE ajustes
+```
+
+`register` liga a decisão M6 ao outcome (grava evidência + CandidateScore +
+ActionScore) e captura baseline GSC+GA4. `measure` bloqueia antes da janela
+mínima e deriva o verdict de GSC+GA4. Os pesos permanecem fixos até haver
+volume suficiente de outcomes medidos.
+
+---
+
+## 10. Onde está o estado
 
 | O quê | Onde |
 |---|---|
@@ -305,7 +407,7 @@ O `schedule` decide a fase por horário:
 
 ---
 
-## 9. Troubleshooting rápido
+## 11. Troubleshooting rápido
 
 | Sintoma | Solução |
 |---|---|
@@ -314,12 +416,14 @@ O `schedule` decide a fase por horário:
 | `inspect` avisa "GSC não configurado" | siga [`SETUP.md`](SETUP.md) seções 3–7 |
 | `apply` retorna `skipped: no supported fix spec` | o JSON precisa de `fix.type` ∈ {`wp_media_alt`, `wp_post_meta`} |
 | `apply` retorna `skipped: already executed` | ação já feita (idempotente) — é o comportamento correto |
+| `market candidate` mostra `Trends indisponível: HTTP 403 GetGraph blocked` | a chave não está na allowlist do alpha — inscreva-se como testador alfa (ver seção 8, M4) |
+| `corpus stats` mostra `coverage_pct` baixo | rode `corpus rebuild --limit N` (ou sem limit p/ o sitemap todo); o rebuild é incremental por hash |
 | WordPress local fora do ar | `cd devilbox && docker-compose up -d php httpd mysql` |
 | Estático local fora do ar | `cd unicorniohater-static && python3 -m http.server 8081 --directory _site` |
 
 ---
 
-## 10. Documentos relacionados
+## 12. Documentos relacionados
 
 - [`SETUP.md`](SETUP.md) — credenciais Google passo a passo
 - [`DESIGN.md`](DESIGN.md) — arquitetura, modelo de dados, roadmap
