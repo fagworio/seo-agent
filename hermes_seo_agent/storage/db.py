@@ -1375,17 +1375,31 @@ class Storage:
 
     def corpus_coverage_report(self, sitemap_urls: list[str] | None = None
                                ) -> dict[str, Any]:
-        """Cobertura do corpus vs sitemap publicado (endurecimento M2)."""
+        """Cobertura do corpus vs sitemap publicado (endurecimento M2).
+
+        docs_indexados: URLs no corpus_documents;
+        no_sitemap: URLs no corpus mas fora do sitemap atual (removidas?);
+        sitemap_sem_corpus: URLs do sitemap ainda não indexadas;
+        staleness: docs cujo content_hash local DIVERGE do inventory (conteúdo
+            mudou e o corpus está desatualizado) — só quando o inventory tem a URL;
+        unverifiable: docs no corpus SEM registro no inventory (não dá para
+            julgar staleness; indica inventory desatualizado, não conteúdo velho).
+        """
         indexed = self.conn.execute(
             "SELECT COUNT(*) FROM corpus_documents").fetchone()[0]
         staleness = self.conn.execute(
-            "SELECT COUNT(*) FROM corpus_documents d WHERE NOT EXISTS ("
+            "SELECT COUNT(*) FROM corpus_documents d WHERE EXISTS ("
             "SELECT 1 FROM editorial_inventory i WHERE i.url = d.url "
-            "AND i.content_hash = d.content_hash)"
+            "AND i.content_hash != d.content_hash)"
+        ).fetchone()[0]
+        unverifiable = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents d WHERE NOT EXISTS ("
+            "SELECT 1 FROM editorial_inventory i WHERE i.url = d.url)"
         ).fetchone()[0]
         report: dict[str, Any] = {
             "indexed_docs": indexed,
             "staleness": staleness,
+            "unverifiable_docs": unverifiable,
             "sitemap_total": len(sitemap_urls or []),
         }
         if sitemap_urls:

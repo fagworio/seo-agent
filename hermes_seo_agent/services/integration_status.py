@@ -51,6 +51,7 @@ class IntegrationStatusService:
         out = [
             self._wordpress(),
             self._sitemap(),
+            self._corpus(),
             self._gsc(),
             self._ga4(),
             self._crux(),
@@ -59,6 +60,41 @@ class IntegrationStatusService:
         if live:
             self._live(out)
         return out
+
+    # -- corpus (M2: memória editorial — "não encontrei conteúdo" confiável?) --
+
+    def _corpus(self) -> SourceStatus:
+        stats = self.storage.corpus_stats()
+        report = self.storage.corpus_coverage_report()
+        runs = self.storage.corpus_run_summary()
+        last_run = runs["runs"][0] if runs["runs"] else None
+        docs = stats["documents"]
+        sitemap_ref = report.get("sitemap_total") or (
+            (last_run or {}).get("total_urls") or 0)
+        status = "missing"
+        if docs:
+            status = "available"
+            if report.get("staleness", 0) > 0 or \
+                    (last_run and last_run.get("failed", 0) > 0):
+                status = "partial"
+        return SourceStatus(
+            "corpus", True, status,
+            detail=f"{docs} docs / {stats['sections']} seções indexadas",
+            last_window=(last_run or {}).get("started_at", ""),
+            rows=docs,
+            limitations="cobertura real vs sitemap só após corpus rebuild",
+            extras={
+                "documents": docs, "sections": stats["sections"],
+                "entities": stats["entities"],
+                "staleness": report.get("staleness", 0),
+                "unverifiable_docs": report.get("unverifiable_docs", 0),
+                "sitemap_total_ref": sitemap_ref,
+                "coverage_pct_ref": round((docs / sitemap_ref) * 100, 1)
+                if sitemap_ref else None,
+                "last_run_status": (last_run or {}).get("status"),
+                "last_run_failed": (last_run or {}).get("failed", 0),
+            },
+        )
 
     # -- fontes (configuração + última coleta persistida) -------------------
 

@@ -78,10 +78,13 @@ def test_integration_status_all_sources_present(tmp_path):
         )
         service = IntegrationStatusService(config, storage)
         statuses = {s.source: s for s in service.check()}
-        assert set(statuses) == {"wordpress", "sitemap", "gsc", "ga4", "crux", "external"}
+        assert set(statuses) == {"wordpress", "sitemap", "corpus", "gsc",
+                                 "ga4", "crux", "external"}
         assert statuses["ga4"].data_status == "available"
         assert statuses["gsc"].data_status == "missing"     # sem query_pages
         assert statuses["crux"].configured is True
+        # corpus: sem docs indexados -> missing; com docs -> available/partial
+        assert statuses["corpus"].data_status == "missing"
         # M4: default scrape (frontend público) -> external configurada
         assert statuses["external"].configured is True
         assert statuses["external"].extras["provider"] == "trends_scrape"
@@ -96,6 +99,36 @@ def test_integration_status_unconfigured_sources(tmp_path):
         assert statuses["ga4"].data_status == "missing"
         assert statuses["gsc"].data_status == "missing"
         assert statuses["ga4"].detail == "GA4_PROPERTY_ID vazio"
+
+
+def test_integration_status_corpus_source(tmp_path):
+    """M2/M0: o integration-status expõe a saúde do corpus (docs, staleness,
+    último run) — o operador vê se 'não encontrei conteúdo' é confiável."""
+    from hermes_seo_agent.connectors.static_site import PageSnapshot
+    from hermes_seo_agent.corpus.builder import build_corpus
+    db = tmp_path / "int-corpus.db"
+    with Storage(str(db)) as storage:
+        page = PageSnapshot("https://x.com/a/", 200)
+        page.title = "A"
+        page.h1 = ["A"]
+        page.body_text = "conteúdo A"
+        page.html = "<h1>A</h1><p>conteúdo A</p>"
+        page.meta_robots = ""
+        page.canonical = "https://x.com/a/"
+        build_corpus(storage, [page], built_at="2026-01-01T00:00:00+00:00")
+        rid = storage.start_corpus_run(total_urls=1)
+        storage.finish_corpus_run(rid, status="ok")
+        config = _config(db)
+        service = IntegrationStatusService(config, storage)
+        statuses = {s.source: s for s in service.check()}
+        corpus = statuses["corpus"]
+        assert corpus.data_status == "available"
+        assert corpus.extras["documents"] == 1
+        assert corpus.extras["last_run_status"] == "ok"
+        assert corpus.extras["coverage_pct_ref"] == 100.0
+        # docs sem registro no inventory NÃO são 'staleness' (são não-verificáveis)
+        assert corpus.extras["staleness"] == 0
+        assert corpus.extras.get("unverifiable_docs", 0) == 1
 
 
 def test_config_limits_defaults_and_env(monkeypatch):

@@ -48,8 +48,9 @@ def test_coverage_report_matches_sitemap(tmp_path):
         assert report["sitemap_without_corpus"] == 1     # b ainda não indexado
         assert report["corpus_outside_sitemap"] == 0
         assert report["coverage_pct"] == 50.0
-        # staleness: sem inventory correspondente -> doc conta como stale
-        assert report["staleness"] == 1
+        # sem registro no inventory -> NÃO é stale; é não-verificável
+        assert report["staleness"] == 0
+        assert report["unverifiable_docs"] == 1
 
 
 def test_staleness_detects_changed_content(tmp_path):
@@ -57,16 +58,15 @@ def test_staleness_detects_changed_content(tmp_path):
     with Storage(str(db)) as storage:
         build_corpus(storage, [_page(body="versão 1")], built_at="2026-01-01T00:00:00+00:00")
         # inventory com o MESMO hash -> não stale
-        storage.save_corpus_document(
-            url="https://x.com/a/", title="Artigo A", h1="Artigo A",
-            body_text="versão 1", content_hash="same", built_at="2026-01-01T00:00:00+00:00")
-        # inventory com hash DIFERENTE -> corpus fica stale
-        storage.save_corpus_document(
-            url="https://x.com/a/", title="Artigo A", h1="Artigo A",
-            body_text="versão 2 ATUALIZADA", content_hash="new-hash",
-            built_at="2026-01-02T00:00:00+00:00")
+        storage.save_editorial_inventory(
+            [_page(body="versão 1")], crawled_at="2026-01-01T00:00:00+00:00")
+        assert storage.corpus_coverage_report()["staleness"] == 0
+        # inventory com hash DIFERENTE -> corpus fica stale (conteúdo mudou)
+        storage.save_editorial_inventory(
+            [_page(body="versão 2 ATUALIZADA")], crawled_at="2026-01-02T00:00:00+00:00")
         report = storage.corpus_coverage_report()
         assert report["staleness"] == 1
+        assert report["unverifiable_docs"] == 0
 
 
 def test_rebuild_cli_records_run_and_failures(monkeypatch, capsys, tmp_path):
