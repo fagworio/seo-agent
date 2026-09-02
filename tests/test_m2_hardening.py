@@ -50,19 +50,19 @@ def test_corpus_queue_cursor_and_resume(tmp_path):
         storage.corpus_enqueue_urls(rid, urls)
         # processa 2 lotes (4 URLs) e 'cai'
         for _ in range(4):
-            pending = storage.corpus_claim_pending(rid, limit=1)
-            storage.corpus_mark_done(rid, pending[0])
+            pending = storage.corpus_claim_pending(rid, limit=1, worker_id="w")
+            storage.corpus_mark_done(rid, pending[0], "w")
         assert storage.corpus_queue_counts(rid) == {"pending": 2, "done": 4,
                                                     "failed": 0,
                                                     "in_progress": 0}
         # retomada: claim pega só os pending restantes (cursor real)
-        remaining = storage.corpus_claim_pending(rid, limit=10)
+        remaining = storage.corpus_claim_pending(rid, limit=10, worker_id="w2")
         assert remaining == ["https://x.com/p4/", "https://x.com/p5/"]
         # o claim marca in_progress (lease); enfileirar de novo é idempotente
         storage.corpus_enqueue_urls(rid, urls)
         assert storage.corpus_queue_counts(rid)["in_progress"] == 2
-        # falha por URL fica registrada na fila
-        storage.corpus_mark_failed(rid, "https://x.com/p4/", "boom")
+        # falha por URL fica registrada na fila (worker_id obrigatório)
+        storage.corpus_mark_failed(rid, "https://x.com/p4/", "boom", "w2")
         assert storage.corpus_queue_counts(rid)["failed"] == 1
 
 
@@ -185,6 +185,63 @@ def test_mark_requires_lease_owner(tmp_path):
                                           "worker-C") is False
         assert storage.corpus_mark_failed(rid, "https://x.com/b/", "boom",
                                           "worker-D") is True
+
+
+def test_fencing_token_blocks_stale_write(tmp_path):
+    """FENCING TOKEN: A perde o lease durante um fetch lento (B recupera),
+    mas o token de A (lease_version antiga) impede A de GRAVAR no corpus —
+    a corrida 'A termina o fetch e grava após perder a posse' é fechada."""
+    import datetime as _dt
+    db = tmp_path / "fence.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claims_a = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")
+        token_a = claims_a[0]["lease_version"]
+        # A inicia fetch lento; TTL expira; B recupera e re-claima
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        storage.corpus_recover_expired_leases(rid, ttl_seconds=3600)
+        claims_b = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-B")
+        token_b = claims_b[0]["lease_version"]
+        assert token_b > token_a  # B recebeu um token NOVO (fencing)
+        # A termina o fetch e tenta validar posse com o token antigo -> False
+        assert storage.corpus_owns_lease(rid, "https://x.com/a/",
+                                         "worker-A", token_a) is False
+        # B (dono atual com token novo) tem posse
+        assert storage.corpus_owns_lease(rid, "https://x.com/a/",
+                                         "worker-B", token_b) is True
+        # A não consegue marcar done nem com worker_id (token defasado falha;
+        # e mesmo sem token, o worker_id não é mais o dono)
+        assert storage.corpus_mark_done(rid, "https://x.com/a/",
+                                        "worker-A", lease_version=token_a) is False
+        assert storage.corpus_mark_done(rid, "https://x.com/a/",
+                                        "worker-A") is False
+        # B conclui com o token correto
+        assert storage.corpus_mark_done(rid, "https://x.com/a/",
+                                        "worker-B", lease_version=token_b) is True
+
+
+def test_mark_requires_worker_id(tmp_path):
+    """worker_id é OBRIGATÓRIO: chamar mark_done/mark_failed sem dono não
+    registra nada (brecha de API fechada)."""
+    db = tmp_path / "noworker.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        storage.corpus_claim_pending(rid, limit=1, worker_id="w")
+        assert storage.corpus_mark_done(rid, "https://x.com/a/", "") is False
+        assert storage.corpus_mark_failed(rid, "https://x.com/a/", "e", "") is False
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 1
 
 
 def test_global_coverage_independent_of_batch(tmp_path):
@@ -362,8 +419,10 @@ def test_rebuild_resumes_queue_not_restarts(monkeypatch, capsys, tmp_path):
         rid = storage.start_corpus_run(total_urls=3, sitemap_total=3,
                                        sitemap_signature=signature)
         storage.corpus_enqueue_urls(rid, sitemap)
-        for u in ("https://x.com/a/", "https://x.com/b/"):
-            storage.corpus_mark_done(rid, u)
+        # simula o worker 'setup' tendo processado a e b (claim + done válidos)
+        storage.corpus_claim_pending(rid, limit=2, worker_id="setup")
+        storage.corpus_mark_done(rid, "https://x.com/a/", "setup")
+        storage.corpus_mark_done(rid, "https://x.com/b/", "setup")
         storage.update_corpus_run(rid, processed=2, changed=2, failed=0)
         # run permanece 'running' (queda simulada)
 

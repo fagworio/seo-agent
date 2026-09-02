@@ -337,6 +337,7 @@ CREATE TABLE IF NOT EXISTS corpus_queue (
     status TEXT NOT NULL DEFAULT 'pending',     -- pending | in_progress | done | failed
     worker_id TEXT,                             -- dono do lease (processo)
     leased_at TEXT,                             -- quando o lease foi tomado
+    lease_version INTEGER NOT NULL DEFAULT 0,   -- fencing token (incrementa a cada claim/recuperação)
     error TEXT,
     created_at TEXT NOT NULL,
     UNIQUE(run_id, url)
@@ -412,6 +413,7 @@ class Storage:
             "corpus_queue": [
                 ("worker_id", "TEXT"),
                 ("leased_at", "TEXT"),
+                ("lease_version", "INTEGER NOT NULL DEFAULT 0"),
             ],
         }
         editorial_extra = [
@@ -1390,21 +1392,19 @@ class Storage:
     def corpus_claim_pending(self, run_id: int, *, limit: int = 50,
                              worker_id: str = "") -> list[str]:
         """Claim ATOMÁTICO: marca o lote como in_progress no mesmo UPDATE
-        (RETURNING), registrando o worker (dono) e o timestamp do lease.
+        (RETURNING), registrando o worker (dono), o timestamp e o FENCING
+        TOKEN (lease_version) do lease.
 
-        Dois rebuilds simultâneos NUNCA buscam o mesmo lote — cada claim pega
-        um conjunto disjunto de pending e cada lote fica preso ao seu worker
-        até ser concluído (done/failed) ou o lease expirar.
-
-        O TTL é aplicado APENAS na recuperação (corpus_recover_expired_leases);
-        aqui não há lease_seconds — a API não sugere expiração que ela não
-        aplica.
+        O TTL é aplicado APENAS na recuperação (corpus_recover_expired_leases).
+        Cada claim/recuperação incrementa lease_version — a versão é a prova de
+        posse: um worker antigo com versão defasada não pode gravar nem
+        concluir a URL.
         """
         import datetime as _dt
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         rows = self.conn.execute(
             "UPDATE corpus_queue SET status = 'in_progress', worker_id = ?, "
-            "leased_at = ? "
+            "leased_at = ?, lease_version = lease_version + 1 "
             "WHERE id IN (SELECT id FROM corpus_queue WHERE run_id = ? "
             "AND status = 'pending' ORDER BY id LIMIT ?) "
             "RETURNING url",
@@ -1412,6 +1412,37 @@ class Storage:
         ).fetchall()
         self.conn.commit()
         return [r[0] for r in rows]
+
+    def corpus_claim_pending_with_token(self, run_id: int, *, limit: int = 50,
+                                        worker_id: str = ""
+                                        ) -> list[dict[str, Any]]:
+        """Como corpus_claim_pending, mas retorna {url, lease_version} — o
+        fencing token que o worker deve guardar e apresentar em owns_lease /
+        mark_done / mark_failed."""
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        rows = self.conn.execute(
+            "UPDATE corpus_queue SET status = 'in_progress', worker_id = ?, "
+            "leased_at = ?, lease_version = lease_version + 1 "
+            "WHERE id IN (SELECT id FROM corpus_queue WHERE run_id = ? "
+            "AND status = 'pending' ORDER BY id LIMIT ?) "
+            "RETURNING url, lease_version",
+            (worker_id, now, run_id, limit),
+        ).fetchall()
+        self.conn.commit()
+        return [{"url": r[0], "lease_version": r[1]} for r in rows]
+
+    def corpus_owns_lease(self, run_id: int, url: str, worker_id: str,
+                          lease_version: int) -> bool:
+        """Fencing check: o worker AINDA é o dono desta URL com a versão de
+        lease que lhe foi concedida? False = o lease foi recuperado por outro
+        (versão incrementada) e este worker não deve gravar nem concluir."""
+        row = self.conn.execute(
+            "SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
+            "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'",
+            (run_id, url, worker_id, lease_version),
+        ).fetchone()
+        return row is not None
 
     def corpus_renew_lease(self, run_id: int, urls: list[str],
                            worker_id: str) -> int:
@@ -1439,14 +1470,15 @@ class Storage:
 
         NÃO toca leases vivos de outro processo — a exclusão mútua entre
         workers concorrentes é preservada. Um lease expirado (processo morto)
-        volta a pending para ser retomado.
+        volta a pending para ser retomado; lease_version é incrementado, o que
+        INVALIDA o fencing token do worker antigo (ele não poderá mais gravar).
         """
         import datetime as _dt
         cutoff = (_dt.datetime.now(_dt.timezone.utc)
                   - _dt.timedelta(seconds=ttl_seconds)).isoformat()
         sql = ("UPDATE corpus_queue SET status = 'pending', worker_id = NULL, "
-               "leased_at = NULL WHERE run_id = ? AND status = 'in_progress' "
-               "AND leased_at < ?")
+               "leased_at = NULL, lease_version = lease_version + 1 "
+               "WHERE run_id = ? AND status = 'in_progress' AND leased_at < ?")
         params: list[Any] = [run_id, cutoff]
         if exclude_worker:
             sql += " AND COALESCE(worker_id, '') != ?"
@@ -1455,34 +1487,40 @@ class Storage:
         self.conn.commit()
         return cur.rowcount
 
-    def corpus_mark_done(self, run_id: int, url: str,
-                         worker_id: str = "") -> bool:
+    def corpus_mark_done(self, run_id: int, url: str, worker_id: str,
+                         lease_version: int | None = None) -> bool:
         """Marca done SOMENTE se o worker ainda é o dono do lease.
 
-        Retorna False se o lease foi perdido (outro worker o recuperou como
-        expirado) — nesse caso o resultado NÃO deve ser registrado como deste
-        worker (a URL será processada pelo novo dono).
-        """
-        sql = "UPDATE corpus_queue SET status = 'done', worker_id = NULL, " \
-              "leased_at = NULL WHERE run_id = ? AND url = ?"
-        params: list[Any] = [run_id, url]
-        if worker_id:
-            sql += " AND worker_id = ?"
-            params.append(worker_id)
+        worker_id é OBRIGATÓRIO (a chamada sem dono não registra). Se
+        lease_version é dado (fencing), também exige que a versão concedida
+        seja a atual — um worker cujo lease foi recuperado por outro NÃO
+        registra o resultado; a URL será concluída pelo novo dono."""
+        if not worker_id:
+            return False
+        sql = ("UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+               "leased_at = NULL WHERE run_id = ? AND url = ? AND worker_id = ?")
+        params: list[Any] = [run_id, url, worker_id]
+        if lease_version is not None:
+            sql += " AND lease_version = ?"
+            params.append(lease_version)
         cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur.rowcount > 0
 
     def corpus_mark_failed(self, run_id: int, url: str, error: str,
-                           worker_id: str = "") -> bool:
+                           worker_id: str,
+                           lease_version: int | None = None) -> bool:
         """Marca failed SOMENTE se o worker ainda é o dono do lease (mesma
-        semântica de corpus_mark_done)."""
+        semântica de corpus_mark_done; worker_id obrigatório)."""
+        if not worker_id:
+            return False
         sql = ("UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
-               "leased_at = NULL, error = ? WHERE run_id = ? AND url = ?")
-        params: list[Any] = [error, run_id, url]
-        if worker_id:
-            sql += " AND worker_id = ?"
-            params.append(worker_id)
+               "leased_at = NULL, error = ? WHERE run_id = ? AND url = ? "
+               "AND worker_id = ?")
+        params: list[Any] = [error, run_id, url, worker_id]
+        if lease_version is not None:
+            sql += " AND lease_version = ?"
+            params.append(lease_version)
         cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur.rowcount > 0
