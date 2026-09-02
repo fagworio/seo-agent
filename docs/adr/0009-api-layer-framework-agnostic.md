@@ -25,10 +25,14 @@ aplicação FastAPI aqui.
   mecânica porque a lógica de negócio/segurança vive nos services.
 
 ## Consequências
-- Não há aplicação HTTP executável no repositório enquanto o ambiente não tiver
-  FastAPI; a validação é por teste de unidade das service/camadas puras.
-- O segurança não é "artesanal": segue OWASP (sessão server-side, Argon2id
-  desejado/scrypt aceito, MFA RFC 6238, CSRF, rate limiting, RBAC deny-by-default).
-- Reavaliar este ADR quando `fastapi` estiver instalável; então materializar
-  `hermes_seo_agent/api/` (main.py, routers, dependencies, schemas Pydantic,
-  OpenAPI → TypeScript).
+- **A API `/api/v1` está materializada** em `hermes_seo_agent/api/`: `Router` puro
+  (roteamento, sessão por cookie, CSRF synchronizer token, RBAC deny-by-default,
+  rate limiting) sobre `AuthService`/`ControlPlaneService`/`AgentRunService`, mais um
+  transporte HTTP stdlib (`ThreadingHTTPServer` com uma Storage/Router por request —
+  a conexão SQLite é usada no próprio thread). Há um subcomando `hermes-seo-agent serve`.
+- A validação é por teste de unidade do Router + um smoke end-to-end por HTTP real
+  (login MFA → cookie → me → today → logout com CSRF → 401).
+- O segurança não é "artesanal": segue OWASP (sessão server-side, MFA RFC 6238,
+  CSRF, rate limiting, RBAC deny-by-default), mesmo com transporte stdlib.
+- Reavaliar este ADR quando `fastapi` estiver instalável: ligar `Router.handle` como
+  roteadores finos do FastAPI (mesma semântica), trocando apenas o transporte.

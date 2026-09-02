@@ -130,6 +130,9 @@ class AgentRunService:
     def running_runs(self) -> list[dict[str, Any]]:
         return self.store.list_runs(limit=50)
 
+    def list_agents(self) -> list[dict[str, Any]]:
+        return self.store.list_agents()
+
     def _compare_prior(self, run_id: int, run: dict[str, Any], *, urls: int | None,
                        findings: int | None, opportunities: int | None,
                        safe_fixes: int | None, executed: int | None) -> dict[str, Any] | None:

@@ -113,6 +113,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
         ("today", "Control plane: read model da tela Hoje (atenção, runs, integrações)"),
+        ("serve", "Control plane: servir /api/v1 via HTTP (stdlib; trocável por FastAPI)"),
         ("user", "Control plane: manage users, roles and bootstrap admin"),
     ):
         p = sub.add_parser(name, help=help_text)
@@ -387,6 +388,10 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_outcomes)
         elif name == "today":
             p.set_defaults(func=_cmd_today)
+        elif name == "serve":
+            p.add_argument("--host", default="127.0.0.1", help="host de bind")
+            p.add_argument("--port", type=int, default=8000, help="porta HTTP")
+            p.set_defaults(func=_cmd_serve)
         elif name == "user":
             subp = p.add_subparsers(dest="user_action", required=True)
             ca = subp.add_parser("create-admin", help="bootstrap first admin (MFA obrigatória)")
@@ -3840,6 +3845,29 @@ def _cmd_today(args: argparse.Namespace, config: Any) -> int:
         "today": today,
     }
     _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace, config: Any) -> int:
+    """Control plane: serva /api/v1/* sobre HTTP (stdlib).
+
+    Usa uma Storage/Router por request (conexão SQLite no próprio thread do
+    ThreadingHTTPServer). Quando o ambiente tiver FastAPI (ADR-0009), este
+    comando é substituído por uvicorn + o mesmo Router.
+    """
+    from .api import make_router_factory
+    from .api.server import make_server
+
+    factory = make_router_factory(config.sqlite_path, config)
+    server = make_server(factory, host=args.host, port=args.port)
+    print(json.dumps({"status": "running", "host": args.host, "port": args.port},
+                     ensure_ascii=False))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
     return 0
 
 
