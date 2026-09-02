@@ -499,6 +499,55 @@ def test_commit_page_revalidates_ttl_right_before_done(tmp_path):
         assert storage.corpus_queue_counts(rid)["done"] == 1
 
 
+def test_commit_page_ttl_gate_accepts_fresh_lease(tmp_path):
+    """O gate FINAL de TTL não dá falso-negativo: com lease fresca (não
+    expirada), corpus_commit_page(..., lease_seconds=...) conclui 'written'
+    e 'unchanged' — o predicado leased_at >= cutoff recalculado no final
+    passa (rowcount==1) nos dois caminhos."""
+    import datetime as _dt
+    import hashlib
+    from hermes_seo_agent.connectors.static_site import PageSnapshot
+    db = tmp_path / "ttl_ok.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=2, sitemap_total=2,
+                                       sitemap_signature="s")
+        urls = ["https://x.com/a/", "https://x.com/b/"]
+        storage.corpus_enqueue_urls(rid, urls)
+        token_a = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]["lease_version"]
+        token_b = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]["lease_version"]
+
+        page = PageSnapshot("https://x.com/a/", 200)
+        page.title = "A"; page.h1 = ["A"]
+        page.body_text = "conteúdo novo"
+        page.html = "<h1>A</h1><p>conteúdo novo</p>"
+        page.meta_robots = ""; page.canonical = "https://x.com/a/"
+        # lease fresca + TTL -> 'written' (gate final passa)
+        assert storage.corpus_commit_page(
+            run_id=rid, url=urls[0], worker_id="worker-A",
+            lease_version=token_a, built_at="2026-01-01T00:00:00+00:00",
+            page=page, lease_seconds=3600) == "written"
+
+        # b: documento já existente com o MESMO hash -> caminho 'unchanged'
+        # (só marca done) também sob TTL por relógio
+        body_b = "conteúdo idêntico de b"
+        hash_b = hashlib.sha256(body_b.encode("utf-8")).hexdigest()
+        storage.save_corpus_document(
+            url=urls[1], title="B", h1="B", body_text=body_b,
+            content_hash=hash_b, built_at="2026-01-01T00:00:00+00:00")
+        page_b = PageSnapshot("https://x.com/b/", 200)
+        page_b.title = "B"; page_b.h1 = ["B"]
+        page_b.body_text = body_b
+        page_b.html = "<h1>B</h1><p>conteúdo idêntico</p>"
+        page_b.meta_robots = ""; page_b.canonical = "https://x.com/b/"
+        assert storage.corpus_commit_page(
+            run_id=rid, url=urls[1], worker_id="worker-A",
+            lease_version=token_b, built_at="2026-01-01T00:00:00+00:00",
+            page=page_b, lease_seconds=3600) == "unchanged"
+        assert storage.corpus_queue_counts(rid)["done"] == 2
+
+
 def test_mark_failed_enforces_ttl_by_clock(tmp_path):
     """Caminho de FALHA alinhado ao TTL por relógio: fetch falhou depois de o
     lease expirar (sem recovery) -> mark_failed retorna False e a URL fica
