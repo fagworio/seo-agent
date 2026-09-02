@@ -112,6 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
+        ("today", "Control plane: read model da tela Hoje (atenção, runs, integrações)"),
         ("user", "Control plane: manage users, roles and bootstrap admin"),
     ):
         p = sub.add_parser(name, help=help_text)
@@ -384,6 +385,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_brief)
         elif name == "outcomes":
             p.set_defaults(func=_cmd_outcomes)
+        elif name == "today":
+            p.set_defaults(func=_cmd_today)
         elif name == "user":
             subp = p.add_subparsers(dest="user_action", required=True)
             ca = subp.add_parser("create-admin", help="bootstrap first admin (MFA obrigatória)")
@@ -3816,6 +3819,28 @@ def _finding(f: dict[str, Any], url: str) -> dict[str, Any]:
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _cmd_today(args: argparse.Namespace, config: Any) -> int:
+    """Control plane: read model da tela Hoje (framwork-agnóstico)."""
+    from .services.control_plane import ControlPlaneService
+
+    with Storage(config.sqlite_path) as storage:
+        today = ControlPlaneService(storage, config).today(limit=args.limit or 10)
+    result = {
+        "status": "ok",
+        "summary": {
+            "command": "today",
+            "needs_attention": today["needs_attention"],
+            "critical_findings": today["critical_findings"],
+            "safe_fixes": today["safe_fixes"],
+            "recent_runs": len(today["recent_runs"]),
+            "integration_warnings": len(today["integration_warnings"]),
+        },
+        "today": today,
+    }
+    _emit(result, force_json=True)
+    return 0
 
 
 def _cmd_user(args: argparse.Namespace, config: Any) -> int:
