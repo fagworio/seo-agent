@@ -354,6 +354,86 @@ CREATE INDEX IF NOT EXISTS idx_corpus_failures_run ON corpus_run_failures(run_id
 CREATE INDEX IF NOT EXISTS idx_findings_cycle ON findings(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON inspection_queue(status, priority);
+
+-- ===== Control plane: auth, RBAC, sessions =====
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    password_hash TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    is_mfa_enabled INTEGER NOT NULL DEFAULT 0,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id INTEGER NOT NULL REFERENCES roles(id),
+    permission_id INTEGER NOT NULL REFERENCES permissions(id),
+    PRIMARY KEY (role_id, permission_id)
+);
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    role_id INTEGER NOT NULL REFERENCES roles(id),
+    PRIMARY KEY (user_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,        -- absolute timeout
+    idle_expires_at TEXT NOT NULL,   -- idle timeout
+    ip_hash TEXT,
+    user_agent TEXT,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS mfa_factors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL DEFAULT 'totp',
+    secret TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT,
+    ip_hash TEXT,
+    outcome TEXT NOT NULL,           -- success | failure
+    at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(email, at);
+CREATE TABLE IF NOT EXISTS auth_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    actor TEXT,
+    user_id INTEGER,
+    event TEXT NOT NULL,             -- LOGIN_SUCCESS, LOGIN_FAILURE, ...
+    detail_json TEXT
+);
 """
 
 

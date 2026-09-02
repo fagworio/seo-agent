@@ -66,6 +66,15 @@ class Config:
     # State
     sqlite_path: str = "./state/seo_agent.db"
 
+    # Control plane auth (sessão server-side, cookie HttpOnly)
+    session_idle_seconds: int = 8 * 3600        # idle timeout
+    session_absolute_seconds: int = 7 * 24 * 3600  # absolute timeout
+    session_cookie_name: str = "__Host-seo_session"
+    session_cookie_secure: bool = True
+    auth_max_attempts: int = 5                  # janela de brute-force
+    auth_attempt_window_seconds: int = 900      # por email/IP
+    mfa_issuer: str = "SEO Agent"
+
     def __repr__(self) -> str:
         return (
             "Config("
@@ -210,4 +219,13 @@ def load_config() -> Config:
         max_urls_per_run=_int("MAX_URLS_PER_RUN", 500, 1, 100_000),
         max_safe_fix_per_cycle=_int("MAX_SAFE_FIX_PER_CYCLE", 10, 0, 1000),
         sqlite_path=_env("SQLITE_PATH", "./state/seo_agent.db"),
+        session_idle_seconds=_int("SESSION_IDLE_SECONDS", 8 * 3600, 60, 30 * 24 * 3600),
+        session_absolute_seconds=_int(
+            "SESSION_ABSOLUTE_SECONDS", 7 * 24 * 3600, 60, 365 * 24 * 3600
+        ),
+        session_cookie_name=_env("SESSION_COOKIE_NAME", "__Host-seo_session"),
+        session_cookie_secure=_bool("SESSION_COOKIE_SECURE", True),
+        auth_max_attempts=_int("AUTH_MAX_ATTEMPTS", 5, 1, 1000),
+        auth_attempt_window_seconds=_int("AUTH_ATTEMPT_WINDOW_SECONDS", 900, 30, 24 * 3600),
+        mfa_issuer=_env("MFA_ISSUER", "SEO Agent"),
     )

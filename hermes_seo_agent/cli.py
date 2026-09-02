@@ -112,6 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
+        ("user", "Control plane: manage users, roles and bootstrap admin"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -383,6 +384,27 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_brief)
         elif name == "outcomes":
             p.set_defaults(func=_cmd_outcomes)
+        elif name == "user":
+            subp = p.add_subparsers(dest="user_action", required=True)
+            ca = subp.add_parser("create-admin", help="bootstrap first admin (MFA obrigatória)")
+            ca.add_argument("--email", required=True)
+            ca.add_argument("--name", default="")
+            ca.add_argument("--password", default="", help="se vazio, pergunta interativo")
+            ca.add_argument("--mfa", default="", help="segredo base32 TOTP (se vazio, gera)")
+            ca.set_defaults(func=_cmd_user)
+            cu = subp.add_parser("create", help="create a user with roles")
+            cu.add_argument("--email", required=True)
+            cu.add_argument("--name", default="")
+            cu.add_argument("--password", default="", help="se vazio, pergunta interativo")
+            cu.add_argument("--roles", default="", help="comma-separated: admin,operator,editor,viewer")
+            cu.add_argument("--mfa", default="", help="segredo base32 TOTP (se vazio, sem MFA)")
+            cu.set_defaults(func=_cmd_user)
+            ls = subp.add_parser("list", help="list users + roles")
+            ls.set_defaults(func=_cmd_user)
+            ro = subp.add_parser("roles", help="set roles for a user")
+            ro.add_argument("--user-id", type=int, required=True)
+            ro.add_argument("--roles", required=True, help="comma-separated roles")
+            ro.set_defaults(func=_cmd_user)
         else:
             p.set_defaults(func=_cmd_inventory)
 
@@ -3794,6 +3816,71 @@ def _finding(f: dict[str, Any], url: str) -> dict[str, Any]:
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _cmd_user(args: argparse.Namespace, config: Any) -> int:
+    """Control plane: gerenciar usuários, roles e bootstrap do admin.
+
+    create-admin obriga MFA (TOTP) e devolve o segredo para registro no
+    autenticador. create-users é feito por admin (não há /register público).
+    """
+    from getpass import getpass
+
+    from .auth.service import AuthService
+
+    with Storage(config.sqlite_path) as storage:
+        svc = AuthService(storage, config=config)
+        action = getattr(args, "user_action", "")
+        result: dict[str, Any] = {
+            "status": "ok",
+            "summary": {"command": "user", "action": action},
+        }
+        if action == "create-admin":
+            password = args.password
+            if not password:
+                password = getpass("Senha (min 8, MFA obrigatória): ")
+                if password != getpass("Confirme: "):
+                    print(json.dumps({"status": "error", "error": "senhas não coincidem"},
+                                     ensure_ascii=False))
+                    return 1
+            uid = svc.create_admin(args.email, args.name, password,
+                                   mfa_secret=args.mfa or None)
+            factor = svc.store.get_mfa_factor(uid)
+            result["user"] = {
+                "id": uid,
+                "email": args.email,
+                "mfa_secret": factor["secret"] if factor else None,
+            }
+        elif action == "create":
+            password = args.password
+            if not password:
+                password = getpass("Senha: ")
+            roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+            uid = svc.create_user(args.email, args.name, password, roles,
+                                  mfa_secret=args.mfa or None)
+            result["user"] = {
+                "id": uid,
+                "email": args.email,
+                "roles": svc.store.get_user_roles(uid),
+            }
+        elif action == "list":
+            users = svc.store.list_users()
+            for u in users:
+                u["roles"] = svc.store.get_user_roles(u["id"])
+            result["users"] = users
+        elif action == "roles":
+            roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+            svc.set_user_roles(args.user_id, roles)
+            result["user"] = {
+                "id": args.user_id,
+                "roles": svc.store.get_user_roles(args.user_id),
+            }
+        else:
+            print(json.dumps({"status": "error", "error": f"ação desconhecida: {action}"},
+                             ensure_ascii=False))
+            return 1
+    _emit(result, force_json=True)
+    return 0
 
 
 def _emit(result: dict[str, Any], *, force_json: bool = False) -> None:
