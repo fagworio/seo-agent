@@ -130,6 +130,8 @@ export interface AgentRun {
   safe_fixes_count: number;
   executed_changes_count: number;
   comparison: Record<string, unknown> | null;
+  summary: Record<string, unknown> | null;
+  error: string | null;
 }
 
 export interface IntegrationSource {
@@ -138,4 +140,31 @@ export interface IntegrationSource {
   detail: string;
   rows: number;
   limitations: string;
+}
+
+export interface Agent {
+  id: number;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface RunStep {
+  stage: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface RunEvent {
+  ts: string;
+  event: string;
+  level: string;
+  message: string | null;
+}
+
+export interface RunDetail extends AgentRun {
+  steps: RunStep[];
+  events: RunEvent[];
 }
