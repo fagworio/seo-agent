@@ -42,6 +42,7 @@ class LoginResult:
     user: dict[str, Any] | None = None
     session_token: str | None = None
     session_id: int | None = None
+    csrf_token: str | None = None          # synchronizer token p/ mutações
     mfa_user_id: int | None = None         # para o fluxo /verify-mfa
     requires_mfa: bool = False
 
@@ -67,17 +68,21 @@ class AuthService:
         config: Any | None = None,
         hasher: PasswordHasher | None = None,
         clock: Any | None = None,
+        reset_token_sender: Any | None = None,
     ) -> None:
         self.store = AuthStore(storage)
         self.store.seed_rbac()
         self.hasher = hasher or PasswordHasher()
         self.config = config
         self._clock = clock  # injectável para testes (callable -> iso string)
+        self._reset_token_sender = reset_token_sender  # (token, email) -> None
 
         self._idle = getattr(config, "session_idle_seconds", 8 * 3600)
         self._absolute = getattr(config, "session_absolute_seconds", 7 * 24 * 3600)
         self._max_attempts = getattr(config, "auth_max_attempts", 5)
         self._attempt_window = getattr(config, "auth_attempt_window_seconds", 900)
+        self._reauth_window = getattr(config, "reauth_window_seconds", 900)
+        self._reset_window = getattr(config, "reset_token_seconds", 3600)
         self._mfa_issuer = getattr(config, "mfa_issuer", "SEO Agent")
 
     # -- time helpers --------------------------------------------------------
@@ -216,7 +221,7 @@ class AuthService:
         self._audit(now=now, actor=email, user_id=user["id"], event="LOGIN_SUCCESS")
         return LoginResult(
             ok=True, session_token=session["token"], session_id=session["session_id"],
-            user=self._public_user(user),
+            csrf_token=session["csrf_token"], user=self._public_user(user),
         )
 
     def verify_mfa_login(
@@ -247,13 +252,14 @@ class AuthService:
         self._audit(now=now, actor=user["email"], user_id=user_id, event="MFA_SUCCESS")
         return LoginResult(
             ok=True, session_token=session["token"], session_id=session["session_id"],
-            user=self._public_user(user),
+            csrf_token=session["csrf_token"], user=self._public_user(user),
         )
 
     # -- session -------------------------------------------------------------
     def _start_session(self, user_id: int, *, ip: str | None, user_agent: str | None, now: str) -> dict[str, Any]:
         token = generate_session_token()
         token_hash = hash_token(token)
+        csrf_token = generate_csrf_token()
         expires_at = self._after(self._absolute)
         idle_expires_at = self._after(self._idle)
         session_id = self.store.create_session(
@@ -261,7 +267,10 @@ class AuthService:
             expires_at=expires_at, idle_expires_at=idle_expires_at,
             ip_hash=hash_ip(ip), user_agent=hash_user_agent(user_agent),
         )
-        return {"token": token, "session_id": session_id}
+        self.store.set_session_csrf(session_id, hash_token(csrf_token))
+        # login é uma autenticação forte; define a reauth clock
+        self.store.set_session_strong_auth(session_id, now)
+        return {"token": token, "session_id": session_id, "csrf_token": csrf_token}
 
     def validate_session(self, token: str, *, now: str | None = None) -> SessionInfo | None:
         """Valida e renova o idle. Retorna None se revogada/expirada."""
@@ -313,6 +322,79 @@ class AuthService:
         return self.store.revoke_user_sessions(
             user_id, now=now, exclude_session_id=current_session_id
         )
+
+    # -- CSRF (synchronizer token) -------------------------------------------
+    def verify_csrf(self, session_id: int, token: str | None) -> bool:
+        if not token:
+            return False
+        expected = self.store.get_session_csrf_hash(session_id)
+        if not expected:
+            return False
+        return hash_token(token) == expected
+
+    def issue_csrf(self, session_id: int, *, now: str | None = None) -> str:
+        """Reemite o synchronizer token (ex.: quando o cliente o perde)."""
+        token = generate_csrf_token()
+        self.store.set_session_csrf(session_id, hash_token(token))
+        return token
+
+    # -- reautenticação para ações críticas ---------------------------------
+    def verify_recent_strong_auth(self, session_id: int, *, now: str | None = None) -> bool:
+        now = now or self._now()
+        row = self.store.get_session_by_id(session_id)
+        if not row or row["revoked_at"] is not None or now > row["expires_at"]:
+            return False
+        if not row["strong_auth_at"]:
+            return False
+        # janela: now - strong_auth_at <= reauth_window
+        return self._within(now, row["strong_auth_at"], self._reauth_window)
+
+    def mark_strong_auth(self, session_id: int, *, now: str | None = None) -> None:
+        self.store.set_session_strong_auth(session_id, now or self._now())
+
+    # -- password reset ------------------------------------------------------
+    def request_password_reset(self, email: str, *, now: str | None = None) -> dict[str, Any]:
+        """Resposta sempre genérica (anti-enumeração). Token só é criado se a
+        conta existir; nunca devolve se a conta existe."""
+        now = now or self._now()
+        user = self.store.get_user_by_email(email)
+        if user is not None and user["password_hash"]:
+            token = generate_session_token()
+            self.store.create_reset_token(
+                user["id"], hash_token(token), now, self._after(self._reset_window)
+            )
+            if self._reset_token_sender is not None:
+                self._reset_token_sender(token, user["email"])
+            self._audit(now=now, actor=email, user_id=user["id"], event="PASSWORD_RESET_REQUESTED")
+        # mensagem idêntica para conta existente ou inexistente
+        return {"ok": True, "message": "Se a conta existir, você receberá um link de redefinição."}
+
+    def reset_password(self, token: str, new_password: str, *, now: str | None = None) -> bool:
+        """Redefine senha: token de uso único, com TTL; revoga as sessões."""
+        now = now or self._now()
+        record = self.store.get_reset_token(hash_token(token))
+        if record is None:
+            return False
+        if record["used_at"] is not None or record["revoked_at"] is not None:
+            return False
+        if now > record["expires_at"]:
+            return False
+        user = self.store.get_user(record["user_id"])
+        if user is None or not user["is_active"]:
+            return False
+        self.hasher.validate(new_password, mfa_enabled=user["is_mfa_enabled"])
+        self.store.set_password_hash(user["id"], self.hasher.hash(new_password), now)
+        self.store.consume_reset_token(record["id"], now)
+        self.store.revoke_user_sessions(user["id"], now=now)
+        self._audit(now=now, actor=user["email"], user_id=user["id"], event="PASSWORD_CHANGED")
+        return True
+
+    def _within(self, now: str, past: str, window_seconds: int) -> bool:
+        try:
+            delta = datetime.datetime.fromisoformat(now) - datetime.datetime.fromisoformat(past)
+            return delta.total_seconds() <= window_seconds
+        except (ValueError, TypeError):
+            return False
 
     # -- password change / reset --------------------------------------------
     def change_password(

@@ -73,6 +73,9 @@ class Config:
     session_cookie_secure: bool = True
     auth_max_attempts: int = 5                  # janela de brute-force
     auth_attempt_window_seconds: int = 900      # por email/IP
+    csrf_header: str = "X-CSRF-Token"
+    reauth_window_seconds: int = 900            # reautenticação p/ ações críticas
+    reset_token_seconds: int = 3600             # TTL do token de reset de senha
     mfa_issuer: str = "SEO Agent"
 
     def __repr__(self) -> str:
@@ -227,5 +230,8 @@ def load_config() -> Config:
         session_cookie_secure=_bool("SESSION_COOKIE_SECURE", True),
         auth_max_attempts=_int("AUTH_MAX_ATTEMPTS", 5, 1, 1000),
         auth_attempt_window_seconds=_int("AUTH_ATTEMPT_WINDOW_SECONDS", 900, 30, 24 * 3600),
+        csrf_header=_env("CSRF_HEADER", "X-CSRF-Token"),
+        reauth_window_seconds=_int("REAUTH_WINDOW_SECONDS", 900, 30, 24 * 3600),
+        reset_token_seconds=_int("RESET_TOKEN_SECONDS", 3600, 60, 24 * 3600),
         mfa_issuer=_env("MFA_ISSUER", "SEO Agent"),
     )

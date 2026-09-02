@@ -495,6 +495,10 @@ class Storage:
                 ("leased_at", "TEXT"),
                 ("lease_version", "INTEGER NOT NULL DEFAULT 0"),
             ],
+            "sessions": [
+                ("csrf_token_hash", "TEXT"),
+                ("strong_auth_at", "TEXT"),
+            ],
         }
         editorial_extra = [
             ("responsible", "TEXT"), ("deadline", "TEXT"),

@@ -170,8 +170,8 @@ class AuthStore:
     def get_session_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT id, user_id, token_hash, created_at, last_seen_at, expires_at, "
-            "idle_expires_at, ip_hash, user_agent, revoked_at FROM sessions "
-            "WHERE token_hash = ?",
+            "idle_expires_at, ip_hash, user_agent, revoked_at, csrf_token_hash, "
+            "strong_auth_at FROM sessions WHERE token_hash = ?",
             (token_hash,),
         ).fetchone()
         return self._session_row(row)
@@ -208,8 +208,8 @@ class AuthStore:
     def list_user_sessions(self, user_id: int) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT id, created_at, last_seen_at, expires_at, idle_expires_at, "
-            "ip_hash, user_agent, revoked_at FROM sessions WHERE user_id = ? "
-            "ORDER BY COALESCE(last_seen_at, created_at) DESC",
+            "ip_hash, user_agent, revoked_at, csrf_token_hash, strong_auth_at "
+            "FROM sessions WHERE user_id = ? ORDER BY COALESCE(last_seen_at, created_at) DESC",
             (user_id,),
         ).fetchall()
         return [
@@ -222,9 +222,39 @@ class AuthStore:
                 "ip_hash": r[5],
                 "user_agent": r[6],
                 "revoked_at": r[7],
+                "csrf_token_hash": r[8],
+                "strong_auth_at": r[9],
             }
             for r in rows
         ]
+
+    def get_session_by_id(self, session_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT id, user_id, token_hash, created_at, last_seen_at, expires_at, "
+            "idle_expires_at, ip_hash, user_agent, revoked_at, csrf_token_hash, "
+            "strong_auth_at FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        return self._session_row(row)
+
+    def set_session_csrf(self, session_id: int, csrf_token_hash: str | None) -> None:
+        self.conn.execute(
+            "UPDATE sessions SET csrf_token_hash = ? WHERE id = ?",
+            (csrf_token_hash, session_id),
+        )
+        self.conn.commit()
+
+    def get_session_csrf_hash(self, session_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT csrf_token_hash FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_session_strong_auth(self, session_id: int, now: str) -> None:
+        self.conn.execute(
+            "UPDATE sessions SET strong_auth_at = ? WHERE id = ?", (now, session_id)
+        )
+        self.conn.commit()
 
     # -- mfa -----------------------------------------------------------------
     def save_mfa_factor(self, user_id: int, secret: str, *, kind: str = "totp", now: str) -> None:
@@ -384,4 +414,6 @@ class AuthStore:
             "ip_hash": row[7],
             "user_agent": row[8],
             "revoked_at": row[9],
+            "csrf_token_hash": row[10],
+            "strong_auth_at": row[11],
         }
