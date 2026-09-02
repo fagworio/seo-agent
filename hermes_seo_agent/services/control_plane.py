@@ -81,6 +81,155 @@ class ControlPlaneService:
                 "before": self._json(r[4]), "after": self._json(r[5]),
                 "rollback": self._json(r[6]), "executed_at": r[7]}
 
+    def technical_findings(self, *, rule: str | None = None, limit: int = 200,
+                           sort: str = "potential") -> list[dict[str, Any]]:
+        """Read model ENRIQUECIDO para a tela SEO Técnico (fila de decisão).
+
+        Cada finding vira um objeto com identidade de página (public_url/wordpress_url),
+        evidência do Search Console (query_pages + seo_expectations), potencial
+        estimado (cenários conservador/realista/otimista) e apresentação da regra.
+        missing ≠ zero: sem coleta Google, os números ficam ausentes (não 0).
+        """
+        from ..inventory.reconcile import normalize_url
+        from .rule_catalog import rule_presentation
+
+        # Janela GSC mais recente (cache único — evita re-consulta por linha).
+        window = self._latest_gsc_window()
+
+        rows = self.storage.conn.execute(
+            "SELECT rule_id, url, severity, detail_json, created_at FROM findings "
+            "WHERE 1=1"
+            + (" AND rule_id = ?" if rule else "")
+            + " ORDER BY id DESC LIMIT ?", (*([] if not rule else [rule]), limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            rule_id, url, severity = r[0], r[1], r[2]
+            identity = self._resolve_page_identity(url)
+            pres = rule_presentation(rule_id)
+            gsc = self._google_evidence(identity["public_url"], window)
+            expectation = self._traffic_expectation(identity["public_url"])
+            out.append({
+                "rule_id": rule_id,
+                "rule": pres,
+                "severity": severity or pres["severity"],
+                "page": identity,
+                "title": self._page_title(identity["public_url"]),
+                "google": gsc,
+                "potential": expectation,
+                "created_at": r[4],
+            })
+        if sort == "potential":
+            out.sort(key=lambda f: (f["potential"]["realistic"] is None,
+                                    -(f["potential"]["realistic"] or 0), f["rule"]["label"]))
+        elif sort == "impressions":
+            out.sort(key=lambda f: -(f["google"]["impressions"] or 0))
+        elif sort == "severity":
+            order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+            out.sort(key=lambda f: order.get(f["severity"], 9))
+        elif sort == "recent":
+            out.sort(key=lambda f: f["created_at"], reverse=True)
+        return out
+
+    def _latest_gsc_window(self) -> tuple[str, str]:
+        try:
+            row = self.storage.conn.execute(
+                "SELECT window_start, window_end FROM query_pages "
+                "ORDER BY window_start DESC LIMIT 1").fetchone()
+            return (row[0], row[1]) if row else ("", "")
+        except Exception:
+            return ("", "")
+
+    def _resolve_page_identity(self, url: str) -> dict[str, Any]:
+        """Resolve a identidade por PATH (host-independente), nunca por hostname.
+
+        public_url = site público/headless (Google crawla); wordpress_url = origem
+        editorial. Antes de usar localhost/dvl.to como URL analisada, normaliza.
+        """
+        from ..inventory.reconcile import normalize_url
+        path = normalize_url(url or "")
+        static = getattr(self.config, "static_site_url", "https://www.unicorniohater.com.br")
+        wp_public = getattr(self.config, "wordpress_public_url", "https://prod.unicorniohater.com.br")
+        public_url = f"{static.rstrip('/')}{path}"
+        return {
+            "path": path,
+            "finding_url": url,
+            "public_url": public_url,
+            "wordpress_url": f"{wp_public.rstrip('/')}{path}",
+            "wordpress_edit_url": "",          # sem wp_post_id persistido -> não inventa
+            "headless": True,
+        }
+
+    def _page_title(self, public_url: str) -> str:
+        try:
+            row = self.storage.conn.execute(
+                "SELECT title FROM page_snapshots WHERE url = ? AND title <> '' "
+                "ORDER BY captured_at DESC LIMIT 1", (public_url,)).fetchone()
+            return row[0] if row and row[0] else ""
+        except Exception:
+            return ""
+
+    def _google_evidence(self, public_url: str, window: tuple[str, str]) -> dict[str, Any]:
+        w_start, w_end = window
+        try:
+            row = self.storage.conn.execute(
+                "SELECT SUM(clicks), SUM(impressions), AVG(position), COUNT(*) "
+                "FROM query_pages WHERE url = ? AND window_start = ?",
+                (public_url, w_start)).fetchone()
+        except Exception:
+            row = None
+        impressions = row[1] if row else 0
+        clicks = row[0] if row else 0
+        count = row[3] if row else 0
+        data_status = "available" if count and impressions else "missing"
+        top_queries = []
+        if count:
+            try:
+                for q in self.storage.conn.execute(
+                    "SELECT query, clicks, impressions, ctr, position FROM query_pages "
+                    "WHERE url = ? AND window_start = ? ORDER BY impressions DESC LIMIT 5",
+                    (public_url, w_start)).fetchall():
+                    top_queries.append({"query": q[0], "clicks": q[1] or 0,
+                                        "impressions": q[2] or 0, "ctr": q[3], "position": q[4]})
+            except Exception:
+                top_queries = []
+        # Expected/gap a partir do seo_expectations (nunca 0 falso: só se existir).
+        exp = self._traffic_expectation(public_url)
+        return {
+            "data_status": data_status,
+            "window_start": w_start, "window_end": w_end,
+            "clicks": clicks if data_status == "available" else None,
+            "impressions": impressions if data_status == "available" else None,
+            "ctr": (clicks / impressions) if data_status == "available" and impressions else None,
+            "position": round(row[2], 1) if row and row[2] is not None else None,
+            "expected_ctr": exp["ctr_expected"],
+            "expected_clicks": exp["expected_clicks"],
+            "gap_clicks": exp["gap_clicks"],
+            "top_queries": top_queries,
+        }
+
+    def _traffic_expectation(self, public_url: str) -> dict[str, Any]:
+        """Potencial estimado: cenários de seo_expectations (não inventa se não existe)."""
+        try:
+            row = self.storage.conn.execute(
+                "SELECT position, impressions, clicks, ctr, expected_ctr, expected_clicks, "
+                "gap_clicks, conservative_clicks, realistic_clicks, optimistic_clicks "
+                "FROM seo_expectations WHERE url = ? ORDER BY computed_at DESC LIMIT 1",
+                (public_url,)).fetchone()
+        except Exception:
+            row = None
+        if not row:
+            return {"data_status": "missing", "conservative": None, "realistic": None,
+                    "optimistic": None, "ctr_expected": None, "expected_clicks": None,
+                    "gap_clicks": None}
+        return {
+            "data_status": "available" if row[8] is not None else "missing",
+            "position": row[0], "impressions": row[1], "clicks": row[2], "ctr": row[3],
+            "ctr_expected": row[4],
+            "expected_clicks": row[5], "gap_clicks": row[6],
+            "conservative": row[7], "realistic": row[8], "optimistic": row[9],
+        }
+
     # -- Páginas (F8) --------------------------------------------------------
     def pages(self, *, query: str = "", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Explorer de páginas: snapshot mais recente por URL + métricas."""

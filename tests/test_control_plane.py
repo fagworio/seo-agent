@@ -195,6 +195,76 @@ def test_experiments_measurement_state(tmp_path):
     storage.close()
 
 
+def test_technical_findings_enriched(tmp_path):
+    import json as _json
+    from types import SimpleNamespace
+    config = SimpleNamespace(static_site_url="https://www.unicorniohater.com.br",
+                             wordpress_public_url="https://prod.unicorniohater.com.br")
+    storage = Storage(str(tmp_path / "tf.db"))
+    cp = ControlPlaneService(storage, config)
+    public_url = "https://www.unicorniohater.com.br/post/"
+    # finding em URL LOCAL (deve normalizar por path p/ a URL pública)
+    storage.conn.execute(
+        "INSERT INTO findings (cycle_id, rule_id, url, severity, detail_json, created_at) "
+        "VALUES ('c1','title_too_long','http://wordpress.dvl.to:8080/post/','low',?,"
+        "'2026-01-01T00:00:00+00:00')", (_json.dumps({"length": 80}),))
+    storage.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, source, title, status_code) "
+        "VALUES (?, '2026-01-02T00:00:00+00:00', 'audit', 'Meu título real', 200)", (public_url,))
+    # dados Google (query_pages + seo_expectations) para a URL pública
+    storage.conn.executemany(
+        "INSERT INTO query_pages (query, url, window_start, window_end, clicks, impressions, "
+        "ctr, position, intent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [("xbox disc to digital", public_url, "2026-01-01", "2026-01-28", 10, 2110, 0.0047, 7.9, "info"),
+         ("xbox digital", public_url, "2026-01-01", "2026-01-28", 11, 3180, 0.0035, 8.7, "commercial")])
+    storage.conn.execute(
+        "INSERT INTO seo_expectations (url, computed_at, position, impressions, clicks, ctr, "
+        "expected_ctr, expected_clicks, gap_clicks, conservative_clicks, realistic_clicks, "
+        "optimistic_clicks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (public_url, "2026-01-02T00:00:00+00:00", 8.3, 5290, 21, 0.004, 0.02, 127, 106,
+         65, 106, 140))
+    storage.conn.commit()
+
+    res = cp.technical_findings()
+    assert len(res) == 1
+    f = res[0]
+    assert f["rule"]["label"] == "Título longo"          # label amigável
+    assert f["rule_id"] == "title_too_long"               # rule_id preservado
+    assert f["page"]["public_url"] == public_url          # normalizado p/ pública
+    assert f["page"]["wordpress_url"] == "https://prod.unicorniohater.com.br/post/"
+    assert f["page"]["wordpress_edit_url"] == ""           # sem post_id -> não inventa
+    assert f["title"] == "Meu título real"
+    assert f["google"]["data_status"] == "available"
+    assert f["google"]["impressions"] == 5290
+    assert f["google"]["clicks"] == 21
+    assert f["google"]["ctr"] == 21 / 5290
+    assert len(f["google"]["top_queries"]) == 2           # queries da URL correta
+    assert f["potential"]["realistic"] == 106
+    assert f["potential"]["conservative"] == 65
+    assert f["potential"]["optimistic"] == 140
+    storage.close()
+
+
+def test_technical_findings_missing_gsc_not_zero(tmp_path):
+    from types import SimpleNamespace
+    config = SimpleNamespace(static_site_url="https://www.unicorniohater.com.br",
+                             wordpress_public_url="https://prod.unicorniohater.com.br")
+    storage = Storage(str(tmp_path / "tm.db"))
+    cp = ControlPlaneService(storage, config)
+    storage.conn.execute(
+        "INSERT INTO findings (cycle_id, rule_id, url, severity, detail_json, created_at) "
+        "VALUES ('c1','title_too_long','https://www.unicorniohater.com.br/other/','low','{}',"
+        "'2026-01-01T00:00:00+00:00')")
+    storage.conn.commit()
+    f = cp.technical_findings()[0]
+    assert f["google"]["data_status"] == "missing"
+    assert f["google"]["impressions"] is None    # missing ≠ zero
+    assert f["google"]["clicks"] is None
+    assert f["google"]["top_queries"] == []
+    assert f["potential"]["data_status"] == "missing"
+    storage.close()
+
+
 def test_technical_splits_problems_and_corrections(tmp_path):
     import json as _json
     storage, cp = _seed(tmp_path / "te.db")

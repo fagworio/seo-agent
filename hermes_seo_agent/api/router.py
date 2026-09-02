@@ -242,9 +242,12 @@ class Router:
         return HttpResponse.json(200, {"url": unquote(params["id"]), "history": history})
 
     def _findings(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
-        data = self.control.technical(rule=request.query.get("rule") or None,
-                                      limit=int(request.query.get("limit", "200")))
-        return HttpResponse.json(200, {"problems": data["problems"]})
+        data = self.control.technical_findings(
+            rule=request.query.get("rule") or None,
+            limit=int(request.query.get("limit", "200")),
+            sort=request.query.get("sort", "potential"),
+        )
+        return HttpResponse.json(200, {"findings": data})
 
     def _corrections(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         data = self.control.technical(limit=int(request.query.get("limit", "200")))

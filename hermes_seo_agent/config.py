@@ -21,6 +21,7 @@ class Config:
     # WordPress (source of content)
     wordpress_url: str
     wordpress_api_base: str = "/wp-json/wp/v2"
+    wordpress_public_url: str = "https://prod.unicorniohater.com.br"
     app_user: str = ""
     app_password: str = field(default="", repr=False)
 
@@ -169,6 +170,9 @@ def load_config() -> Config:
     if not api_base.startswith("/") or "?" in api_base or "#" in api_base:
         raise ConfigError("WORDPRESS_API_BASE must be a safe path")
     api_base = "/" + api_base.strip("/")
+    wordpress_public_url = _validate_url(
+        "WORDPRESS_PUBLIC_URL", _env("WORDPRESS_PUBLIC_URL", "https://prod.unicorniohater.com.br")
+    )
 
     dry_run = _bool("DRY_RUN", True)
     app_user = _env("WORDPRESS_APP_USER")
@@ -187,6 +191,7 @@ def load_config() -> Config:
     return Config(
         wordpress_url=wordpress_url,
         wordpress_api_base=api_base,
+        wordpress_public_url=wordpress_public_url,
         app_user=app_user,
         app_password=app_password,
         static_site_url=static_site_url,

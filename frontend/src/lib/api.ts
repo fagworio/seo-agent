@@ -203,6 +203,56 @@ export interface Finding {
   created_at: string;
 }
 
+export interface TechnicalFinding {
+  rule_id: string;
+  rule: {
+    rule_id: string;
+    label: string;
+    layer: string;
+    diagnosis: string;
+    severity: string;
+    level: string;
+    suggested_action: string;
+  };
+  severity: string;
+  page: {
+    path: string;
+    finding_url: string;
+    public_url: string;
+    wordpress_url: string;
+    wordpress_edit_url: string;
+    headless: boolean;
+  };
+  title: string;
+  google: {
+    data_status: string;
+    window_start: string;
+    window_end: string;
+    clicks: number | null;
+    impressions: number | null;
+    ctr: number | null;
+    position: number | null;
+    expected_ctr: number | null;
+    expected_clicks: number | null;
+    gap_clicks: number | null;
+    top_queries: { query: string; clicks: number; impressions: number; ctr: number | null; position: number | null }[];
+  };
+  potential: {
+    data_status: string;
+    position: number | null;
+    impressions: number | null;
+    clicks: number | null;
+    ctr: number | null;
+    ctr_expected: number | null;
+    expected_clicks: number | null;
+    gap_clicks: number | null;
+    conservative: number | null;
+    realistic: number | null;
+    optimistic: number | null;
+  };
+  created_at: string;
+}
+
 export interface Correction {
   fingerprint: string;
   rule_id: string;
