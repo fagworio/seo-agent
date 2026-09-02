@@ -137,9 +137,13 @@ export interface AgentRun {
 export interface IntegrationSource {
   source: string;
   data_status: string;
+  configured: boolean;
   detail: string;
+  last_window: string;
   rows: number;
   limitations: string;
+  // extras (coverage, documentos, provider, etc.) projetados pelo backend
+  [key: string]: unknown;
 }
 
 export interface Agent {
@@ -208,4 +212,13 @@ export interface Correction {
   after: Record<string, unknown> | null;
   rollback: Record<string, unknown> | null;
   executed_at: string | null;
+}
+
+export interface ActivityEntry {
+  ts: string;
+  actor: string;
+  type: string;
+  event: string;
+  summary: string;
+  ref: string;
 }
