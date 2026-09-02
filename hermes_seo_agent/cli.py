@@ -3012,9 +3012,12 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                                 page = static.fetch_page(url)
                             except Exception as exc:
                                 failed += 1
-                                # marca failed SÓ se ainda é o dono (fencing)
+                                # marca failed SÓ se ainda é o dono (fencing) E
+                                # o lease não expirou por relógio — o caminho
+                                # de falha respeita o mesmo TTL da escrita.
                                 if storage.corpus_mark_failed(
-                                        run_id, url, str(exc)[:200], worker_id, token):
+                                        run_id, url, str(exc)[:200], worker_id, token,
+                                        lease_seconds=config.corpus_lease_seconds):
                                     storage.record_corpus_failure(
                                         run_id, url, str(exc)[:200])
                                 continue

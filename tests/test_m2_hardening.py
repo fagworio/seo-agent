@@ -298,10 +298,12 @@ def test_commit_page_is_transactional_under_fence(tmp_path):
 
 
 def test_concurrent_recovery_blocked_while_commit_in_flight(tmp_path):
-    """Concorrência REAL com duas conexões: A abre BEGIN IMMEDIATE e revalida;
-    B tenta recuperar o lease enquanto A está DENTRO da transação. B fica
-    BLOQUEADO (escrita exclusiva do SQLite) e, após o commit de A, encontra a
-    URL já done — a exclusão mútua no ponto crítico é demonstrada."""
+    """Concorrência REAL com duas conexões, executando o CAMINHO REAL de
+    corpus_commit_page: A entra na transação e pausa no hook before_commit
+    (dentro do BEGIN IMMEDIATE); B tenta recuperar o lease expirado enquanto
+    A está DENTRO. B fica BLOQUEADO (escrita exclusiva do SQLite) e, após o
+    commit de A, encontra a URL já done — a exclusão mútua no ponto crítico
+    da implementação de produção é demonstrada."""
     import datetime as _dt
     import threading
     import time
@@ -331,7 +333,7 @@ def test_concurrent_recovery_blocked_while_commit_in_flight(tmp_path):
     page.html = "<h1>A</h1><p>conteúdo novo</p>"
     page.meta_robots = ""; page.canonical = "https://x.com/a/"
 
-    a_entered = threading.Event()
+    in_txn = threading.Event()
     release_a = threading.Event()
     a_result: dict[str, str] = {}
     b_result: dict[str, object] = {}
@@ -339,35 +341,18 @@ def test_concurrent_recovery_blocked_while_commit_in_flight(tmp_path):
     def worker_a():
         try:
             with Storage(str(db)) as sa:
-                sa.conn.execute("BEGIN IMMEDIATE")
-                # A revalida (como corpus_commit_page faz), mas PAUSA antes de
-                # commitar para B tentar entrar no meio.
-                a_entered.set()
-                assert release_a.wait(timeout=15)
-                owned = sa.conn.execute(
-                    "SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
-                    "AND worker_id = ? AND lease_version = ? "
-                    "AND status = 'in_progress'",
-                    (rid, "https://x.com/a/", "worker-A", token_a),
-                ).fetchone()
-                if not owned:
-                    sa.conn.rollback()
-                    a_result["status"] = "not_owned"
-                    return
-                sa.save_corpus_document(
-                    url="https://x.com/a/", title="A", h1="A",
-                    body_text="conteúdo novo", canonical="https://x.com/a/",
-                    is_noindex=0, status_code=200,
-                    content_hash="h", built_at="2026-01-01T00:00:00+00:00",
-                    commit=False)
-                sa.conn.execute(
-                    "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-                    "leased_at = NULL WHERE run_id = ? AND url = ? "
-                    "AND worker_id = ? AND lease_version = ?",
-                    (rid, "https://x.com/a/", "worker-A", token_a),
-                )
-                sa.conn.commit()
-                a_result["status"] = "written"
+                def _pause():
+                    # dentro do BEGIN IMMEDIATE, após revalidar e escrever
+                    in_txn.set()
+                    assert release_a.wait(timeout=20)
+                # caminho REAL de produção (só fencing; sem TTL por relógio —
+                # cenário serializável: A vence a transação exclusiva após o
+                # TTL e conclui; B fica bloqueado e não consegue intervir).
+                r = sa.corpus_commit_page(
+                    run_id=rid, url="https://x.com/a/", worker_id="worker-A",
+                    lease_version=token_a, built_at="2026-01-01T00:00:00+00:00",
+                    page=page, before_commit=_pause)
+                a_result["status"] = r
         except Exception as exc:
             a_result["error"] = str(exc)
 
@@ -385,21 +370,17 @@ def test_concurrent_recovery_blocked_while_commit_in_flight(tmp_path):
     ta = threading.Thread(target=worker_a)
     tb = threading.Thread(target=worker_b)
     ta.start()
-    assert a_entered.wait(timeout=15)   # A está DENTRO do BEGIN IMMEDIATE
+    assert in_txn.wait(timeout=15)      # A está DENTRO do commit_page
     tb.start()
-    # dá tempo de B tentar escrever (e ficar preso no lock do SQLite)
-    time.sleep(0.5)
-    # A conclui a transação
+    time.sleep(0.6)                     # B tenta escrever e fica preso no lock
     release_a.set()
     ta.join(timeout=20)
     tb.join(timeout=20)
 
     assert not ta.is_alive() and not tb.is_alive()
     assert a_result.get("status") == "written"      # A concluiu (dono com token)
-    # B NÃO recuperou: ou ficou bloqueado até A commitar (e a URL já virou
-    # done, fora do escopo do recover), ou recuperou 0 linhas.
     assert b_result.get("error") is None
-    assert b_result.get("recovered", 0) == 0
+    assert b_result.get("recovered", 0) == 0        # B não recuperou nada
     with Storage(str(db)) as storage:
         counts = storage.corpus_queue_counts(rid)
         assert counts["done"] == 1
@@ -449,6 +430,74 @@ def test_commit_page_enforces_ttl_by_clock(tmp_path):
             run_id=rid, url="https://x.com/a/", worker_id="worker-A",
             lease_version=token, built_at="2026-01-01T00:00:00+00:00",
             page=page) == "written"
+
+
+def test_mark_failed_enforces_ttl_by_clock(tmp_path):
+    """Caminho de FALHA alinhado ao TTL por relógio: fetch falhou depois de o
+    lease expirar (sem recovery) -> mark_failed retorna False e a URL fica
+    in_progress até um worker executar a recuperação."""
+    import datetime as _dt
+    db = tmp_path / "failttl.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claim = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]
+        token = claim["lease_version"]
+        # lease expira (2h), NINGUÉM recuperou; o fetch de A falha agora
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        # com TTL por relógio, A NÃO pode marcar failed (lease expirado)
+        assert storage.corpus_mark_failed(
+            rid, "https://x.com/a/", "timeout", "worker-A", token,
+            lease_seconds=3600) is False
+        counts = storage.corpus_queue_counts(rid)
+        assert counts["in_progress"] == 1   # fica in_progress até recuperação
+        assert counts["failed"] == 0
+        # sem lease_seconds, o token ainda vale -> pode marcar failed
+        assert storage.corpus_mark_failed(
+            rid, "https://x.com/a/", "timeout", "worker-A", token) is True
+        assert storage.corpus_queue_counts(rid)["failed"] == 1
+
+
+def test_mark_done_enforces_ttl_by_clock(tmp_path):
+    """Consistência de API: mark_done também recusa com lease expirado por
+    relógio (mesmo predicado do caminho de escrita)."""
+    import datetime as _dt
+    db = tmp_path / "donettl.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claim = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]
+        token = claim["lease_version"]
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        assert storage.corpus_mark_done(
+            rid, "https://x.com/a/", "worker-A", token,
+            lease_seconds=3600) is False
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 1
+        # lease recente -> done OK
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (_dt.datetime.now(_dt.timezone.utc).isoformat(),),
+        )
+        storage.conn.commit()
+        assert storage.corpus_mark_done(
+            rid, "https://x.com/a/", "worker-A", token,
+            lease_seconds=3600) is True
 
 
 def test_mark_requires_worker_id(tmp_path):

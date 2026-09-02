@@ -1495,39 +1495,54 @@ class Storage:
         return cur.rowcount
 
     def corpus_mark_done(self, run_id: int, url: str, worker_id: str,
-                         lease_version: int) -> bool:
+                         lease_version: int,
+                         lease_seconds: int | None = None) -> bool:
         """Marca done SOMENTE se o worker ainda é o dono com o FENCING TOKEN
-        correto. worker_id e lease_version são OBRIGATÓRIOS — chamada sem dono
-        ou com token defasado retorna False e não registra."""
+        correto e (se lease_seconds dado) o lease não expirou por relógio.
+        worker_id e lease_version são OBRIGATÓRIOS — chamada sem dono/token
+        ou com token/lease defasado retorna False e não registra."""
         if not worker_id or lease_version is None:
             return False
-        cur = self.conn.execute(
-            "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-            "leased_at = NULL WHERE run_id = ? AND url = ? AND worker_id = ? "
-            "AND lease_version = ? AND status = 'in_progress'",
-            (run_id, url, worker_id, lease_version),
-        )
+        import datetime as _dt
+        sql = ("UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+               "leased_at = NULL WHERE run_id = ? AND url = ? AND worker_id = ? "
+               "AND lease_version = ? AND status = 'in_progress'")
+        params: list[Any] = [run_id, url, worker_id, lease_version]
+        if lease_seconds:
+            cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                      - _dt.timedelta(seconds=lease_seconds)).isoformat()
+            sql += " AND leased_at >= ?"
+            params.append(cutoff)
+        cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur.rowcount > 0
 
     def corpus_mark_failed(self, run_id: int, url: str, error: str,
-                           worker_id: str, lease_version: int) -> bool:
+                           worker_id: str, lease_version: int,
+                           lease_seconds: int | None = None) -> bool:
         """Marca failed SOMENTE se o worker ainda é o dono com o token correto
-        (worker_id e lease_version obrigatórios)."""
+        e (se lease_seconds dado) o lease não expirou por relógio — o caminho
+        de FALHA respeita o TTL por relógio igual ao caminho de escrita."""
         if not worker_id or lease_version is None:
             return False
-        cur = self.conn.execute(
-            "UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
-            "leased_at = NULL, error = ? WHERE run_id = ? AND url = ? "
-            "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'",
-            (error, run_id, url, worker_id, lease_version),
-        )
+        import datetime as _dt
+        sql = ("UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
+               "leased_at = NULL, error = ? WHERE run_id = ? AND url = ? "
+               "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'")
+        params: list[Any] = [error, run_id, url, worker_id, lease_version]
+        if lease_seconds:
+            cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                      - _dt.timedelta(seconds=lease_seconds)).isoformat()
+            sql += " AND leased_at >= ?"
+            params.append(cutoff)
+        cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur.rowcount > 0
 
     def corpus_commit_page(self, *, run_id: int, url: str, worker_id: str,
                            lease_version: int, built_at: str,
-                           page: Any, lease_seconds: int | None = None) -> str:
+                           page: Any, lease_seconds: int | None = None,
+                           before_commit: Any = None) -> str:
         """Operação TRANSACIONAL ÚNICA: escreve documento+seções+entidades+FTS
         e marca done em UM commit, sob BEGIN IMMEDIATE (escrita exclusiva).
 
@@ -1548,6 +1563,10 @@ class Storage:
 
         Retorna: 'written' | 'unchanged' (hash igual, só marca done) |
         'not_owned' (posse perdida ou expirada — zero alterações).
+
+        ``before_commit`` é um hook opcional chamado DENTRO da transação (após
+        as escritas, antes do commit) — usado por testes de concorrência para
+        pausar no ponto crítico enquanto outro worker tenta agir.
         """
         import datetime as _dt
         import hashlib
@@ -1585,6 +1604,8 @@ class Storage:
                     "AND worker_id = ? AND lease_version = ?",
                     (run_id, url, worker_id, lease_version),
                 )
+                if before_commit is not None:
+                    before_commit()  # hook de teste dentro da transação
                 self.conn.commit()
                 return "unchanged"
             # escritas SEM commit interno (a transação faz o commit único)
@@ -1606,6 +1627,8 @@ class Storage:
                 "AND worker_id = ? AND lease_version = ?",
                 (run_id, url, worker_id, lease_version),
             )
+            if before_commit is not None:
+                before_commit()  # hook de teste dentro da transação
             self.conn.commit()
             return "written"
         except Exception:
