@@ -53,8 +53,8 @@ export default function PageWorkspace() {
           </Card>
           <Card title="Métricas (última captura)">
             <ul className="space-y-2 text-sm">
-              <li><span className="text-[var(--muted)]">GSC:</span> {latest?.gsc ? JSON.stringify(latest.gsc) : "—"}</li>
-              <li><span className="text-[var(--muted)]">CWV:</span> {latest?.cwv ? JSON.stringify(latest.cwv) : "—"}</li>
+              <li><span className="text-[var(--muted)]">GSC:</span> {summary(latest?.gsc)}</li>
+              <li><span className="text-[var(--muted)]">CWV:</span> {summary(latest?.cwv)}</li>
             </ul>
           </Card>
         </div>
@@ -77,14 +77,16 @@ export default function PageWorkspace() {
         </Card>
       )}
 
-      {["Search", "Content", "Links", "Technical"].includes(tab) && (
-        <Card title={tab}>
-          <p className="text-sm text-[var(--muted)]">A ser implementado nesta fase (F8).</p>
-        </Card>
-      )}
+      {tab === "Search" && <Card title="Search"><p className="text-sm">{latest?.gsc ? summary(latest.gsc) : "Search Console não forneceu dados nesta captura; isso não representa zero."}</p></Card>}
+      {tab === "Content" && <Card title="Conteúdo"><dl className="space-y-2 text-sm"><Row label="Título" value={latest?.title || "não capturado"} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /><Row label="Hash de conteúdo" value={latest?.content_hash || "não capturado"} /></dl></Card>}
+      {tab === "Links" && <Card title="Links"><p className="text-sm text-[var(--muted)]">Não há evidência de links associada a esta captura. Uma análise posterior poderá preencher esta área; ausência não equivale a ausência de links.</p></Card>}
+      {tab === "Technical" && <Card title="SEO técnico"><dl className="space-y-2 text-sm"><Row label="Status HTTP" value={String(latest?.status_code ?? "não capturado")} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /></dl></Card>}
     </div>
   );
 }
+
+function summary(value: Record<string, unknown> | null | undefined) { return value ? Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join(" · ") : "não capturado"; }
+function Row({ label, value }: { label: string; value: string }) { return <div className="flex justify-between gap-4"><dt className="text-[var(--muted)]">{label}</dt><dd className="max-w-[60%] truncate">{value}</dd></div>; }
 
 function healthyTone(status: number): "success" | "warning" | "danger" {
   if (status >= 400) return "danger";

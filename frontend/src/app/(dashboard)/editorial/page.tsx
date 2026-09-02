@@ -1,44 +1,26 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { api, ApiError, Opportunity } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { api, ApiError } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
+import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
+import { Drawer } from "@/design-system/drawer";
 
-const COLUMNS = ["proposed", "approved", "published", "measured"] as const;
+type EditorialItem = { id: string; type: string; title: string; intent: string; evidence: string; related_urls: string[]; recommendation: string; duplication_risk: string; score: number | null; status: string; published_url: string; responsible: string };
+const COLUMNS = [["proposed", "Propostas"], ["approved", "Aprovadas"], ["published", "Publicadas"], ["measured", "Medidas"]] as const;
 
 export default function EditorialPage() {
-  const { data, error, isLoading } = useQuery({
-    queryKey: ["editorial", "backlog"],
-    queryFn: () => api.get<{ work_items: Opportunity[] }>("/work-items?source=backlog&limit=200"),
-  });
-
-  if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
-  if (error) return <div className="text-sm text-[var(--danger)]">{(error as ApiError).message}</div>;
-
-  const items = data!.work_items;
-  return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-      {COLUMNS.map((col) => {
-        const colItems = items.filter((i) => i.status === col);
-        return (
-          <Card key={col} title={`${col} (${colItems.length})`}>
-            <ul className="space-y-2">
-              {colItems.map((item) => (
-                <li key={item.id} className="rounded-md border border-[var(--border)] p-2 text-sm">
-                  <div className="truncate font-medium">{item.title || item.id}</div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-[var(--muted)]">
-                    <span>{item.type}</span>
-                    <span className="tabular-nums">{String(item.score ?? "—")}</span>
-                  </div>
-                </li>
-              ))}
-              {colItems.length === 0 && <li className="text-sm text-[var(--muted)]">Vazio.</li>}
-            </ul>
-          </Card>
-        );
-      })}
-      {items.length === 0 && <div className="text-sm text-[var(--muted)]">Nenhuma pauta no backlog.</div>}
-    </div>
-  );
+  const [selected, setSelected] = useState<EditorialItem | null>(null);
+  const [publishedUrl, setPublishedUrl] = useState("");
+  const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
+  const items = useQuery({ queryKey: ["editorial"], queryFn: () => api.get<{ items: EditorialItem[] }>("/editorial?limit=200") });
+  const transition = useMutation({ mutationFn: ({ id, action }: { id: string; action: string }) => api.post<{ ok: boolean }>(`/editorial/${id}/${action}`, action === "publish" ? { published_url: publishedUrl } : {}, me.data?.csrf_token), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["editorial"] }); setSelected(null); } });
+  if (items.isLoading) return <p className="text-sm text-[var(--muted)]">Carregando pipeline editorial…</p>;
+  if (items.error) return <p className="text-sm text-[var(--danger)]">{(items.error as ApiError).message}</p>;
+  const canReview = me.data?.user.permissions.includes("editorial.review") ?? false;
+  const canPublish = me.data?.user.permissions.includes("editorial.publish_confirm") ?? false;
+  return <div className="space-y-4"><p className="max-w-2xl text-sm text-[var(--muted)]">Sugestões permanecem sob controle humano: a publicação exige confirmação e uma URL publicada; medição só ocorre depois.</p><div className="grid gap-4 lg:grid-cols-4">{COLUMNS.map(([status, title]) => { const cards = items.data?.items.filter((item) => item.status === status) ?? []; return <Card key={status} title={`${title} (${cards.length})`}><ul className="space-y-2">{cards.map((item) => <li key={item.id}><button onClick={() => { setSelected(item); setPublishedUrl(item.published_url); }} className="w-full rounded-md border border-[var(--border)] p-3 text-left hover:bg-[var(--surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><div className="truncate font-medium">{item.title}</div><div className="mt-1 flex justify-between text-xs text-[var(--muted)]"><span>{item.type}</span><span>{item.score ?? "—"}</span></div></button></li>)}{!cards.length && <li className="text-sm text-[var(--muted)]">Sem itens.</li>}</ul></Card>; })}</div>{selected && <Drawer title="Brief editorial" onClose={() => setSelected(null)}><div className="flex justify-between gap-3"><div><Badge tone="warning">{selected.status}</Badge><h2 className="mt-2 text-lg font-semibold">{selected.title}</h2></div><Button size="sm" variant="ghost" onClick={() => setSelected(null)}>Fechar</Button></div><section className="mt-5 space-y-3 text-sm"><p><strong>Intenção:</strong> {selected.intent || "não identificada"}</p><p><strong>Evidência:</strong> {selected.evidence || "não disponível"}</p><p><strong>Recomendação:</strong> {selected.recommendation || "não disponível"}</p><p><strong>Risco de duplicação:</strong> {selected.duplication_risk || "não informado"}</p><p><strong>Páginas relacionadas:</strong> {selected.related_urls.length ? selected.related_urls.join(", ") : "nenhuma"}</p></section><div className="mt-6 border-t border-[var(--border)] pt-4">{selected.status === "proposed" && <div className="flex gap-2"><Button variant="secondary" disabled={!canReview || transition.isPending} onClick={() => transition.mutate({ id: selected.id, action: "reject" })}>Rejeitar</Button><Button variant="secondary" disabled={!canReview || transition.isPending} onClick={() => transition.mutate({ id: selected.id, action: "snooze" })}>Adiar</Button><Button disabled={!canReview || transition.isPending} onClick={() => transition.mutate({ id: selected.id, action: "approve" })}>Aprovar</Button></div>}{selected.status === "approved" && <div><label className="text-sm">URL publicada<input value={publishedUrl} onChange={(event) => setPublishedUrl(event.target.value)} placeholder="https://…" className="mt-1 block h-9 w-full rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3" /></label><Button className="mt-3" disabled={!canPublish || !publishedUrl || transition.isPending} onClick={() => transition.mutate({ id: selected.id, action: "publish" })}>Confirmar publicação</Button></div>}{selected.status === "published" && <Button disabled={!canPublish || transition.isPending} onClick={() => transition.mutate({ id: selected.id, action: "measure" })}>Iniciar medição</Button>}{transition.error && <p className="mt-3 text-sm text-[var(--danger)]">{(transition.error as ApiError).message}</p>}</div></Drawer>}</div>;
 }

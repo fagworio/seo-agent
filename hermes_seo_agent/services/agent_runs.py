@@ -58,6 +58,39 @@ class AgentRunService:
                              level="info", message=f"execução iniciada ({trigger})")
         return run_id
 
+    def queue_run(
+        self,
+        agent: str,
+        *,
+        intent: str | None = None,
+        mode: str | None = None,
+        started_by: str | None = None,
+        description: str = "",
+    ) -> int:
+        """Persist a human request for a worker to execute.
+
+        The control plane must not pretend that creating a row has executed
+        Hermes.  A worker claims this queued run and transitions it to running.
+        """
+        if mode not in {None, "analyze", "safe_fix"}:
+            raise AgentRunError(f"mode inválido: {mode}")
+        agent_id = self.register_agent(agent, description)
+        run_id = self.store.create_run(
+            agent_id=agent_id, status="queued", trigger="manual",
+            intent=intent, mode=mode, started_by=started_by, now=self._now(),
+        )
+        self.store.add_event(run_id, now=self._now(), event="RUN_QUEUED",
+                             level="info", message="execução solicitada; aguardando worker")
+        return run_id
+
+    def claim_queued_run(self, agent: str, *, intent: str | None = None) -> int | None:
+        run = self.store.claim_queued_run(agent=agent, intent=intent)
+        if run is None:
+            return None
+        self.store.add_event(run["id"], now=self._now(), event="RUN_STARTED",
+                             level="info", message="execução iniciada pelo worker")
+        return int(run["id"])
+
     def log(self, run_id: int, event: str, *, level: str = "info",
             message: str | None = None, detail: dict | None = None) -> None:
         self.store.add_event(run_id, now=self._now(), event=event, level=level,

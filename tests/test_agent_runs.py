@@ -110,6 +110,18 @@ def test_run_list_and_running(tmp_path):
     storage.close()
 
 
+def test_queued_manual_run_is_claimed_by_compatible_worker(tmp_path):
+    storage, svc, _ = _make(tmp_path / "queued.db")
+    run_id = svc.queue_run("hermes-seo-agent", intent="technical", mode="analyze",
+                           started_by="operator@x.com")
+    assert svc.get_run(run_id)["status"] == "queued"
+    assert svc.claim_queued_run("hermes-seo-agent", intent="technical") == run_id
+    run = svc.get_run(run_id)
+    assert run["status"] == "running"
+    assert any(event["event"] == "RUN_STARTED" for event in run["events"])
+    storage.close()
+
+
 def test_invalid_inputs_rejected(tmp_path):
     storage, svc, _ = _make(tmp_path / "g.db")
     with pytest.raises(AgentRunError):

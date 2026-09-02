@@ -143,6 +143,14 @@ def test_unknown_route_404(tmp_path):
     storage.close()
 
 
+def test_health_is_public_and_checks_storage(tmp_path):
+    storage, r = _router(tmp_path / "health.db")
+    response = r.handle(_req("GET", "/api/v1/health"))
+    assert response.status == 200
+    assert response.body == {"status": "ok"}
+    storage.close()
+
+
 def test_cookie_name_respects_security_mode():
     from hermes_seo_agent.api.http import session_cookie_name
     prod = SimpleNamespace(session_cookie_name="__Host-seo_session", session_cookie_secure=True)
@@ -237,4 +245,37 @@ def test_action_execute_requires_safe_fix_perm_and_reauth(tmp_path):
     clock.advance(901)
     stale = r.handle(_req("POST", "/api/v1/actions/fp1/execute", body={}, cookie=cookie, csrf=csrf))
     assert stale.status == 403 and stale.body["error"]["code"] == "REAUTH_REQUIRED"
+    storage.close()
+
+
+def test_agent_run_can_be_queued_and_cancelled_with_permissions(tmp_path):
+    storage, r = _router(tmp_path / "runs.db")
+    r.auth.create_user("op@x.com", "O", PWD, ["operator"])
+    _, token = _login(r, "op@x.com", PWD)
+    cookie = f"__Host-seo_session={token}"
+    csrf = r.handle(_req("GET", "/api/v1/auth/me", cookie=cookie)).body["csrf_token"]
+    queued = r.handle(_req("POST", "/api/v1/runs", body={
+        "intent": "technical", "mode": "analyze"}, cookie=cookie, csrf=csrf))
+    assert queued.status == 202
+    assert queued.body["run"]["status"] == "queued"
+    run_id = queued.body["run"]["id"]
+    cancelled = r.handle(_req("POST", f"/api/v1/runs/{run_id}/cancel", body={},
+                              cookie=cookie, csrf=csrf))
+    assert cancelled.status == 200
+    assert cancelled.body["run"]["status"] == "cancelled"
+    storage.close()
+
+
+def test_editorial_transition_requires_published_url(tmp_path):
+    storage, r = _router(tmp_path / "editorial.db")
+    storage.conn.execute("INSERT INTO editorial_backlog (pauta_type, title, status, created_at) VALUES ('post', 'Guia', 'proposed', '2026-01-01')")
+    storage.conn.commit()
+    r.auth.create_user("editor@x.com", "E", PWD, ["editor"])
+    _, token = _login(r, "editor@x.com", PWD)
+    cookie = f"__Host-seo_session={token}"
+    csrf = r.handle(_req("GET", "/api/v1/auth/me", cookie=cookie)).body["csrf_token"]
+    approved = r.handle(_req("POST", "/api/v1/editorial/backlog:1/approve", body={}, cookie=cookie, csrf=csrf))
+    assert approved.status == 200
+    denied = r.handle(_req("POST", "/api/v1/editorial/backlog:1/publish", body={}, cookie=cookie, csrf=csrf))
+    assert denied.status == 400
     storage.close()

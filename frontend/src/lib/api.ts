@@ -112,6 +112,11 @@ export interface Opportunity {
   score: number | null;
   recommendation: string;
   evidence: string;
+  // campos de decisão humana — o backend deve expor via DTO (ver TODO abaixo);
+  // opcionais p/ não quebrar a UI até o enriquecimento do OpportunityFeedService.
+  action_class?: "observe" | "safe_fix" | "approval_required" | string;
+  risk?: string;
+  rollback_available?: boolean;
 }
 
 export interface AgentRun {
@@ -193,6 +198,8 @@ export interface PageHistoryEntry {
   meta_robots: string;
   cwv: Record<string, unknown> | null;
   gsc: Record<string, unknown> | null;
+  canonical: string;
+  content_hash: string | null;
 }
 
 export interface Finding {
@@ -284,3 +291,10 @@ export interface Experiment {
   windows: Record<string, boolean>;
   measurement_state: string;
 }
+
+// Contrato OpenAPI gerado: o schema tipado oficial vem de
+// `npm run generate:api` (src/api/generated/schema.d.ts). Os DTOs ricos acima
+// são migrados incrementalmente para os schemas gerados conforme os modelos
+// Pydantic do backend são ampliados; enquanto isso, `components` já expõe o
+// contrato OpenAPI para uso direto.
+export type { components, paths } from "../api/generated/schema";

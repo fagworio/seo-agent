@@ -1,17 +1,20 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, ApiError, RunDetail } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
+import { Button } from "@/design-system/button";
 
 const TABS = ["Summary", "Stages", "Results", "Changes", "Logs"] as const;
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<(typeof TABS)[number]>("Summary");
+  const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["run", id],
@@ -22,6 +25,11 @@ export default function RunDetailPage() {
       return status === "queued" || status === "running" ? 3000 : false;
     },
   });
+  const cancel = useMutation({
+    mutationFn: () => api.post<{ ok: boolean }>(`/runs/${id}/cancel`, {}, me.data?.csrf_token),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["run", id] }),
+  });
+  const canCancel = me.data?.user.permissions.includes("agent.cancel") ?? false;
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
   if (error) return <div className="text-sm text-[var(--danger)]">{(error as ApiError).message}</div>;
@@ -46,7 +54,9 @@ export default function RunDetailPage() {
         {run.duration_ms != null && (
           <span className="text-sm text-[var(--muted)]">{run.duration_ms / 1000}s</span>
         )}
+        {(run.status === "queued" || run.status === "running") && <Button variant="secondary" size="sm" onClick={() => cancel.mutate()} disabled={!canCancel || cancel.isPending}>{cancel.isPending ? "Cancelando…" : "Cancelar execução"}</Button>}
       </div>
+      {cancel.error && <p className="text-sm text-[var(--danger)]">{(cancel.error as ApiError).message}</p>}
 
       <div className="flex gap-1 overflow-x-auto">
         {TABS.map((t) => (

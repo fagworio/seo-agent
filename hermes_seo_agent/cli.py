@@ -459,9 +459,13 @@ def _record_agent_run(config: Any, result: dict[str, Any], *, cycle_id: str,
         from .services.agent_runs import AgentRunService
         with Storage(config.sqlite_path) as storage:
             svc = AgentRunService(storage)
-            run_id = svc.start_run("hermes-seo-agent", trigger="schedule",
-                                   intent=intent, mode=mode,
-                                   started_by=config.app_user or "system")
+            # Uma solicitação manual pendente é assumida pelo próximo ciclo
+            # compatível; sem solicitação, registramos o ciclo agendado normal.
+            run_id = svc.claim_queued_run("hermes-seo-agent", intent=intent)
+            if run_id is None:
+                run_id = svc.start_run("hermes-seo-agent", trigger="schedule",
+                                       intent=intent, mode=mode,
+                                       started_by=config.app_user or "system")
             findings = result.get("findings", [])
             safe_actions = result.get("safe_actions", [])
             approval = result.get("approval_required", [])
@@ -3886,25 +3890,23 @@ def _cmd_today(args: argparse.Namespace, config: Any) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace, config: Any) -> int:
-    """Control plane: serva /api/v1/* sobre HTTP (stdlib).
-
-    Usa uma Storage/Router por request (conexão SQLite no próprio thread do
-    ThreadingHTTPServer). Quando o ambiente tiver FastAPI (ADR-0009), este
-    comando é substituído por uvicorn + o mesmo Router.
-    """
-    from .api import make_router_factory
-    from .api.server import make_server
-
-    factory = make_router_factory(config.sqlite_path, config)
-    server = make_server(factory, host=args.host, port=args.port)
-    print(json.dumps({"status": "running", "host": args.host, "port": args.port},
-                     ensure_ascii=False))
+    """Serve the control plane with FastAPI/Uvicorn when available."""
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+        import uvicorn
+        from .api.fastapi_app import create_app
+        uvicorn.run(create_app(config.sqlite_path, config), host=args.host, port=args.port)
+    except ImportError:
+        # Explicit compatibility fallback for constrained local environments.
+        from .api import make_router_factory
+        from .api.server import make_server
+        server = make_server(make_router_factory(config.sqlite_path, config), host=args.host, port=args.port)
+        print(json.dumps({"status": "running", "transport": "stdlib", "host": args.host, "port": args.port}, ensure_ascii=False))
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
     return 0
 
 

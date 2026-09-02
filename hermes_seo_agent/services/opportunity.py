@@ -32,6 +32,9 @@ class OpportunityDTO:
     gsc_metrics: dict[str, Any] = field(default_factory=dict)
     ga4_metrics: dict[str, Any] = field(default_factory=dict)
     measurement_state: str = "not_measurable"
+    action_class: str = "approval_required"
+    risk: str = "review_required"
+    rollback_available: bool = False
     created_at: str = ""
     updated_at: str = ""
 
@@ -44,6 +47,8 @@ class OpportunityDTO:
             "acceptance_criteria": self.acceptance_criteria,
             "gsc_metrics": self.gsc_metrics, "ga4_metrics": self.ga4_metrics,
             "measurement_state": self.measurement_state,
+            "action_class": self.action_class, "risk": self.risk,
+            "rollback_available": self.rollback_available,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
 

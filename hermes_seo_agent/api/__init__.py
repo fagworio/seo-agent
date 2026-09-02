@@ -7,6 +7,7 @@ from typing import Any
 
 from .http import HttpRequest, HttpResponse
 from .router import Router
+from .fastapi_app import create_app
 
 
 def create_router(storage: Any, config: Any) -> Router:
@@ -28,4 +29,4 @@ def handle(request: HttpRequest, storage: Any, config: Any) -> HttpResponse:
 
 
 __all__ = ["Router", "HttpRequest", "HttpResponse", "create_router",
-           "make_router_factory", "handle"]
+           "make_router_factory", "handle", "create_app"]

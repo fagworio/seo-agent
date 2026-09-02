@@ -51,6 +51,7 @@ class Router:
     def _register(self) -> None:
         a = self._add
         # público (sem sessão)
+        a("GET", "/api/v1/health", self._health, public=True)
         a("POST", "/api/v1/auth/login", self._login, public=True, rate_limit=True)
         a("POST", "/api/v1/auth/mfa/verify", self._mfa_verify, public=True, rate_limit=True)
         a("POST", "/api/v1/auth/forgot-password", self._forgot, public=True, rate_limit=True)
@@ -76,9 +77,13 @@ class Router:
         a("GET", "/api/v1/integrations", self._integrations, perm="integration.read")
         a("GET", "/api/v1/activity", self._activity, perm="audit.read")
         a("GET", "/api/v1/experiments", self._experiments, perm="experiment.read")
+        a("GET", "/api/v1/editorial", self._editorial, perm="editorial.read")
+        a("POST", "/api/v1/editorial/{id}/{action}", self._transition_editorial, perm="editorial.review", csrf=True)
         a("GET", "/api/v1/agents", self._agents, perm="agent.read")
         a("GET", "/api/v1/runs", self._runs_list, perm="agent.read")
+        a("POST", "/api/v1/runs", self._queue_run, perm="agent.run", csrf=True)
         a("GET", "/api/v1/runs/{id}", self._run_detail, perm="agent.read")
+        a("POST", "/api/v1/runs/{id}/cancel", self._cancel_run, perm="agent.cancel", csrf=True)
 
     # -- roteamento ----------------------------------------------------------
     def handle(self, request: HttpRequest, request_id: str | None = None) -> HttpResponse:
@@ -147,6 +152,13 @@ class Router:
         return self.auth.validate_session(token)
 
     # -- handlers ------------------------------------------------------------
+    def _health(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        try:
+            self.storage.conn.execute("SELECT 1").fetchone()
+            return HttpResponse.json(200, {"status": "ok"})
+        except Exception:
+            return HttpResponse.json(503, {"status": "degraded"})
+
     def _login(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         body = request._json_body or {}
         email = body.get("email", "")
@@ -320,6 +332,24 @@ class Router:
         return HttpResponse.json(200, {"experiments": self.control.experiments(
             limit=int(request.query.get("limit", "100")))})
 
+    def _editorial(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        return HttpResponse.json(200, {"items": self.control.editorial_items(
+            status=request.query.get("status") or None, limit=int(request.query.get("limit", "200")))})
+
+    def _transition_editorial(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        action = params["action"]
+        if action not in {"approve", "reject", "snooze", "publish", "measure"}:
+            raise NotFound("Ação editorial não encontrada.")
+        status = {"approve": "approved", "reject": "rejected", "snooze": "snoozed", "publish": "published", "measure": "measured"}[action]
+        body = request._json_body or {}
+        if action in {"publish", "measure"} and "editorial.publish_confirm" not in request._session.permissions:
+            raise Forbidden()
+        result = self.control.transition_editorial(params["id"], status, actor=request._session.email,
+                                                  published_url=body.get("published_url", ""), reason=body.get("reason", ""))
+        if result is None:
+            raise BadRequest("Transição editorial inválida ou dados obrigatórios ausentes.")
+        return HttpResponse.json(200, {"ok": True, "item": result})
+
     def _agents(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"agents": self.runs.list_agents()})
 
@@ -335,6 +365,33 @@ class Router:
         if run is None:
             raise NotFound("Execução não encontrada.")
         return HttpResponse.json(200, {"run": run})
+
+    def _queue_run(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        body = request._json_body or {}
+        intent = body.get("intent") or "normal_cycle"
+        mode = body.get("mode") or "analyze"
+        if intent not in {"normal_cycle", "technical", "sitemap_indexing", "opportunities", "content", "specific_url"}:
+            raise BadRequest("Intenção de execução inválida.")
+        if mode not in {"analyze", "safe_fix"}:
+            raise BadRequest("Modo de execução inválido.")
+        session = request._session
+        run_id = self.runs.queue_run(
+            "hermes-seo-agent", intent=intent, mode=mode, started_by=session.email,
+            description="Hermes SEO Agent",
+        )
+        self.storage.log_audit(session.email, "AGENT_RUN_QUEUED", str(run_id),
+                               {"intent": intent, "mode": mode}, {"status": "queued"})
+        return HttpResponse.json(202, {"ok": True, "run": self.runs.get_run(run_id)})
+
+    def _cancel_run(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        try:
+            run = self.runs.cancel(int(params["id"]))
+        except Exception:
+            raise NotFound("Execução não encontrada.")
+        session = request._session
+        self.storage.log_audit(session.email, "AGENT_RUN_CANCELLED", str(run["id"]),
+                               {}, {"status": run["status"]})
+        return HttpResponse.json(200, {"ok": True, "run": run})
 
     def _session_response(self, payload: dict[str, Any], token: str | None):
         resp = HttpResponse.json(200, payload)

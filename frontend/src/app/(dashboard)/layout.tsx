@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const NAV = [
   { href: "/today", label: "Hoje" },
@@ -16,7 +17,7 @@ const NAV = [
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-[var(--background)]">
-      <aside className="w-56 shrink-0 border-r border-[var(--border)] bg-[var(--surface)]">
+      <aside className="hidden w-56 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] md:block">
         <div className="flex h-14 items-center px-4 text-sm font-semibold">SEO Agent</div>
         <nav className="space-y-0.5 px-2">
           {NAV.map((item) => (
@@ -35,9 +36,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="text-sm font-medium text-[var(--muted)]">Control Center</div>
           <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
             <span>unicorniohater.com.br</span>
+            <ThemeToggle />
           </div>
         </header>
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
       </div>
     </div>
   );

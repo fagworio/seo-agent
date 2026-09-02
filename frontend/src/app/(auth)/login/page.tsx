@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, LoginResponse } from "@/lib/api";
 import { Button } from "@/design-system/button";
 import { Input } from "@/design-system/input";
+import Link from "next/link";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -77,13 +78,16 @@ export default function LoginPage() {
             <div className="text-sm text-[var(--muted)]">
               Insira o código do seu aplicativo autenticador.
             </div>
+            <label className="block text-sm font-medium">Código de verificação
             <Input
+              className="mt-1"
               inputMode="numeric"
               maxLength={6}
               placeholder="000000"
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
             />
+            </label>
             {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
             <Button type="submit" disabled={loading} className="w-full">
               {loading ? "Verificando..." : "Confirmar"}
@@ -117,6 +121,7 @@ export default function LoginPage() {
             <Button type="submit" disabled={loading} className="w-full">
               {loading ? "Entrando..." : "Entrar"}
             </Button>
+            <Link className="block text-center text-sm text-[var(--primary)]" href="/forgot-password">Esqueci minha senha</Link>
           </form>
         )}
       </div>

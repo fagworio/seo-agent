@@ -284,6 +284,37 @@ class ControlPlaneService:
             })
         return out
 
+    def editorial_items(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Editorial backlog as a product board, preserving the native workflow."""
+        sql = ("SELECT id, pauta_type, title, intent, evidence, related_urls_json, scope, "
+               "duplication_risk, score, status, created_at, published_url, baseline_json, "
+               "responsible, deadline FROM editorial_backlog WHERE 1=1")
+        params: list[Any] = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY score DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self.storage.conn.execute(sql, params).fetchall()
+        return [{"id": f"backlog:{r[0]}", "type": r[1], "title": r[2] or "",
+                 "intent": r[3] or "", "evidence": r[4] or "",
+                 "related_urls": self._json(r[5]) or [], "recommendation": r[6] or "",
+                 "duplication_risk": r[7] or "", "score": r[8], "status": r[9],
+                 "created_at": r[10] or "", "published_url": r[11] or "",
+                 "baseline": self._json(r[12]) or {}, "responsible": r[13] or "",
+                 "deadline": r[14] or ""} for r in rows]
+
+    def transition_editorial(self, item_id: str, status: str, *, actor: str,
+                             published_url: str = "", reason: str = "") -> dict[str, Any] | None:
+        source, _, key = item_id.partition(":")
+        if source != "backlog" or not key.isdigit():
+            return None
+        if not self.storage.transition_backlog(int(key), status, published_url=published_url, reason=reason):
+            return None
+        self.storage.log_audit(actor, f"EDITORIAL_{status.upper()}", item_id,
+                               {"published_url": published_url}, {"status": status})
+        return {"id": item_id, "status": status}
+
     def _page_health(self, status_code: int | None, meta_robots: str | None) -> str:
         if status_code is not None and status_code >= 400:
             return "error"

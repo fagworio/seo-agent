@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, Correction, TechnicalFinding } from "@/lib/api";
 import { fmt, fmtNum, num, pct } from "@/lib/format";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
 import { Input } from "@/design-system/input";
+import { Drawer as AccessibleDrawer } from "@/design-system/drawer";
 
 type SortKey = "potential" | "impressions" | "severity" | "recent";
 
@@ -24,6 +25,8 @@ export default function TechnicalPage() {
   const [selected, setSelected] = useState<TechnicalFinding | null>(null);
   const [view, setView] = useState<"problems" | "corrections">("problems");
   const [selCorrection, setSelCorrection] = useState<Correction | null>(null);
+  const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["findings", sort],
@@ -34,7 +37,11 @@ export default function TechnicalPage() {
     queryFn: () => api.get<{ corrections: Correction[] }>("/actions?limit=200"),
   });
 
-  const all = data?.findings ?? [];
+  const all = useMemo(() => data?.findings ?? [], [data?.findings]);
+  const approveFix = useMutation({
+    mutationFn: (fingerprint: string) => api.post<{ ok: boolean; approved: boolean; dry_run: boolean }>(`/actions/${fingerprint}/execute`, {}, me.data?.csrf_token),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["corrections"] }),
+  });
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -176,22 +183,26 @@ export default function TechnicalPage() {
           selected={selCorrection}
           onSelect={setSelCorrection}
           onClose={() => setSelCorrection(null)}
+          canExecute={me.data?.user.permissions.includes("technical.safe_fix") ?? false}
+          executing={approveFix.isPending}
+          result={approveFix.data}
+          error={approveFix.error}
+          onApprove={(fingerprint) => approveFix.mutate(fingerprint)}
         />
       )}
 
-      {selected && <Drawer finding={selected} onClose={() => setSelected(null)} />}
+      {selected && <FindingDrawer finding={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }
 
-function Drawer({ finding, onClose }: { finding: TechnicalFinding; onClose: () => void }) {
+function FindingDrawer({ finding, onClose }: { finding: TechnicalFinding; onClose: () => void }) {
   const f = finding;
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/20" onClick={onClose}>
-      <div className="h-full w-full max-w-lg overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-6" onClick={(e) => e.stopPropagation()}>
+    <AccessibleDrawer title={f.rule.label} onClose={onClose}>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{f.rule.label}</h2>
-          <button onClick={onClose} className="text-[var(--muted)]">✕</button>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Fechar detalhe">Fechar</Button>
         </div>
         <div className="mb-4 flex items-center gap-2">
           <Badge tone={TONES[f.severity] ?? "neutral"}>{f.severity}</Badge>
@@ -277,13 +288,13 @@ function Drawer({ finding, onClose }: { finding: TechnicalFinding; onClose: () =
           </div>
           {f.rule.suggested_action && <p className="mt-1 text-sm text-[var(--muted)]">Recomendação: {f.rule.suggested_action}.</p>}
         </Section>
-      </div>
-    </div>
+    </AccessibleDrawer>
   );
 }
 
-function CorrectionsView({ items, selected, onSelect, onClose }: {
+function CorrectionsView({ items, selected, onSelect, onClose, canExecute, executing, result, error, onApprove }: {
   items: Correction[]; selected: Correction | null; onSelect: (c: Correction) => void; onClose: () => void;
+  canExecute: boolean; executing: boolean; result: { ok: boolean; approved: boolean; dry_run: boolean } | undefined; error: Error | null; onApprove: (fingerprint: string) => void;
 }) {
   return (
     <>
@@ -307,11 +318,10 @@ function CorrectionsView({ items, selected, onSelect, onClose }: {
       </div>
 
       {selected && (
-        <div className="fixed inset-0 z-40 flex justify-end bg-black/20" onClick={onClose}>
-          <div className="h-full w-full max-w-lg overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-6" onClick={(e) => e.stopPropagation()}>
+        <AccessibleDrawer title={`Safe fix ${selected.rule_id}`} onClose={onClose}>
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Safe fix · {selected.rule_id}</h2>
-              <button onClick={onClose} className="text-[var(--muted)]">✕</button>
+              <Button variant="ghost" size="sm" onClick={onClose} aria-label="Fechar preview">Fechar</Button>
             </div>
             <div className="mb-2 text-xs text-[var(--muted)]">{selected.url}</div>
             <div className="mb-4 grid gap-4 md:grid-cols-2">
@@ -328,9 +338,12 @@ function CorrectionsView({ items, selected, onSelect, onClose }: {
               <div className="mb-1 text-xs font-medium text-[var(--muted)]">Rollback</div>
               <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--muted)]">{JSON.stringify(selected.rollback ?? {}, null, 2)}</pre>
             </div>
-            <p className="text-xs text-[var(--muted)]">Exige permissão technical.safe_fix + reautenticação para execução (nunca automática).</p>
-          </div>
-        </div>
+            <p className="mb-3 text-xs text-[var(--muted)]">A aprovação exige a permissão technical.safe_fix e reautenticação. O worker executará conforme dry-run, idempotência e blast radius.</p>
+            <Button onClick={() => onApprove(selected.fingerprint)} disabled={!canExecute || executing || selected.status === "executed"}>{executing ? "Aprovando…" : "Aprovar execução"}</Button>
+            {!canExecute && <p className="mt-2 text-xs text-[var(--muted)]">Você não possui permissão para aprovar esta correção.</p>}
+            {result && <p className="mt-2 text-sm text-[var(--success)]">Aprovação registrada{result.dry_run ? " em dry-run" : ""}. O worker fará a execução e verificação.</p>}
+            {error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}
+        </AccessibleDrawer>
       )}
     </>
   );

@@ -120,8 +120,34 @@ class AgentStore:
         return self.get_run(row[0]) if row else None
 
     def set_run_started(self, run_id: int) -> None:
-        # runs começam 'queued'; transição para running é feita via update da status
-        pass
+        self.conn.execute("UPDATE agent_runs SET status = 'running' WHERE id = ? AND status = 'queued'", (run_id,))
+        self.conn.commit()
+
+    def claim_queued_run(self, *, agent: str, intent: str | None) -> dict[str, Any] | None:
+        """Claim the oldest compatible manual request for the scheduler.
+
+        SQLite's immediate transaction prevents two workers from claiming the
+        same request.
+        """
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            sql = ("SELECT r.id FROM agent_runs r JOIN agents a ON a.id = r.agent_id "
+                   "WHERE r.status = 'queued' AND r.trigger = 'manual' AND a.name = ?")
+            params: list[Any] = [agent]
+            if intent:
+                sql += " AND r.intent = ?"
+                params.append(intent)
+            sql += " ORDER BY r.id LIMIT 1"
+            row = self.conn.execute(sql, params).fetchone()
+            if not row:
+                self.conn.commit()
+                return None
+            self.conn.execute("UPDATE agent_runs SET status = 'running' WHERE id = ?", (row[0],))
+            self.conn.commit()
+            return self.get_run(int(row[0]))
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def update_run_status(self, run_id: int, *, status: str, finished_at: str | None = None,
                           duration_ms: int | None = None, summary: dict | None = None,

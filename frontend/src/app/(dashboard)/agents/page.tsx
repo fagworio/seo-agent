@@ -1,12 +1,18 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useState } from "react";
 import { api, Agent, AgentRun, ApiError } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
+import { Button } from "@/design-system/button";
 
 export default function AgentsPage() {
+  const [intent, setIntent] = useState<"normal_cycle" | "technical" | "sitemap_indexing" | "opportunities" | "content" | "specific_url">("normal_cycle");
+  const [mode, setMode] = useState<"analyze" | "safe_fix">("analyze");
+  const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
   const { data, error, isLoading } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api.get<{ agents: Agent[] }>("/agents"),
@@ -14,6 +20,10 @@ export default function AgentsPage() {
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: () => api.get<{ runs: AgentRun[] }>("/runs?limit=50"),
+  });
+  const queue = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; run: AgentRun }>("/runs", { intent, mode }, me.data?.csrf_token),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runs"] }),
   });
 
   if (isLoading || runs.isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -24,12 +34,23 @@ export default function AgentsPage() {
 
   const agents = data!.agents;
   const runList = runs.data!.runs;
+  const canRun = me.data?.user.permissions.includes("agent.run") ?? false;
   const byStatus = { running: runList.filter((r) => r.status === "running" || r.status === "queued"),
                      failed: runList.filter((r) => r.status === "failed" || r.status === "partial"),
                      recent: runList.filter((r) => !["running", "queued", "failed", "partial"].includes(r.status)) };
 
   return (
     <div className="space-y-6">
+      <Card title="Solicitar execução">
+        <p className="mb-3 text-sm text-[var(--muted)]">A solicitação entra na fila; Hermes muda o estado para “em execução” quando o worker a assumir.</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm">Intenção<select value={intent} onChange={(event) => setIntent(event.target.value as typeof intent)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="normal_cycle">Ciclo normal</option><option value="technical">SEO técnico</option><option value="sitemap_indexing">Sitemap e indexação</option><option value="opportunities">Oportunidades</option><option value="content">Conteúdo</option><option value="specific_url">URL específica</option></select></label>
+          <label className="text-sm">Modo<select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="analyze">Somente analisar</option><option value="safe_fix">Gerar safe fixes</option></select></label>
+          <Button onClick={() => queue.mutate()} disabled={!canRun || queue.isPending}>{queue.isPending ? "Solicitando…" : "Solicitar execução"}</Button>
+        </div>
+        {!canRun && <p className="mt-2 text-xs text-[var(--muted)]">Você não possui a permissão para executar agentes.</p>}
+        {queue.error && <p className="mt-2 text-sm text-[var(--danger)]">{(queue.error as ApiError).message}</p>}
+      </Card>
       <div className="grid gap-4 md:grid-cols-2">
         {agents.map((agent) => (
           <Card key={agent.id} title={agent.name}>

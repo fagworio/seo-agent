@@ -21,6 +21,11 @@ services:
       - seo-state:/data
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   worker:
     build:
@@ -49,6 +54,19 @@ services:
       - api
     ports:
       - "3000:3000"
+
+  proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+    environment:
+      SEO_AGENT_HOST: ${SEO_AGENT_HOST:?configure SEO_AGENT_HOST}
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ${TLS_CERTS_PATH:?configure TLS_CERTS_PATH}:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
 
 volumes:
   seo-state:

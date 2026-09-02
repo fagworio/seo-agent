@@ -9,7 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 COPY pyproject.toml README.md ./
 COPY hermes_seo_agent ./hermes_seo_agent
 
-RUN pip install --no-cache-dir .
+# O índice corporativo do ambiente de desenvolvimento não espelha FastAPI.
+# Produção pode sobrescrever PIP_INDEX_URL no build para usar seu mirror aprovado.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --index-url "$PIP_INDEX_URL" --no-cache-dir .
 
 EXPOSE 8000
 
