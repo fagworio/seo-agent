@@ -53,11 +53,6 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         if resp.set_cookie and "header" in resp.set_cookie:
             self.send_header("Set-Cookie", resp.set_cookie["header"])
-        if resp.delete_cookie:
-            self.send_header(
-                "Set-Cookie",
-                f"{resp.delete_cookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
-            )
         self.end_headers()
         self.wfile.write(payload)
 

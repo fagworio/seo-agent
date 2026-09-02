@@ -177,8 +177,15 @@ class Router:
         token = request.cookie_value(session_cookie_name(self.config))
         if token:
             self.auth.logout(token)
+        # Deleção com os MESMOS atributos do cookie (Secure consistente); um
+        # cookie __Host- exige Secure até no Set-Cookie de remoção, senão o
+        # navegador pode rejeitar o header e deixar o cookie persistido.
+        name = session_cookie_name(self.config)
+        parts = [f"{name}=", "HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=0"]
+        if getattr(self.config, "session_cookie_secure", True):
+            parts.append("Secure")
         resp = HttpResponse.json(200, {"ok": True, "message": "Sessão encerrada."})
-        resp.delete_cookie = session_cookie_name(self.config)
+        resp.set_cookie = {"header": "; ".join(parts)}
         return resp
 
     def _forgot(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:

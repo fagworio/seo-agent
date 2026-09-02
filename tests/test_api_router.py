@@ -143,6 +143,44 @@ def test_unknown_route_404(tmp_path):
     storage.close()
 
 
+def test_cookie_name_respects_security_mode():
+    from hermes_seo_agent.api.http import session_cookie_name
+    prod = SimpleNamespace(session_cookie_name="__Host-seo_session", session_cookie_secure=True)
+    dev = SimpleNamespace(session_cookie_name="__Host-seo_session", session_cookie_secure=False)
+    assert session_cookie_name(prod) == "__Host-seo_session"
+    assert session_cookie_name(dev) == "seo_session"
+
+
+def test_logout_delete_header_consistent_with_security_mode(tmp_path):
+    # secure=False -> nome sem prefixo E header de deleção SEM Secure
+    cfg = _cfg()
+    cfg.session_cookie_secure = False
+    storage = Storage(str(tmp_path / "lo.db"))
+    r = Router(storage, cfg, hasher=PasswordHasher(n=2 ** 12))
+    r.auth.create_user("v@x.com", "V", PWD, ["viewer"])
+    _, tok = _login(r, "v@x.com", PWD)
+    cookie = f"seo_session={tok}"   # dev: nome sem __Host-
+    csrf = r.handle(_req("GET", "/api/v1/auth/me", cookie=cookie)).body["csrf_token"]
+    resp = r.handle(_req("POST", "/api/v1/auth/logout", body={}, cookie=cookie, csrf=csrf))
+    assert resp.status == 200
+    header = resp.set_cookie["header"]
+    assert header.startswith("seo_session=")
+    assert "Max-Age=0" in header
+    assert "Secure" not in header        # dev HTTP não deve exigir Secure
+
+    # secure=True -> header de deleção INCLUI Secure
+    storage2 = Storage(str(tmp_path / "lo2.db"))
+    r2 = Router(storage2, _cfg(), hasher=PasswordHasher(n=2 ** 12))
+    r2.auth.create_user("v@x.com", "V", PWD, ["viewer"])
+    _, tok2 = _login(r2, "v@x.com", PWD)
+    c2 = f"__Host-seo_session={tok2}"
+    csrf2 = r2.handle(_req("GET", "/api/v1/auth/me", cookie=c2)).body["csrf_token"]
+    resp2 = r2.handle(_req("POST", "/api/v1/auth/logout", body={}, cookie=c2, csrf=csrf2))
+    assert "Secure" in resp2.set_cookie["header"]
+    storage.close()
+    storage2.close()
+
+
 def test_work_item_decision_requires_review_perm_and_csrf(tmp_path):
     storage, r = _router(tmp_path / "w.db")
     storage.conn.execute(

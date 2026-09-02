@@ -84,7 +84,17 @@ def set_session_cookie(cookie_name: str, token: str, *, secure: bool,
 
 
 def session_cookie_name(config: Any) -> str:
-    return getattr(config, "session_cookie_name", "__Host-seo_session")
+    """Nome do cookie de sessão.
+
+    O prefixo ``__Host-`` EXIGE ``Secure`` (browsers rejeitam ``__Host-`` sem
+    Secure). Em HTTP local (``SESSION_COOKIE_SECURE=false``) usamos um nome sem
+    o prefixo (ex.: ``seo_session``), senão o navegador descarta o cookie.
+    """
+    secure = getattr(config, "session_cookie_secure", True)
+    name = getattr(config, "session_cookie_name", "__Host-seo_session")
+    if not secure and name.startswith("__Host-"):
+        return name[len("__Host-"):] or "seo_session"
+    return name
 
 
 def new_request_id() -> str:
