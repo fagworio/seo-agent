@@ -53,11 +53,13 @@ class AgentStore:
         mode: str | None,
         started_by: str | None,
         now: str,
+        target_url: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO agent_runs (agent_id, status, trigger, intent, mode, "
-            "started_by, started_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (agent_id, status, trigger, intent, mode, started_by, now, now),
+            "started_by, started_at, created_at, target_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_id, status, trigger, intent, mode, started_by, now, now, target_url),
         )
         self.conn.commit()
         return int(cur.lastrowid)
@@ -67,7 +69,8 @@ class AgentStore:
             "SELECT r.id, r.agent_id, a.name, r.status, r.trigger, r.intent, r.mode, "
             "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
             "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
-            "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at "
+            "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
+            "r.target_url "
             "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE r.id = ?",
             (run_id,),
         ).fetchone()
@@ -78,7 +81,8 @@ class AgentStore:
         sql = ("SELECT r.id, r.agent_id, a.name, r.status, r.trigger, r.intent, r.mode, "
                "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
                "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
-               "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at "
+               "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
+               "r.target_url "
                "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE 1=1")
         params: list[Any] = []
         if agent:
@@ -269,6 +273,7 @@ class AgentStore:
             "urls_analyzed": row[13], "findings_count": row[14],
             "opportunities_count": row[15], "safe_fixes_count": row[16],
             "executed_changes_count": row[17], "error": row[18], "created_at": row[19],
+            "target_url": row[20] if len(row) > 20 else None,
         }
 
     @staticmethod

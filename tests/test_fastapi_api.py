@@ -63,8 +63,8 @@ def test_fastapi_login_me_and_openapi(tmp_path):
     r = client.get("/api/v1/agents")
     assert r.status_code == 403 and r.json()["error"]["code"] == "PERMISSION_DENIED"
 
-    # OpenAPI: operationIds únicos presentes
-    openapi = client.get("/openapi.json").json()
+    # OpenAPI: operationIds únicos presentes (em /api/v1/openapi.json)
+    openapi = client.get("/api/v1/openapi.json").json()
     paths = openapi["paths"]
     assert "/api/v1/auth/login" in paths
     assert "/api/v1/dashboard/today" in paths
@@ -93,3 +93,28 @@ def test_fastapi_csrf_and_permission_on_mutation(tmp_path):
     # sem sessão (logout apagou o cookie) -> /me 401
     r = client.get("/api/v1/auth/me")
     assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_fastapi_editorial_and_run_mutations(tmp_path):
+    db = tmp_path / "api3.db"
+    _prepare(db)
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+
+    # /editorial (operator tem editorial.review)
+    r = client.get("/api/v1/editorial")
+    assert r.status_code == 200 and "editorial" in r.json()
+
+    # POST /runs com target_url (escopo por URL) — exige CSRF
+    r = client.post("/api/v1/runs", json={"intent": "url", "target_url": "https://www.unicorniohater.com.br/xbox-disc-to-digital/"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "CSRF_INVALID"
+    r = client.post("/api/v1/runs", json={"intent": "url", "target_url": "https://www.unicorniohater.com.br/xbox-disc-to-digital/"},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["target_url"] == "https://www.unicorniohater.com.br/xbox-disc-to-digital/"
+    run_id = r.json()["id"]
+
+    # POST /runs/{id}/cancel
+    r = client.post(f"/api/v1/runs/{run_id}/cancel", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"

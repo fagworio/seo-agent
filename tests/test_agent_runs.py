@@ -159,3 +159,14 @@ def test_record_agent_run_from_cli(tmp_path):
         assert run["findings_count"] == 2
         assert run["safe_fixes_count"] == 1
         assert run["intent"] == "technical"
+
+
+def test_target_url_persists_and_returns(tmp_path):
+    """Execução por URL específica: target_url enriquecida (db -> serviço -> leitura)."""
+    storage, svc, _ = _make(tmp_path / "tu.db")
+    rid = svc.start_run("hermes-seo-agent", trigger="manual", intent="url",
+                        target_url="https://www.unicorniohater.com.br/xbox-disc-to-digital/")
+    assert svc.get_run(rid)["target_url"] == "https://www.unicorniohater.com.br/xbox-disc-to-digital/"
+    rid2 = svc.start_run("hermes-seo-agent", trigger="manual", intent="technical")
+    assert svc.get_run(rid2)["target_url"] is None
+    storage.close()

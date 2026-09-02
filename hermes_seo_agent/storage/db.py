@@ -462,7 +462,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     safe_fixes_count INTEGER NOT NULL DEFAULT 0,
     executed_changes_count INTEGER NOT NULL DEFAULT 0,
     error TEXT,
-    created_at TEXT
+    created_at TEXT,
+    target_url TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status ON agent_runs(agent_id, status, id);
 CREATE TABLE IF NOT EXISTS agent_run_steps (
@@ -550,6 +551,9 @@ class Storage:
             "sessions": [
                 ("csrf_token_hash", "TEXT"),
                 ("strong_auth_at", "TEXT"),
+            ],
+            "agent_runs": [
+                ("target_url", "TEXT"),
             ],
         }
         editorial_extra = [

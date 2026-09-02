@@ -44,6 +44,7 @@ class AgentRunService:
         mode: str | None = None,
         started_by: str | None = None,
         description: str = "",
+        target_url: str | None = None,
     ) -> int:
         if trigger not in {"schedule", "manual", "system"}:
             raise AgentRunError(f"trigger inválida: {trigger}")
@@ -53,6 +54,7 @@ class AgentRunService:
         run_id = self.store.create_run(
             agent_id=agent_id, status="running", trigger=trigger,
             intent=intent, mode=mode, started_by=started_by, now=self._now(),
+            target_url=target_url,
         )
         self.store.add_event(run_id, now=self._now(), event="RUN_STARTED",
                              level="info", message=f"execução iniciada ({trigger})")

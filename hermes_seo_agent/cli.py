@@ -3893,7 +3893,7 @@ def _cmd_serve(args: argparse.Namespace, config: Any) -> int:
     """Serve the control plane with FastAPI/Uvicorn when available."""
     try:
         import uvicorn
-        from .api.fastapi_app import create_app
+        from .api.app import create_app  # API tipada (rotas/schemas/erros consistentes)
         uvicorn.run(create_app(config.sqlite_path, config), host=args.host, port=args.port)
     except ImportError:
         # Explicit compatibility fallback for constrained local environments.

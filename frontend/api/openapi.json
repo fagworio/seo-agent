@@ -286,6 +286,51 @@
         }
       }
     },
+    "/api/v1/editorial": {
+      "get": {
+        "tags": [
+          "editorial"
+        ],
+        "summary": "Editorial",
+        "operationId": "editorial_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorialEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pages": {
       "get": {
         "tags": [
@@ -650,6 +695,45 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Runs Create",
+        "operationId": "runs_create",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/runs/{id}": {
@@ -677,6 +761,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunDetailModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Runs Cancel",
+        "operationId": "runs_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunModel"
                 }
               }
             }
@@ -1353,6 +1479,17 @@
               }
             ],
             "title": "Error"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
           }
         },
         "type": "object",
@@ -1453,6 +1590,22 @@
           "fingerprint"
         ],
         "title": "CorrectionModel"
+      },
+      "EditorialEnvelope": {
+        "properties": {
+          "editorial": {
+            "items": {
+              "$ref": "#/components/schemas/OpportunityModel"
+            },
+            "type": "array",
+            "title": "Editorial"
+          }
+        },
+        "type": "object",
+        "required": [
+          "editorial"
+        ],
+        "title": "EditorialEnvelope"
       },
       "ExperimentModel": {
         "properties": {
@@ -2214,6 +2367,45 @@
         ],
         "title": "RuleModel"
       },
+      "RunCreateRequest": {
+        "properties": {
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
+          }
+        },
+        "type": "object",
+        "title": "RunCreateRequest"
+      },
       "RunDetailModel": {
         "properties": {
           "id": {
@@ -2347,6 +2539,17 @@
               }
             ],
             "title": "Error"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
           },
           "steps": {
             "items": {

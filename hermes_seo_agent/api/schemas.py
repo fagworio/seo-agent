@@ -105,6 +105,7 @@ class AgentRunModel(BaseModel):
     comparison: dict[str, Any] | None = None
     summary: dict[str, Any] | None = None
     error: str | None = None
+    target_url: str | None = None
 
 
 class RunStepModel(BaseModel):
@@ -288,6 +289,16 @@ class ExperimentsEnvelope(BaseModel):
 
 class RunsEnvelope(BaseModel):
     runs: list[AgentRunModel]
+
+
+class EditorialEnvelope(BaseModel):
+    editorial: list[OpportunityModel]
+
+
+class RunCreateRequest(BaseModel):
+    intent: str | None = None
+    mode: str | None = None
+    target_url: str | None = None
 
 
 class AgentsEnvelope(BaseModel):

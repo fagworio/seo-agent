@@ -137,6 +137,7 @@ export interface AgentRun {
   comparison: Record<string, unknown> | null;
   summary: Record<string, unknown> | null;
   error: string | null;
+  target_url?: string | null;
 }
 
 export interface IntegrationSource {

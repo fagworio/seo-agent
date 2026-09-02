@@ -51,6 +51,9 @@ export default function RunDetailPage() {
         <span className="text-sm text-[var(--muted)]">
           {run.trigger} · {run.intent ?? "-"} · iniciado por {run.started_by ?? "system"}
         </span>
+        {run.target_url && (
+          <span className="max-w-[24rem] truncate text-sm text-[var(--primary)]">Alvo: {run.target_url}</span>
+        )}
         {run.duration_ms != null && (
           <span className="text-sm text-[var(--muted)]">{run.duration_ms / 1000}s</span>
         )}

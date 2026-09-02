@@ -23,6 +23,7 @@ from .schemas import (
     ActivityEnvelope,
     AgentRunModel,
     AgentsEnvelope,
+    EditorialEnvelope,
     ExperimentsEnvelope,
     FindingsEnvelope,
     ForgotPasswordRequest,
@@ -34,6 +35,7 @@ from .schemas import (
     OkModel,
     PagesEnvelope,
     ResetPasswordRequest,
+    RunCreateRequest,
     RunDetailModel,
     RunsEnvelope,
     SessionModel,
@@ -73,9 +75,13 @@ def auth_router() -> APIRouter:
     r = APIRouter(prefix="/auth", tags=["auth"])
 
     @r.post("/login", response_model=LoginResponse, operation_id="auth_login")
-    def login(body: LoginRequest, response: Response,
+    def login(request: Request, body: LoginRequest, response: Response,
               services: Services = Depends(get_services)) -> dict[str, Any]:
-        res = services.auth.login(body.email, body.password)
+        res = services.auth.login(
+            body.email, body.password,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
         if not res.ok:
             return {"ok": False, "message": "Email ou senha inválidos."}
         if res.requires_mfa:
@@ -85,9 +91,13 @@ def auth_router() -> APIRouter:
         return {"ok": True, "user": res.user, "csrf_token": res.csrf_token}
 
     @r.post("/mfa/verify", response_model=LoginResponse, operation_id="auth_mfa_verify")
-    def mfa_verify(body: MfaVerifyRequest, response: Response,
+    def mfa_verify(request: Request, body: MfaVerifyRequest, response: Response,
                    services: Services = Depends(get_services)) -> dict[str, Any]:
-        res = services.auth.verify_mfa_login(body.user_id, body.code)
+        res = services.auth.verify_mfa_login(
+            body.user_id, body.code,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
         if not res.ok:
             return {"ok": False, "message": "Código inválido ou expirado."}
         _set_session_cookie(response, services, res.session_token or "")
@@ -177,6 +187,14 @@ def read_routers() -> list[APIRouter]:
                          operation_id=f"work_items_{action}", tags=["work-items"])
     out.append(wi)
 
+    ed = APIRouter(tags=["editorial"])
+    @ed.get("/editorial", response_model=EditorialEnvelope, operation_id="editorial_list")
+    def editorial(services: Services = Depends(get_services),
+                  session=Depends(authenticated("editorial.review")),
+                  limit: int = Query(200, ge=1, le=500)) -> dict[str, Any]:
+        return {"editorial": services.control.work_items(source="backlog", limit=limit)}
+    out.append(ed)
+
     pg = APIRouter(prefix="/pages", tags=["pages"])
     @pg.get("", response_model=PagesEnvelope, operation_id="pages_list")
     def pages(services: Services = Depends(get_services),
@@ -239,6 +257,19 @@ def read_routers() -> list[APIRouter]:
         if run is None:
             raise NotFound("Execução não encontrada.")
         return run
+
+    @runs.post("", response_model=AgentRunModel, operation_id="runs_create")
+    def runs_create(body: RunCreateRequest, services: Services = Depends(get_services),
+                    session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        run_id = services.runs.start_run("hermes-seo-agent", trigger="manual",
+                                         intent=body.intent, mode=body.mode,
+                                         started_by=session.email, target_url=body.target_url)
+        return services.runs.get_run(run_id) or {}
+
+    @runs.post("/{id}/cancel", response_model=AgentRunModel, operation_id="runs_cancel")
+    def runs_cancel(id: int, services: Services = Depends(get_services),
+                    session=Depends(authenticated("agent.cancel", csrf=True))) -> dict[str, Any]:
+        return services.runs.cancel(id)
     out.append(runs)
 
     it = APIRouter(tags=["integrations"])
@@ -269,7 +300,12 @@ def read_routers() -> list[APIRouter]:
 
 
 def create_app(*, storage_path: str, config: Any) -> FastAPI:
-    app = FastAPI(title="SEO Agent Control Center", version="0.1.0")
+    app = FastAPI(
+        title="SEO Agent Control Center",
+        version="0.1.0",
+        docs_url="/api/docs",
+        openapi_url="/api/v1/openapi.json",
+    )
     app.state.storage_path = storage_path
     app.state.config = config
     register_error_handlers(app)

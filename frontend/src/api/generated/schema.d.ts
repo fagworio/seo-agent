@@ -89,6 +89,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/editorial": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Editorial */
+        get: operations["editorial_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages": {
         parameters: {
             query?: never;
@@ -201,7 +218,8 @@ export interface paths {
         /** Runs List */
         get: operations["runs_list"];
         put?: never;
-        post?: never;
+        /** Runs Create */
+        post: operations["runs_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -219,6 +237,23 @@ export interface paths {
         get: operations["runs_detail"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Runs Cancel */
+        post: operations["runs_cancel"];
         delete?: never;
         options?: never;
         head?: never;
@@ -551,6 +586,8 @@ export interface components {
             } | null;
             /** Error */
             error?: string | null;
+            /** Target Url */
+            target_url?: string | null;
         };
         /** AgentsEnvelope */
         AgentsEnvelope: {
@@ -590,6 +627,11 @@ export interface components {
             } | null;
             /** Executed At */
             executed_at?: string | null;
+        };
+        /** EditorialEnvelope */
+        EditorialEnvelope: {
+            /** Editorial */
+            editorial: components["schemas"]["OpportunityModel"][];
         };
         /** ExperimentModel */
         ExperimentModel: {
@@ -974,6 +1016,15 @@ export interface components {
              */
             suggested_action: string;
         };
+        /** RunCreateRequest */
+        RunCreateRequest: {
+            /** Intent */
+            intent?: string | null;
+            /** Mode */
+            mode?: string | null;
+            /** Target Url */
+            target_url?: string | null;
+        };
         /** RunDetailModel */
         RunDetailModel: {
             /** Id */
@@ -1032,6 +1083,8 @@ export interface components {
             } | null;
             /** Error */
             error?: string | null;
+            /** Target Url */
+            target_url?: string | null;
             /**
              * Steps
              * @default []
@@ -1394,6 +1447,37 @@ export interface operations {
             };
         };
     };
+    editorial_list: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditorialEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     pages_list: {
         parameters: {
             query?: {
@@ -1608,6 +1692,39 @@ export interface operations {
             };
         };
     };
+    runs_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     runs_detail: {
         parameters: {
             query?: never;
@@ -1626,6 +1743,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runs_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunModel"];
                 };
             };
             /** @description Validation Error */
