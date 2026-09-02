@@ -28,6 +28,59 @@ class ControlPlaneService:
         self.opportunities = OpportunityFeedService(storage)
         self.runs = AgentRunService(storage)
 
+    # -- SEO Técnico (F9) ----------------------------------------------------
+    def technical(self, *, rule: str | None = None, limit: int = 200) -> dict[str, Any]:
+        """Separa DIAGNÓSTICO (problemas) de CORREÇÕES (ações safe_fix com preview).
+
+        Os problemas vêm dos findings determinísticos; as correções vêm das ações
+        safe_fix registradas (com before/after/rollback para preview e reversão).
+        """
+        problems_sql = ("SELECT rule_id, url, severity, detail_json, created_at, cycle_id "
+                        "FROM findings WHERE 1=1")
+        params: list[Any] = []
+        if rule:
+            problems_sql += " AND rule_id = ?"
+            params.append(rule)
+        problems_sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        problems = []
+        try:
+            for r in self.storage.conn.execute(problems_sql, params).fetchall():
+                problems.append({"rule_id": r[0], "url": r[1], "severity": r[2],
+                                 "detail": self._json(r[3]) or {}, "created_at": r[4]})
+        except Exception:
+            pass
+
+        corrections = []
+        try:
+            for r in self.storage.conn.execute(
+                "SELECT fingerprint, rule_id, url, level, status, before_json, after_json, "
+                "rollback_json, executed_at FROM actions WHERE level = 'safe_fix' "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall():
+                corrections.append({
+                    "fingerprint": r[0], "rule_id": r[1], "url": r[2], "level": r[3],
+                    "status": r[4], "before": self._json(r[5]), "after": self._json(r[6]),
+                    "rollback": self._json(r[7]), "executed_at": r[8],
+                })
+        except Exception:
+            pass
+        return {"problems": problems, "corrections": corrections}
+
+    def action_preview(self, fingerprint: str) -> dict[str, Any] | None:
+        """Preview de uma correção (before/after/rollback) — somente leitura."""
+        try:
+            r = self.storage.conn.execute(
+                "SELECT fingerprint, rule_id, url, status, before_json, after_json, "
+                "rollback_json, executed_at FROM actions WHERE fingerprint = ?",
+                (fingerprint,)).fetchone()
+        except Exception:
+            return None
+        if not r:
+            return None
+        return {"fingerprint": r[0], "rule_id": r[1], "url": r[2], "status": r[3],
+                "before": self._json(r[4]), "after": self._json(r[5]),
+                "rollback": self._json(r[6]), "executed_at": r[7]}
+
     # -- Páginas (F8) --------------------------------------------------------
     def pages(self, *, query: str = "", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Explorer de páginas: snapshot mais recente por URL + métricas."""

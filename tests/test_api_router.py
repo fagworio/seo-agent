@@ -166,3 +166,37 @@ def test_work_item_decision_requires_review_perm_and_csrf(tmp_path):
                               body={}, cookie=f"__Host-seo_session={vtok}"))
     assert forbidden.status == 403 and forbidden.body["error"]["code"] == "PERMISSION_DENIED"
     storage.close()
+
+
+def test_action_execute_requires_safe_fix_perm_and_reauth(tmp_path):
+    import json as _json
+    from datetime import datetime, timezone
+
+    class FakeClock:
+        def __init__(self): self.ts = 1_700_000_000
+        def __call__(self): return datetime.fromtimestamp(self.ts, tz=timezone.utc)
+        def advance(self, s): self.ts += s
+
+    clock = FakeClock()
+    storage, r = _router(tmp_path / "act.db", clock=clock)
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, before_json, "
+        "after_json, rollback_json, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "title", "https://x.com/a/", "safe_fix", "pending", "fp1",
+         _json.dumps({"title": "velho"}), _json.dumps({"title": "novo"}),
+         _json.dumps({"type": "wp_post_meta"}), None))
+    storage.conn.commit()
+
+    # operator tem technical.safe_fix
+    r.auth.create_user("op@x.com", "O", PWD, ["operator"])
+    _, tok = _login(r, "op@x.com", PWD)
+    cookie = f"__Host-seo_session={tok}"
+    csrf = r.handle(_req("GET", "/api/v1/auth/me", cookie=cookie)).body["csrf_token"]
+    # reauth recente (login recém-feito) -> 200
+    ok = r.handle(_req("POST", "/api/v1/actions/fp1/execute", body={}, cookie=cookie, csrf=csrf))
+    assert ok.status == 200 and ok.body["approved"] is True
+    # reauth expirada -> 403 REAUTH_REQUIRED
+    clock.advance(901)
+    stale = r.handle(_req("POST", "/api/v1/actions/fp1/execute", body={}, cookie=cookie, csrf=csrf))
+    assert stale.status == 403 and stale.body["error"]["code"] == "REAUTH_REQUIRED"
+    storage.close()

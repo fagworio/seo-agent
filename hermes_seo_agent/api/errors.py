@@ -25,6 +25,12 @@ class Forbidden(ApiError):
         super().__init__(403, "PERMISSION_DENIED", message)
 
 
+class ReauthRequired(ApiError):
+    def __init__(self) -> None:
+        super().__init__(403, "REAUTH_REQUIRED",
+                         "Ação crítica: reautentique-se (senha ou MFA) para continuar.")
+
+
 class InvalidCsrf(ApiError):
     def __init__(self) -> None:
         super().__init__(403, "CSRF_INVALID", "Token CSRF ausente ou inválido.")

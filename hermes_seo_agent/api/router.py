@@ -15,8 +15,8 @@ from ..auth.service import AuthService
 from ..services.agent_runs import AgentRunService
 from ..services.control_plane import ControlPlaneService
 from .errors import (
-    ApiError, BadRequest, Forbidden, InvalidCsrf, NotFound, TooManyRequests,
-    Unauthenticated,
+    ApiError, BadRequest, Forbidden, InvalidCsrf, NotFound, ReauthRequired,
+    TooManyRequests, Unauthenticated,
 )
 from .http import (
     HttpResponse, HttpRequest, new_request_id, parse_json_body, parse_query_string,
@@ -65,6 +65,10 @@ class Router:
         a("GET", "/api/v1/dashboard/today", self._today, perm="dashboard.read")
         a("GET", "/api/v1/pages", self._pages, perm="pages.read")
         a("GET", "/api/v1/pages/{id}/history", self._page_history, perm="pages.read")
+        a("GET", "/api/v1/findings", self._findings, perm="technical.read")
+        a("GET", "/api/v1/actions", self._corrections, perm="technical.read")
+        a("GET", "/api/v1/actions/{fingerprint}/preview", self._action_preview, perm="technical.read")
+        a("POST", "/api/v1/actions/{fingerprint}/execute", self._action_execute, perm="technical.safe_fix", csrf=True)
         a("GET", "/api/v1/work-items", self._work_items, perm="opportunity.read")
         a("POST", "/api/v1/work-items/{id}/approve", self._approve_item, perm="opportunity.review", csrf=True)
         a("POST", "/api/v1/work-items/{id}/reject", self._reject_item, perm="opportunity.review", csrf=True)
@@ -228,6 +232,42 @@ class Router:
         from urllib.parse import unquote
         history = self.control.page_history(unquote(params["id"]))
         return HttpResponse.json(200, {"url": unquote(params["id"]), "history": history})
+
+    def _findings(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        data = self.control.technical(rule=request.query.get("rule") or None,
+                                      limit=int(request.query.get("limit", "200")))
+        return HttpResponse.json(200, {"problems": data["problems"]})
+
+    def _corrections(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        data = self.control.technical(limit=int(request.query.get("limit", "200")))
+        return HttpResponse.json(200, {"corrections": data["corrections"]})
+
+    def _action_preview(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        preview = self.control.action_preview(params["fingerprint"])
+        if preview is None:
+            raise NotFound("Correção não encontrada.")
+        return HttpResponse.json(200, {"preview": preview})
+
+    def _action_execute(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        """Confirma a aprovação de um safe fix (control plane).
+
+        Requer permissão technical.safe_fix + CSRF + reautenticação recente.
+        NÃO escreve no WordPress aqui: registra a aprovação (SAFE_FIX_APPROVED) e
+        devolve o preview para o worker executar via o executor (que respeita
+        dry_run/blast radius). Auto-publicação nunca é automática.
+        """
+        session = request._session
+        preview = self.control.action_preview(params["fingerprint"])
+        if preview is None:
+            raise NotFound("Correção não encontrada.")
+        if not self.auth.verify_recent_strong_auth(session.session_id):
+            raise ReauthRequired()
+        self.storage.log_audit(session.email, "SAFE_FIX_APPROVED",
+                               params["fingerprint"], {"url": preview["url"]},
+                               {"status": "approved", "dry_run": getattr(self.config, "dry_run", True)})
+        return HttpResponse.json(200, {"ok": True, "approved": True,
+                                       "dry_run": getattr(self.config, "dry_run", True),
+                                       "preview": preview})
 
     def _work_items(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"work_items": self.control.work_items(

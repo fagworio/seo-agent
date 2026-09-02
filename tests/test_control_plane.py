@@ -162,3 +162,33 @@ def test_pages_and_history(tmp_path):
     assert hist[0]["title"] == "A"
     assert hist[1]["source"] == "executor"
     storage.close()
+
+
+def test_technical_splits_problems_and_corrections(tmp_path):
+    import json as _json
+    storage, cp = _seed(tmp_path / "te.db")
+    # um finding (problema) e uma ação safe_fix (correção com before/after/rollback)
+    storage.conn.execute(
+        "INSERT INTO findings (cycle_id, rule_id, url, severity, detail_json, created_at) "
+        "VALUES ('c1', 'title', 'https://x.com/a/', 'high', ?, '2026-01-01T00:00:00+00:00')",
+        (_json.dumps({"missing": "title"}),),
+    )
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, before_json, "
+        "after_json, rollback_json, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "title", "https://x.com/a/", "safe_fix", "executed", "fp-tech",
+         _json.dumps({"title": "velho"}), _json.dumps({"title": "novo"}),
+         _json.dumps({"type": "wp_post_meta", "post_id": 1, "meta": {"title": "velho"}}),
+         "2026-01-01T00:00:00+00:00"),
+    )
+    storage.conn.commit()
+
+    t = cp.technical()
+    assert any(p["rule_id"] == "title" for p in t["problems"])
+    corr = next(c for c in t["corrections"] if c["fingerprint"] == "fp-tech")
+    assert corr["before"] == {"title": "velho"}
+    assert corr["after"] == {"title": "novo"}
+    preview = cp.action_preview("fp-tech")
+    assert preview["rollback"]["type"] == "wp_post_meta"
+    assert cp.action_preview("desconhecido") is None
+    storage.close()

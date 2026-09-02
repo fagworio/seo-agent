@@ -190,3 +190,22 @@ export interface PageHistoryEntry {
   cwv: Record<string, unknown> | null;
   gsc: Record<string, unknown> | null;
 }
+
+export interface Finding {
+  rule_id: string;
+  url: string;
+  severity: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Correction {
+  fingerprint: string;
+  rule_id: string;
+  url: string;
+  status: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  rollback: Record<string, unknown> | null;
+  executed_at: string | null;
+}
