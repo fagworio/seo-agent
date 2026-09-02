@@ -164,6 +164,37 @@ def test_pages_and_history(tmp_path):
     storage.close()
 
 
+def test_experiments_measurement_state(tmp_path):
+    import json as _json
+    storage, cp = _seed(tmp_path / "exp.db")
+    # intervenção implementada, aguardando dados (sem verdict, sem janela medida)
+    storage.conn.execute(
+        "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+        "human_decision, implemented_action, url, implemented_at, baseline_json, "
+        "verdict, measured_28d, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)",
+        ("gojo idade", "expand_existing", "expand_existing", "approved",
+         "expandir seção", "https://x.com/a/", "2026-01-01T00:00:00+00:00",
+         _json.dumps({"gsc": {"clicks": 0, "position": 6.7}}), "2026-01-01T00:00:00+00:00"),
+    )
+    # intervenção já medida
+    storage.conn.execute(
+        "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+        "human_decision, implemented_action, url, implemented_at, verdict, "
+        "measured_28d, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        ("one piece", "expand_existing", "expand_existing", "approved",
+         "expandir", "https://x.com/b/", "2026-01-01T00:00:00+00:00", "improved",
+         "2026-01-01T00:00:00+00:00"),
+    )
+    storage.conn.commit()
+    exps = cp.experiments()
+    by_keyword = {e["keyword"]: e for e in exps}
+    assert by_keyword["gojo idade"]["measurement_state"] == "waiting_data"
+    assert by_keyword["one piece"]["measurement_state"] == "measured"
+    assert by_keyword["one piece"]["verdict"] == "improved"
+    assert by_keyword["gojo idade"]["baseline"]["gsc"]["position"] == 6.7
+    storage.close()
+
+
 def test_technical_splits_problems_and_corrections(tmp_path):
     import json as _json
     storage, cp = _seed(tmp_path / "te.db")

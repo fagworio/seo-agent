@@ -186,6 +186,46 @@ class ControlPlaneService:
         except Exception:
             return None
 
+    # -- Experimentos (F11) --------------------------------------------------
+    def experiments(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Intervenções implementadas com baseline, janela de medição e delta.
+
+        Distingue movimento observado de certeza causal: expõe baseline, verdict
+        e o estado de medição (waiting_data | measuring | measured). Nunca
+        sobrestima causalidade sem evidência.
+        """
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT keyword, opportunity_type, url, implemented_action, "
+                "implemented_at, baseline_json, verdict, measured_28d, measured_56d, "
+                "measured_90d FROM opportunity_outcomes "
+                "WHERE human_decision = 'approved' ORDER BY implemented_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            baseline = self._json(r[5]) or {}
+            recorded = bool(r[7] or r[8] or r[9])
+            out.append({
+                "keyword": r[0], "opportunity_type": r[1], "url": r[2],
+                "implemented_action": r[3] or "", "implemented_at": r[4],
+                "baseline": baseline,
+                "verdict": r[6],
+                "windows": {"28d": bool(r[7]), "56d": bool(r[8]), "90d": bool(r[9])},
+                "measurement_state": self._measurement_state(r[6], recorded),
+            })
+        return out
+
+    @staticmethod
+    def _measurement_state(verdict: str | None, recorded: bool) -> str:
+        if verdict:
+            return "measured"
+        if recorded:
+            return "measuring"
+        return "waiting_data"
+
     # -- Caixa de Trabalho ---------------------------------------------------
     def work_items(self, *, source: str | None = None, status: str | None = None,
                    limit: int = 200) -> list[dict[str, Any]]:

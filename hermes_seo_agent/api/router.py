@@ -75,6 +75,7 @@ class Router:
         a("POST", "/api/v1/work-items/{id}/snooze", self._snooze_item, perm="opportunity.review", csrf=True)
         a("GET", "/api/v1/integrations", self._integrations, perm="integration.read")
         a("GET", "/api/v1/activity", self._activity, perm="audit.read")
+        a("GET", "/api/v1/experiments", self._experiments, perm="experiment.read")
         a("GET", "/api/v1/agents", self._agents, perm="agent.read")
         a("GET", "/api/v1/runs", self._runs_list, perm="agent.read")
         a("GET", "/api/v1/runs/{id}", self._run_detail, perm="agent.read")
@@ -304,6 +305,10 @@ class Router:
     def _activity(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"activity": self.control.activity(
             limit=int(request.query.get("limit", "50")))})
+
+    def _experiments(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        return HttpResponse.json(200, {"experiments": self.control.experiments(
+            limit=int(request.query.get("limit", "100")))})
 
     def _agents(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"agents": self.runs.list_agents()})

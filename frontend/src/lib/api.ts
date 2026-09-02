@@ -222,3 +222,15 @@ export interface ActivityEntry {
   summary: string;
   ref: string;
 }
+
+export interface Experiment {
+  keyword: string;
+  opportunity_type: string;
+  url: string;
+  implemented_action: string;
+  implemented_at: string;
+  baseline: Record<string, unknown>;
+  verdict: string | null;
+  windows: Record<string, boolean>;
+  measurement_state: string;
+}
