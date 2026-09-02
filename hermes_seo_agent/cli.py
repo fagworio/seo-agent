@@ -3022,9 +3022,11 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                             # entidades+FTS e marca done sob BEGIN IMMEDIATE,
                             # revalidando a posse DENTRO da transação — a
                             # janela entre validação e escrita é eliminada.
+                            # lease_seconds aplica o TTL por relógio também.
                             result = storage.corpus_commit_page(
                                 run_id=run_id, url=url, worker_id=worker_id,
-                                lease_version=token, built_at=built_at, page=page)
+                                lease_version=token, built_at=built_at, page=page,
+                                lease_seconds=config.corpus_lease_seconds)
                             if result == "not_owned":
                                 continue  # posse perdida durante o fetch: nada grava
                             if result == "written":

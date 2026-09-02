@@ -297,6 +297,160 @@ def test_commit_page_is_transactional_under_fence(tmp_path):
         assert storage.corpus_queue_counts(rid)["done"] == 1
 
 
+def test_concurrent_recovery_blocked_while_commit_in_flight(tmp_path):
+    """Concorrência REAL com duas conexões: A abre BEGIN IMMEDIATE e revalida;
+    B tenta recuperar o lease enquanto A está DENTRO da transação. B fica
+    BLOQUEADO (escrita exclusiva do SQLite) e, após o commit de A, encontra a
+    URL já done — a exclusão mútua no ponto crítico é demonstrada."""
+    import datetime as _dt
+    import threading
+    import time
+    from hermes_seo_agent.connectors.static_site import PageSnapshot
+
+    db = tmp_path / "conc.db"
+    # setup na conexão principal
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claim_a = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]
+        token_a = claim_a["lease_version"]
+        # envelhece o lease: sem a transação de A, B PODERIA recuperá-lo
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+
+    page = PageSnapshot("https://x.com/a/", 200)
+    page.title = "A"; page.h1 = ["A"]
+    page.body_text = "conteúdo novo"
+    page.html = "<h1>A</h1><p>conteúdo novo</p>"
+    page.meta_robots = ""; page.canonical = "https://x.com/a/"
+
+    a_entered = threading.Event()
+    release_a = threading.Event()
+    a_result: dict[str, str] = {}
+    b_result: dict[str, object] = {}
+
+    def worker_a():
+        try:
+            with Storage(str(db)) as sa:
+                sa.conn.execute("BEGIN IMMEDIATE")
+                # A revalida (como corpus_commit_page faz), mas PAUSA antes de
+                # commitar para B tentar entrar no meio.
+                a_entered.set()
+                assert release_a.wait(timeout=15)
+                owned = sa.conn.execute(
+                    "SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
+                    "AND worker_id = ? AND lease_version = ? "
+                    "AND status = 'in_progress'",
+                    (rid, "https://x.com/a/", "worker-A", token_a),
+                ).fetchone()
+                if not owned:
+                    sa.conn.rollback()
+                    a_result["status"] = "not_owned"
+                    return
+                sa.save_corpus_document(
+                    url="https://x.com/a/", title="A", h1="A",
+                    body_text="conteúdo novo", canonical="https://x.com/a/",
+                    is_noindex=0, status_code=200,
+                    content_hash="h", built_at="2026-01-01T00:00:00+00:00",
+                    commit=False)
+                sa.conn.execute(
+                    "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+                    "leased_at = NULL WHERE run_id = ? AND url = ? "
+                    "AND worker_id = ? AND lease_version = ?",
+                    (rid, "https://x.com/a/", "worker-A", token_a),
+                )
+                sa.conn.commit()
+                a_result["status"] = "written"
+        except Exception as exc:
+            a_result["error"] = str(exc)
+
+    def worker_b():
+        try:
+            with Storage(str(db)) as sb:
+                # Tenta recuperar o lease expirado de A — deve BLOQUEAR até A
+                # commitar (SQLite lock de escrita exclusiva).
+                n = sb.corpus_recover_expired_leases(rid, ttl_seconds=3600,
+                                                     exclude_worker="worker-B")
+                b_result["recovered"] = n
+        except Exception as exc:
+            b_result["error"] = str(exc)
+
+    ta = threading.Thread(target=worker_a)
+    tb = threading.Thread(target=worker_b)
+    ta.start()
+    assert a_entered.wait(timeout=15)   # A está DENTRO do BEGIN IMMEDIATE
+    tb.start()
+    # dá tempo de B tentar escrever (e ficar preso no lock do SQLite)
+    time.sleep(0.5)
+    # A conclui a transação
+    release_a.set()
+    ta.join(timeout=20)
+    tb.join(timeout=20)
+
+    assert not ta.is_alive() and not tb.is_alive()
+    assert a_result.get("status") == "written"      # A concluiu (dono com token)
+    # B NÃO recuperou: ou ficou bloqueado até A commitar (e a URL já virou
+    # done, fora do escopo do recover), ou recuperou 0 linhas.
+    assert b_result.get("error") is None
+    assert b_result.get("recovered", 0) == 0
+    with Storage(str(db)) as storage:
+        counts = storage.corpus_queue_counts(rid)
+        assert counts["done"] == 1
+        assert counts["in_progress"] == 0
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 1
+
+
+def test_commit_page_enforces_ttl_by_clock(tmp_path):
+    """Semântica TTL por relógio: se lease_seconds é passado e o leased_at já
+    expirou (mesmo sem nenhum worker ter recuperado), o commit retorna
+    not_owned — a escrita não é aceita após o horário de expiração."""
+    import datetime as _dt
+    from hermes_seo_agent.connectors.static_site import PageSnapshot
+    db = tmp_path / "ttl.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claim = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]
+        token = claim["lease_version"]
+        # lease envelhece além do TTL, mas NINGUÉM executou a recuperação
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        page = PageSnapshot("https://x.com/a/", 200)
+        page.title = "A"; page.h1 = ["A"]
+        page.body_text = "conteúdo"
+        page.html = "<h1>A</h1><p>conteúdo</p>"
+        page.meta_robots = ""; page.canonical = "https://x.com/a/"
+        # com lease_seconds=3600 e lease com 2h -> not_owned (por relógio)
+        assert storage.corpus_commit_page(
+            run_id=rid, url="https://x.com/a/", worker_id="worker-A",
+            lease_version=token, built_at="2026-01-01T00:00:00+00:00",
+            page=page, lease_seconds=3600) == "not_owned"
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 0
+        # sem lease_seconds (só fencing), o dono com token válido ainda escreve
+        assert storage.corpus_commit_page(
+            run_id=rid, url="https://x.com/a/", worker_id="worker-A",
+            lease_version=token, built_at="2026-01-01T00:00:00+00:00",
+            page=page) == "written"
+
+
 def test_mark_requires_worker_id(tmp_path):
     """worker_id e lease_version são OBRIGATÓRIOS: chamar mark sem dono/token
     não registra nada (brecha de API fechada)."""

@@ -1527,7 +1527,7 @@ class Storage:
 
     def corpus_commit_page(self, *, run_id: int, url: str, worker_id: str,
                            lease_version: int, built_at: str,
-                           page: Any) -> str:
+                           page: Any, lease_seconds: int | None = None) -> str:
         """Operação TRANSACIONAL ÚNICA: escreve documento+seções+entidades+FTS
         e marca done em UM commit, sob BEGIN IMMEDIATE (escrita exclusiva).
 
@@ -1537,9 +1537,19 @@ class Storage:
         o lease (token incrementado), a revalidação falha, tudo é revertido
         (ROLLBACK) e NADA é gravado.
 
+        SEMÂNTICA DO TTL: quando ``lease_seconds`` é fornecido, a revalidação
+        também exige ``leased_at >= agora - lease_seconds`` — o TTL vira
+        revogação POR RELÓGIO (uma escrita não é aceita sequer após o horário
+        de expiração, mesmo que nenhum outro worker tenha executado a
+        recuperação). Sem o parâmetro, a revogação só ocorre quando outro
+        worker executa corpus_recover_expired_leases (serializável: quem ganha
+        a transação exclusiva decide). O caminho CLI passa sempre o TTL
+        configurado.
+
         Retorna: 'written' | 'unchanged' (hash igual, só marca done) |
-        'not_owned' (posse perdida — zero alterações).
+        'not_owned' (posse perdida ou expirada — zero alterações).
         """
+        import datetime as _dt
         import hashlib
         # Nota: extract_sections/extract_entities vivem em corpus.builder;
         # são importados abaixo no ponto de uso (evita ciclo de import).
@@ -1549,12 +1559,18 @@ class Storage:
         title = getattr(page, "title", "") or ""
         try:
             self.conn.execute("BEGIN IMMEDIATE")
-            # revalidação DENTRO da escrita exclusiva (fecha a janela)
-            owned = self.conn.execute(
-                "SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
-                "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'",
-                (run_id, url, worker_id, lease_version),
-            ).fetchone()
+            # revalidação DENTRO da escrita exclusiva (fecha a janela):
+            # dono + token + status + (opcional) não expirado por relógio.
+            sql = ("SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
+                   "AND worker_id = ? AND lease_version = ? "
+                   "AND status = 'in_progress'")
+            params: list[Any] = [run_id, url, worker_id, lease_version]
+            if lease_seconds:
+                cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                          - _dt.timedelta(seconds=lease_seconds)).isoformat()
+                sql += " AND leased_at >= ?"
+                params.append(cutoff)
+            owned = self.conn.execute(sql, params).fetchone()
             if not owned:
                 self.conn.rollback()
                 return "not_owned"
