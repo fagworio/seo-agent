@@ -1,0 +1,7 @@
+# Artefatos de build do frontend (contexto = ./frontend).
+node_modules/
+.next/
+.npm-cache/
+test-results/
+playwright-report/
+coverage/

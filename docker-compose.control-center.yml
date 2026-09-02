@@ -1,0 +1,54 @@
+# SEO Agent Control Center — deploy (F17).
+# Arquitetura: Next.js (web) -> transporte stdlib/FastAPI-alvo (api) -> services
+# hermes_seo_agent -> SQLite/GSC/GA4/CrUX/WordPress. Worker = Hermes/cron.
+# Mesma origem em produção (ADR-0004): reverse proxy TLS na frente de web+api.
+# O compose raiz (docker-compose.yml) é o worker standalone; este é o control plane.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: seo-agent-api
+    env_file:
+      - .env
+    environment:
+      SQLITE_PATH: /data/seo_agent.db
+      # Produção atrás de TLS: SESSION_COOKIE_SECURE="true". Para teste local http
+      # descomente a linha abaixo (o cookie deixa de exigir Secure).
+      # SESSION_COOKIE_SECURE: "false"
+    volumes:
+      - seo-state:/data
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: seo-agent-api
+    command: ["hermes-seo-agent", "schedule"]
+    env_file:
+      - .env
+    environment:
+      SQLITE_PATH: /data/seo_agent.db
+      DRY_RUN: "true"
+    volumes:
+      - seo-state:/data
+    depends_on:
+      - api
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.web
+    image: seo-agent-web
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  seo-state:

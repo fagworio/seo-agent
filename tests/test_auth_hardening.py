@@ -129,6 +129,40 @@ def test_password_reset_token_expired(tmp_path):
     storage.close()
 
 
+# -- F15: casos de segurança --------------------------------------------------
+def test_disabled_user_rejects_with_generic_error(tmp_path):
+    """Usuário desabilitado recebe a MESMA mensagem genérica (não revela estado)."""
+    storage, svc, _ = _make(tmp_path / "sec1.db")
+    uid = svc.create_user("v@x.com", "V", "senha-bem-longa-12345", ["viewer"])
+    storage.conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (uid,))
+    storage.conn.commit()
+    res = svc.login("v@x.com", "senha-bem-longa-12345")
+    assert res.ok is False and res.reason == "invalid"
+    assert res.user is None
+    storage.close()
+
+
+def test_unknown_or_stolen_session_token_rejected(tmp_path):
+    """Token de sessão desconhecido/roubado -> validate_session None."""
+    storage, svc, _ = _make(tmp_path / "sec2.db")
+    svc.create_user("v@x.com", "V", "senha-bem-longa-12345", ["viewer"])
+    assert svc.validate_session("token-que-nao-existe") is None
+    assert svc.validate_session("") is None
+    storage.close()
+
+
+def test_password_reset_token_single_use(tmp_path):
+    """Reutilização de token de reset falha (uso único)."""
+    sent: list[str] = []
+    storage, svc, _ = _make(tmp_path / "sec3.db", sender=lambda t, e: sent.append(t))
+    svc.create_user("v@x.com", "V", "senha-bem-longa-12345", ["viewer"])
+    svc.request_password_reset("v@x.com")
+    token = sent[0]
+    assert svc.reset_password(token, "nova-senha-bem-longa-123") is True
+    assert svc.reset_password(token, "outra-senha-bem-longa-123") is False
+    storage.close()
+
+
 # -- rate limiting ---------------------------------------------------------
 def test_limiter_allows_within_window():
     lmr = SlidingWindowLimiter(max_events=3, window_seconds=60)

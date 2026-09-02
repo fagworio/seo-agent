@@ -1,0 +1,12 @@
+# Contexto do backend (raiz do repo): exclui artefatos locais.
+.venv/
+state/
+frontend/
+dashboard/
+docs/
+tests/
+node_modules/
+.git/
+*.db
+__pycache__/
+*.pyc

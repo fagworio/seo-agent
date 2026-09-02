@@ -1,0 +1,17 @@
+# Backend do control plane (FastAPI-alvo hoje servido pelo transporte stdlib —
+# ver ADR-0009). Usado pelos serviços api e worker no docker-compose.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+COPY pyproject.toml README.md ./
+COPY hermes_seo_agent ./hermes_seo_agent
+
+RUN pip install --no-cache-dir .
+
+EXPOSE 8000
+
+# O estado persiste em /data (volume montado no compose).
+CMD ["hermes-seo-agent", "serve", "--host", "0.0.0.0", "--port", "8000"]
