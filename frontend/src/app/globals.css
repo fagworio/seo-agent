@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens semânticos (ADR-0006). Dark e dark usam o mesmo componente; só troca
+   os tokens. NUNCA hardcodar hex em componentes. */
+:root {
+  --background: #f6f7fb;
+  --foreground: #171b24;
+  --muted: #5f6b7c;
+  --muted-foreground: #8792a2;
+  --surface: #ffffff;
+  --surface-raised: #f1f3f8;
+  --border: #dfe4ec;
+  --primary: #6356e8;
+  --primary-hover: #5548d9;
+  --primary-soft: #eeecff;
+  --success: #168a52;
+  --warning: #a96300;
+  --danger: #c73737;
+  --info: #246fd6;
+}
+
+.dark {
+  --background: #090d14;
+  --foreground: #f4f7fb;
+  --muted: #98a4b5;
+  --muted-foreground: #69778b;
+  --surface: #101620;
+  --surface-raised: #151d29;
+  --border: #253142;
+  --primary: #6d5dfc;
+  --primary-hover: #7b6cff;
+  --primary-soft: #252147;
+  --success: #31c77a;
+  --warning: #f2a51a;
+  --danger: #ef4e4e;
+  --info: #4c9cff;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 21px;
+}
+
+/* números de SEO em dígitos tabulares */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
