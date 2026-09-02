@@ -118,6 +118,7 @@ def test_integration_status_corpus_source(tmp_path):
         build_corpus(storage, [page], built_at="2026-01-01T00:00:00+00:00")
         rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
                                        sitemap_signature="abc")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])  # snapshot da fila
         storage.finish_corpus_run(rid, status="ok")
         config = _config(db)
         service = IntegrationStatusService(config, storage)

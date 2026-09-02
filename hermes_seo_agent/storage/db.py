@@ -1382,13 +1382,29 @@ class Storage:
         return added
 
     def corpus_claim_pending(self, run_id: int, *, limit: int = 50) -> list[str]:
-        """Próximas URLs pending da fila (o cursor do run)."""
+        """Claim ATOMÁTICO: marca o lote como in_progress no mesmo UPDATE
+        (RETURNING). Dois rebuilds simultâneos NUNCA buscam o mesmo lote —
+        cada claim pega um conjunto disjunto de pending."""
         rows = self.conn.execute(
-            "SELECT url FROM corpus_queue WHERE run_id = ? AND status = 'pending' "
-            "ORDER BY id LIMIT ?",
+            "UPDATE corpus_queue SET status = 'in_progress' "
+            "WHERE id IN (SELECT id FROM corpus_queue WHERE run_id = ? "
+            "AND status = 'pending' ORDER BY id LIMIT ?) "
+            "RETURNING url",
             (run_id, limit),
         ).fetchall()
+        self.conn.commit()
         return [r[0] for r in rows]
+
+    def corpus_reset_in_progress(self, run_id: int) -> int:
+        """Devolve leases órfãos (in_progress de um processo que caiu) a
+        pending, para serem retomados na próxima execução."""
+        cur = self.conn.execute(
+            "UPDATE corpus_queue SET status = 'pending' "
+            "WHERE run_id = ? AND status = 'in_progress'",
+            (run_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def corpus_mark_done(self, run_id: int, url: str) -> None:
         self.conn.execute(
@@ -1407,7 +1423,7 @@ class Storage:
         self.conn.commit()
 
     def corpus_queue_counts(self, run_id: int) -> dict[str, int]:
-        counts = {"pending": 0, "done": 0, "failed": 0}
+        counts = {"pending": 0, "done": 0, "failed": 0, "in_progress": 0}
         for r in self.conn.execute(
             "SELECT status, COUNT(*) FROM corpus_queue WHERE run_id = ? "
             "GROUP BY status", (run_id,),
@@ -1505,25 +1521,39 @@ class Storage:
         return report
 
     def corpus_global_coverage(self) -> dict[str, Any]:
-        """Cobertura GLOBAL vs o sitemap completo registrado no último run
-        com assinatura (independe do tamanho do lote que o criou).
+        """Cobertura GLOBAL por INTERSEÇÃO EXATA entre as URLs do sitemap
+        daquele run (a fila é o snapshot) e corpus_documents.
 
-        Um run limitado (ex.: --limit 5000) tem sitemap_total=18889 e
-        sitemap_signature; aqui a cobertura global usa esses valores, não o
-        total_urls do lote — evita o 'coverage acima de 100%' reportado antes.
+        Difere da contagem simples docs/sitemap_total: URLs removidas do
+        sitemap mas mantidas no corpus NÃO inflam a cobertura. Usa o último
+        run concluído com fila (snapshot) como base.
         """
-        last = self.latest_corpus_run(status="ok") or self.latest_corpus_run()
+        last = None
+        for status in ("ok", "partial", "running", "failed"):
+            candidate = self.latest_corpus_run(status=status)
+            if candidate:
+                last = candidate
+                break
         if not last or not last["sitemap_total"]:
             return {"global_sitemap_total": 0, "global_coverage_pct": None,
                     "basis": "nenhum run com sitemap completo registrado"}
-        docs = self.conn.execute(
-            "SELECT COUNT(*) FROM corpus_documents").fetchone()[0]
-        pct = round((docs / last["sitemap_total"]) * 100, 1)
+        # interseção exata: docs no corpus QUE estão no snapshot do sitemap
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_queue q "
+            "JOIN corpus_documents d ON d.url = q.url "
+            "WHERE q.run_id = ?",
+            (last["id"],),
+        ).fetchone()
+        in_sitemap = row[0] if row else 0
+        total_snapshot = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_queue WHERE run_id = ?", (last["id"],)
+        ).fetchone()[0]
+        pct = round((in_sitemap / total_snapshot) * 100, 1) if total_snapshot else 0.0
         return {
-            "global_sitemap_total": last["sitemap_total"],
-            "global_docs_indexed": docs,
+            "global_sitemap_total": total_snapshot,
+            "global_docs_in_sitemap": in_sitemap,
             "global_coverage_pct": pct,
-            "basis": f"run {last['id']} (sitemap completo {last['sitemap_total']})",
+            "basis": f"run {last['id']} ({last['status']}) — interseção exata fila×corpus",
         }
 
 

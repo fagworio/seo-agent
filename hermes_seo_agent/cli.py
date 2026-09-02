@@ -255,6 +255,8 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="rebuild | search <termo> | coverage <termo> | stats")
             p.add_argument("term", nargs="?", default="",
                            help="termo de busca (search/coverage)")
+            p.add_argument("--resume", dest="resume_id", type=int, default=0,
+                           help="retomar um run específico (running ou failed)")
         if name == "topics":
             p.add_argument("action", nargs="?", default="graph",
                            choices=["graph", "coverage"],
@@ -2924,43 +2926,71 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
 
         if args.action == "rebuild":
             # Crawl incremental com FILA por URL (retomada real):
-            #  * cria um run e enfileira TODAS as URLs (sitemap completo), com
-            #    sitemap_total + assinatura gravados no run;
-            #  * processa em LOTES (claim pending), indexa cada lote e commita
-            #    — se o processo cair, a fila guarda o cursor (pending restam);
-            #  * re-executar retoma o run 'running' pendente em vez de recomeçar
-            #    do prefixo do sitemap.
+            #  * o run enfileira SEMPRE o sitemap completo (snapshot na fila);
+            #  * --limit = quantas URLs processar NESTA execução (escopo da
+            #    execução, não do run) — repetir --limit 5000 AVANÇA 5000 por
+            #    execução até esgotar a fila, sem recriar recortes;
+            #  * claim é ATOMÁTICO (marca in_progress via RETURNING) — dois
+            #    rebuilds simultâneos nunca pegam o mesmo lote;
+            #  * retoma run running automaticamente e run failed via
+            #    --resume <run_id>; leases órfãos (in_progress de processo
+            #    morto) voltam a pending no início.
             import hashlib
 
             with StaticSiteClient(config) as static:
                 urls = static.all_sitemap_urls()
-            cap = args.limit or config.max_corpus_docs
-            batch_urls = urls[:cap]
             sitemap_total = len(urls)
             signature = hashlib.sha256("\n".join(urls).encode("utf-8")).hexdigest()[:16]
+            exec_limit = args.limit or config.max_corpus_docs  # escopo desta execução
 
-            run = storage.latest_corpus_run(status="running")
-            if run and run["sitemap_signature"] != signature:
-                # sitemap mudou desde o run ativo: encerra e cria novo
-                storage.finish_corpus_run(run["id"], status="failed",
-                                          error="sitemap mudou durante run ativo")
-                run = None
-            if run:
-                run_id = run["id"]
+            run = None
+            resumed = False
+            resume_id = getattr(args, "resume_id", 0) or 0
+            if resume_id:
+                run = storage.conn.execute(
+                    "SELECT id, status, sitemap_total, sitemap_signature FROM "
+                    "corpus_runs WHERE id = ?", (resume_id,)
+                ).fetchone()
+                if not run:
+                    print(json.dumps({"status": "error",
+                                      "error": f"run {resume_id} não existe"},
+                                     ensure_ascii=False))
+                    return 2
+                run = {"id": run[0], "status": run[1], "sitemap_total": run[2] or 0,
+                       "sitemap_signature": run[3] or ""}
+                if run["sitemap_signature"] != signature:
+                    print(json.dumps({"status": "error",
+                                      "error": "sitemap mudou desde esse run; "
+                                               "não retomar (rode rebuild novo)"},
+                                     ensure_ascii=False))
+                    return 2
                 resumed = True
             else:
+                run = storage.latest_corpus_run(status="running")
+                if run and run["sitemap_signature"] != signature:
+                    storage.finish_corpus_run(run["id"], status="failed",
+                                              error="sitemap mudou durante run ativo")
+                    run = None
+                if run:
+                    resumed = True
+            if run:
+                run_id = run["id"]
+                # leases órfãos de processo morto voltam a pending
+                storage.corpus_reset_in_progress(run_id)
+            else:
                 run_id = storage.start_corpus_run(
-                    total_urls=len(batch_urls), sitemap_total=sitemap_total,
+                    total_urls=sitemap_total, sitemap_total=sitemap_total,
                     sitemap_signature=signature)
-                storage.corpus_enqueue_urls(run_id, batch_urls)
+                storage.corpus_enqueue_urls(run_id, urls)  # snapshot completo
                 resumed = False
 
             built_at = _now()
             processed = changed = failed = 0
             try:
                 with StaticSiteClient(config) as static:
-                    while True:
-                        pending = storage.corpus_claim_pending(run_id, limit=50)
+                    while processed < exec_limit:
+                        pending = storage.corpus_claim_pending(
+                            run_id, limit=min(50, exec_limit - processed))
                         if not pending:
                             break
                         batch_changed: list[Any] = []
@@ -2991,7 +3021,13 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                         storage.update_corpus_run(
                             run_id, processed=processed, changed=changed, failed=failed)
                 status = "ok" if not failed else "partial"
-                storage.finish_corpus_run(run_id, status=status)
+                if storage.corpus_queue_counts(run_id)["pending"] > 0:
+                    # escopo desta execução esgotou mas a fila continua: o run
+                    # permanece RUNNING para a próxima execução retomar.
+                    finished = False
+                else:
+                    storage.finish_corpus_run(run_id, status=status)
+                    finished = True
             except Exception as exc:  # noqa: BLE001 — a fila guarda o cursor
                 storage.finish_corpus_run(run_id, status="failed", error=str(exc)[:300])
                 print(json.dumps({"status": "error", "error": f"rebuild falhou: {exc}"},
@@ -2999,15 +3035,17 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                 return 2
             queue = storage.corpus_queue_counts(run_id)
             global_cov = storage.corpus_global_coverage()
-            report = storage.corpus_coverage_report(batch_urls)
+            report = storage.corpus_coverage_report(urls)
             result = {
                 "status": "ok",
                 "summary": {"command": "corpus", "action": "rebuild",
                             "run_id": run_id, "resumed": resumed,
-                            "batch_total": len(batch_urls),
+                            "exec_limit": exec_limit,
                             "sitemap_total": sitemap_total,
-                            "processed": processed, "changed": changed,
-                            "failed": failed, "run_status": status,
+                            "processed_this_run": processed,
+                            "changed_this_run": changed,
+                            "failed_this_run": failed,
+                            "run_status": status, "finished": finished,
                             "queue": queue,
                             "global_coverage_pct": global_cov["global_coverage_pct"]},
                 "findings": [], "safe_actions": [], "approval_required": [],
