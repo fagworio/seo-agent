@@ -448,6 +448,41 @@ def _cmd_inventory(args: argparse.Namespace, config: Any) -> int:
     return 0
 
 
+def _record_agent_run(config: Any, result: dict[str, Any], *, cycle_id: str,
+                      started: str, intent: str = "technical", mode: str = "analyze") -> None:
+    """Registra a execução no control plane (AgentRunService) com as contagens.
+
+    As telas Hoje (runs recentes) e Agentes & Execuções consomem este modelo.
+    Nunca registra credenciais; só agente, trigger, intent, modo, contagens.
+    """
+    try:
+        from .services.agent_runs import AgentRunService
+        with Storage(config.sqlite_path) as storage:
+            svc = AgentRunService(storage)
+            run_id = svc.start_run("hermes-seo-agent", trigger="schedule",
+                                   intent=intent, mode=mode,
+                                   started_by=config.app_user or "system")
+            findings = result.get("findings", [])
+            safe_actions = result.get("safe_actions", [])
+            approval = result.get("approval_required", [])
+            summary = result.get("summary", {})
+            svc.mark_step(run_id, "audit", "success",
+                          detail={"cycle_id": cycle_id, "audited_urls": summary.get("audited_urls", 0)})
+            svc.complete(run_id, status="success",
+                         summary={"cycle_id": cycle_id,
+                                  "audited_urls": summary.get("audited_urls", 0)},
+                         urls=summary.get("audited_urls", 0),
+                         findings=len(findings),
+                         opportunities=len(approval),
+                         safe_fixes=len(safe_actions),
+                         executed=0)
+    except Exception as exc:  # observabilidade nunca quebra o ciclo
+        try:
+            Storage(config.sqlite_path).log_audit("system", "AGENT_RUN_FAILED", cycle_id, {}, {"error": str(exc)})
+        except Exception:
+            pass
+
+
 def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     limit = args.limit or config.max_urls_per_run
     started = _now()
@@ -557,6 +592,8 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         "safe_actions": plan["safe_actions"],
         "approval_required": plan["approval_required"],
     }
+
+    _record_agent_run(config, result, cycle_id=cycle_id, started=started)
 
     if getattr(args, "markdown", False) or args.command in {"report", "cycle"}:
         # Persist a cycle snapshot for later diffs.

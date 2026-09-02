@@ -120,3 +120,30 @@ def test_invalid_inputs_rejected(tmp_path):
     with pytest.raises(AgentRunError):
         svc.complete(rid, status="unknown")
     storage.close()
+
+
+def test_record_agent_run_from_cli(tmp_path):
+    """O CLI registra a execução real com as contagens (agentes/Hoje)."""
+    from types import SimpleNamespace
+
+    from hermes_seo_agent.cli import _record_agent_run
+
+    db = tmp_path / "run.db"
+    config = SimpleNamespace(sqlite_path=str(db), app_user="cli-user")
+    result = {
+        "summary": {"audited_urls": 3},
+        "findings": [{"rule_id": "a"}, {"rule_id": "b"}],
+        "safe_actions": [{"rule_id": "c"}],
+        "approval_required": [],
+    }
+    _record_agent_run(config, result, cycle_id="cycle-1", started="2026-01-01T00:00:00+00:00")
+    with Storage(str(db)) as storage:
+        runs = AgentRunService(storage).list_runs()
+        assert len(runs) == 1
+        run = runs[0]
+        assert run["agent"] == "hermes-seo-agent"
+        assert run["status"] == "success"
+        assert run["urls_analyzed"] == 3
+        assert run["findings_count"] == 2
+        assert run["safe_fixes_count"] == 1
+        assert run["intent"] == "technical"
