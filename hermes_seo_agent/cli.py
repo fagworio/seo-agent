@@ -2998,19 +2998,25 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                     while attempted < exec_limit:
                         pending = storage.corpus_claim_pending(
                             run_id, limit=min(50, exec_limit - attempted),
-                            worker_id=worker_id,
-                            lease_seconds=config.corpus_lease_seconds)
+                            worker_id=worker_id)
                         if not pending:
                             break
                         batch_changed: list[Any] = []
                         for url in pending:
+                            # HEARTBEAT: renova o lease ANTES de processar cada
+                            # URL — enquanto o worker continua, o lote não
+                            # expira (corpus_recover_expired_leases não o pega).
+                            storage.corpus_renew_lease(run_id, [url], worker_id)
                             attempted += 1  # antes do fetch (orçamento real)
                             try:
                                 page = static.fetch_page(url)
                             except Exception as exc:
                                 failed += 1
-                                storage.corpus_mark_failed(run_id, url, str(exc)[:200])
-                                storage.record_corpus_failure(run_id, url, str(exc)[:200])
+                                # marca failed SÓ se ainda é o dono do lease
+                                if storage.corpus_mark_failed(
+                                        run_id, url, str(exc)[:200], worker_id):
+                                    storage.record_corpus_failure(
+                                        run_id, url, str(exc)[:200])
                                 continue
                             processed += 1
                             body = getattr(page, "body_text", "") or ""
@@ -3020,14 +3026,15 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                                 (url,),
                             ).fetchone()
                             if row and row[0] == h:
-                                storage.corpus_mark_done(run_id, url)
+                                storage.corpus_mark_done(run_id, url, worker_id)
                                 continue  # inalterado
                             batch_changed.append(page)
                         if batch_changed:
                             counts = build_corpus(storage, batch_changed, built_at=built_at)
                             changed += counts["documents"]
                             for page in batch_changed:
-                                storage.corpus_mark_done(run_id, page.url)
+                                # só marca done se o lease ainda é deste worker
+                                storage.corpus_mark_done(run_id, page.url, worker_id)
                         storage.update_corpus_run(
                             run_id, processed=processed, changed=changed, failed=failed)
                 status = "ok" if not failed else "partial"

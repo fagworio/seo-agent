@@ -1388,14 +1388,17 @@ class Storage:
         return added
 
     def corpus_claim_pending(self, run_id: int, *, limit: int = 50,
-                             worker_id: str = "", lease_seconds: int = 3600
-                             ) -> list[str]:
+                             worker_id: str = "") -> list[str]:
         """Claim ATOMÁTICO: marca o lote como in_progress no mesmo UPDATE
         (RETURNING), registrando o worker (dono) e o timestamp do lease.
 
         Dois rebuilds simultâneos NUNCA buscam o mesmo lote — cada claim pega
         um conjunto disjunto de pending e cada lote fica preso ao seu worker
         até ser concluído (done/failed) ou o lease expirar.
+
+        O TTL é aplicado APENAS na recuperação (corpus_recover_expired_leases);
+        aqui não há lease_seconds — a API não sugere expiração que ela não
+        aplica.
         """
         import datetime as _dt
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -1409,6 +1412,25 @@ class Storage:
         ).fetchall()
         self.conn.commit()
         return [r[0] for r in rows]
+
+    def corpus_renew_lease(self, run_id: int, urls: list[str],
+                           worker_id: str) -> int:
+        """HEARTBEAT: renova o leased_at dos leases que AINDA pertencem ao
+        worker. Só atualiza linhas cujo worker_id == dono — nunca estende o
+        lease de um lote que outro worker já recuperou (expirado)."""
+        if not urls:
+            return 0
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        placeholders = ", ".join("?" for _ in urls)
+        cur = self.conn.execute(
+            f"UPDATE corpus_queue SET leased_at = ? "
+            f"WHERE run_id = ? AND worker_id = ? "
+            f"AND status = 'in_progress' AND url IN ({placeholders})",
+            (now, run_id, worker_id, *urls),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def corpus_recover_expired_leases(self, run_id: int, *,
                                       ttl_seconds: int = 3600,
@@ -1433,21 +1455,37 @@ class Storage:
         self.conn.commit()
         return cur.rowcount
 
-    def corpus_mark_done(self, run_id: int, url: str) -> None:
-        self.conn.execute(
-            "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-            "leased_at = NULL WHERE run_id = ? AND url = ?",
-            (run_id, url),
-        )
-        self.conn.commit()
+    def corpus_mark_done(self, run_id: int, url: str,
+                         worker_id: str = "") -> bool:
+        """Marca done SOMENTE se o worker ainda é o dono do lease.
 
-    def corpus_mark_failed(self, run_id: int, url: str, error: str) -> None:
-        self.conn.execute(
-            "UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
-            "leased_at = NULL, error = ? WHERE run_id = ? AND url = ?",
-            (error, run_id, url),
-        )
+        Retorna False se o lease foi perdido (outro worker o recuperou como
+        expirado) — nesse caso o resultado NÃO deve ser registrado como deste
+        worker (a URL será processada pelo novo dono).
+        """
+        sql = "UPDATE corpus_queue SET status = 'done', worker_id = NULL, " \
+              "leased_at = NULL WHERE run_id = ? AND url = ?"
+        params: list[Any] = [run_id, url]
+        if worker_id:
+            sql += " AND worker_id = ?"
+            params.append(worker_id)
+        cur = self.conn.execute(sql, params)
         self.conn.commit()
+        return cur.rowcount > 0
+
+    def corpus_mark_failed(self, run_id: int, url: str, error: str,
+                           worker_id: str = "") -> bool:
+        """Marca failed SOMENTE se o worker ainda é o dono do lease (mesma
+        semântica de corpus_mark_done)."""
+        sql = ("UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
+               "leased_at = NULL, error = ? WHERE run_id = ? AND url = ?")
+        params: list[Any] = [error, run_id, url]
+        if worker_id:
+            sql += " AND worker_id = ?"
+            params.append(worker_id)
+        cur = self.conn.execute(sql, params)
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def corpus_queue_counts(self, run_id: int) -> dict[str, int]:
         counts = {"pending": 0, "done": 0, "failed": 0, "in_progress": 0}

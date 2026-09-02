@@ -124,6 +124,69 @@ def test_corpus_recover_excludes_active_worker(tmp_path):
         assert storage.corpus_queue_counts(rid)["pending"] == 2
 
 
+def test_heartbeat_renews_lease_prevents_recovery(tmp_path):
+    """HEARTBEAT: renovar o leased_at impede que um lease em processamento
+    seja recuperado como expirado por outro worker."""
+    import datetime as _dt
+    db = tmp_path / "hb.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-A")
+        # envelhece o lease artificialmente, depois faz heartbeat (renova)
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        assert storage.corpus_renew_lease(rid, ["https://x.com/a/"], "worker-A") == 1
+        # com lease renovado, a recuperação por TTL NÃO o pega
+        assert storage.corpus_recover_expired_leases(
+            rid, ttl_seconds=3600, exclude_worker="worker-B") == 0
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 1
+
+
+def test_mark_requires_lease_owner(tmp_path):
+    """done/failed SÓ valem se o worker ainda é o dono: quem perdeu o lease
+    (recuperado como expirado por outro) não registra o resultado — evita
+    duplicação entre processos."""
+    db = tmp_path / "owner.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-A")
+        # B recupera o lease de A como expirado (A 'morreu')
+        import datetime as _dt
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        assert storage.corpus_recover_expired_leases(rid, ttl_seconds=3600) == 1
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-B")
+        # A tenta concluir a URL que perdeu -> mark retorna False (não registra)
+        assert storage.corpus_mark_done(rid, "https://x.com/a/", "worker-A") is False
+        # B (dono atual) conclui normalmente
+        assert storage.corpus_mark_done(rid, "https://x.com/a/", "worker-B") is True
+        assert storage.corpus_queue_counts(rid)["done"] == 1
+        # mesmo comportamento para failed
+        storage.corpus_enqueue_urls(rid, ["https://x.com/b/"])
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-C")
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-D")
+        storage.corpus_recover_expired_leases(rid, ttl_seconds=0)
+        storage.corpus_claim_pending(rid, limit=1, worker_id="worker-D")
+        assert storage.corpus_mark_failed(rid, "https://x.com/b/", "boom",
+                                          "worker-C") is False
+        assert storage.corpus_mark_failed(rid, "https://x.com/b/", "boom",
+                                          "worker-D") is True
+
+
 def test_global_coverage_independent_of_batch(tmp_path):
     """Cobertura GLOBAL usa a fila-snapshot do sitemap (interseção exata),
     não o total do lote — um run limitado não infla a cobertura."""
