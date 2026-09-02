@@ -63,6 +63,8 @@ class Router:
         a("DELETE", "/api/v1/auth/sessions/{id}", self._revoke_session, csrf=True)
         # produto
         a("GET", "/api/v1/dashboard/today", self._today, perm="dashboard.read")
+        a("GET", "/api/v1/pages", self._pages, perm="pages.read")
+        a("GET", "/api/v1/pages/{id}/history", self._page_history, perm="pages.read")
         a("GET", "/api/v1/work-items", self._work_items, perm="opportunity.read")
         a("POST", "/api/v1/work-items/{id}/approve", self._approve_item, perm="opportunity.review", csrf=True)
         a("POST", "/api/v1/work-items/{id}/reject", self._reject_item, perm="opportunity.review", csrf=True)
@@ -212,6 +214,20 @@ class Router:
     def _today(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         limit = int(request.query.get("limit", "10"))
         return HttpResponse.json(200, {"today": self.control.today(limit=limit)})
+
+    def _pages(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        from urllib.parse import unquote
+        rows = self.control.pages(
+            query=unquote(request.query.get("q", "")),
+            limit=int(request.query.get("limit", "100")),
+            offset=int(request.query.get("offset", "0")),
+        )
+        return HttpResponse.json(200, {"pages": rows})
+
+    def _page_history(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        from urllib.parse import unquote
+        history = self.control.page_history(unquote(params["id"]))
+        return HttpResponse.json(200, {"url": unquote(params["id"]), "history": history})
 
     def _work_items(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"work_items": self.control.work_items(

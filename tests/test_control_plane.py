@@ -138,3 +138,27 @@ def test_update_work_item_status_backlog_and_errors(tmp_path):
     with _pytest.raises(ValueError):
         cp.update_work_item_status("backlog:1", "foo")
     storage.close()
+
+
+def test_pages_and_history(tmp_path):
+    storage, cp = _seed(tmp_path / "pg.db")
+    # dois snapshots de uma página (história)
+    storage.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, source, status_code, title, meta_robots, "
+        "canonical, word_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("https://x.com/a/", "2026-01-01T00:00:00+00:00", "audit", 200, "A", "", "https://x.com/a/", 900))
+    storage.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, source, status_code, title, meta_robots, "
+        "canonical, word_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("https://x.com/a/", "2026-01-02T00:00:00+00:00", "executor", 200, "A (novo)", "", "https://x.com/a/", 1200))
+    storage.conn.commit()
+
+    pages = cp.pages()
+    assert any(p["url"] == "https://x.com/a/" for p in pages)
+    page = next(p for p in pages if p["url"] == "https://x.com/a/")
+    assert page["title"] == "A (novo)"           # snapshot mais recente
+    hist = cp.page_history("https://x.com/a/")
+    assert len(hist) == 2
+    assert hist[0]["title"] == "A"
+    assert hist[1]["source"] == "executor"
+    storage.close()

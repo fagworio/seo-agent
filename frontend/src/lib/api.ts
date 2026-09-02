@@ -168,3 +168,25 @@ export interface RunDetail extends AgentRun {
   steps: RunStep[];
   events: RunEvent[];
 }
+
+export interface PageSummary {
+  url: string;
+  title: string;
+  health: string;
+  index_state: string;
+  metrics: { position: number | null; impressions: number; clicks: number; ctr: number | null };
+  primary_opportunity: string;
+  captured_at: string;
+  word_count: number;
+}
+
+export interface PageHistoryEntry {
+  ts: string;
+  source: string;
+  linked_action: string;
+  status_code: number | null;
+  title: string;
+  meta_robots: string;
+  cwv: Record<string, unknown> | null;
+  gsc: Record<string, unknown> | null;
+}

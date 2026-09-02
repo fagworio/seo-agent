@@ -13,6 +13,8 @@ from typing import Any
 class Perm:
     DASHBOARD_READ = "dashboard.read"
 
+    PAGES_READ = "pages.read"
+
     OPPORTUNITY_READ = "opportunity.read"
     OPPORTUNITY_REVIEW = "opportunity.review"
 
@@ -43,6 +45,7 @@ class Perm:
 
 _ALL_PERMISSIONS = {
     Perm.DASHBOARD_READ,
+    Perm.PAGES_READ,
     Perm.OPPORTUNITY_READ,
     Perm.OPPORTUNITY_REVIEW,
     Perm.TECHNICAL_READ,
@@ -68,6 +71,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "admin": set(_ALL_PERMISSIONS),
     "operator": {
         Perm.DASHBOARD_READ,
+        Perm.PAGES_READ,
         Perm.OPPORTUNITY_READ,
         Perm.OPPORTUNITY_REVIEW,
         Perm.TECHNICAL_READ,
@@ -85,6 +89,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     },
     "editor": {
         Perm.DASHBOARD_READ,
+        Perm.PAGES_READ,
         Perm.OPPORTUNITY_READ,
         Perm.OPPORTUNITY_REVIEW,
         Perm.EDITORIAL_READ,
@@ -97,6 +102,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     },
     "viewer": {
         Perm.DASHBOARD_READ,
+        Perm.PAGES_READ,
         Perm.OPPORTUNITY_READ,
         Perm.TECHNICAL_READ,
         Perm.EDITORIAL_READ,
