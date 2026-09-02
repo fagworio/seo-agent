@@ -1561,12 +1561,23 @@ class Storage:
         a transação exclusiva decide). O caminho CLI passa sempre o TTL
         configurado.
 
+        GATE FINAL DE TTL: o TTL é revalidado DUAS vezes. (1) no início da
+        transação (revalidação acima) e (2) IMEDIATAMENTE antes do
+        UPDATE...done, com o cutoff RECALCULADO nesse instante e embutido no
+        próprio UPDATE (predicado atômico). Se a transação cruzar o instante
+        de expiração durante extração/escritas/hook — o relógio anda mesmo com
+        o lock de escrita exclusivo — o UPDATE final afeta 0 linhas e o
+        método executa ROLLBACK: as escritas já feitas (documento, seções,
+        entidades, FTS) seguem NÃO persistidas por estarem na mesma
+        transação.
+
         Retorna: 'written' | 'unchanged' (hash igual, só marca done) |
         'not_owned' (posse perdida ou expirada — zero alterações).
 
-        ``before_commit`` é um hook opcional chamado DENTRO da transação (após
-        as escritas, antes do commit) — usado por testes de concorrência para
-        pausar no ponto crítico enquanto outro worker tenta agir.
+        ``before_commit`` é um hook opcional chamado DENTRO da transação
+        (após as escritas e ANTES do gate final de TTL/UPDATE...done) — usado
+        por testes de concorrência para pausar ou envelhecer o lease no ponto
+        crítico.
         """
         import datetime as _dt
         import hashlib
@@ -1593,19 +1604,38 @@ class Storage:
             if not owned:
                 self.conn.rollback()
                 return "not_owned"
+
+            def _finalize_done() -> bool:
+                """Gate FINAL de TTL: o relógio andou desde a revalidação
+                inicial (extração, escritas, hook). Revalida AGORA, com cutoff
+                recalculado, no MESMO UPDATE que marca done. Se o lease
+                expirou nesse intervalo, o UPDATE afeta 0 linhas -> o chamador
+                executa ROLLBACK e nada persiste."""
+                u_params: list[Any] = [run_id, url, worker_id, lease_version]
+                ttl_clause = ""
+                if lease_seconds:
+                    cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                              - _dt.timedelta(seconds=lease_seconds)).isoformat()
+                    ttl_clause = " AND leased_at >= ?"
+                    u_params.append(cutoff)
+                cur = self.conn.execute(
+                    "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+                    "leased_at = NULL WHERE run_id = ? AND url = ? "
+                    "AND worker_id = ? AND lease_version = ?" + ttl_clause,
+                    u_params,
+                )
+                return cur.rowcount == 1
+
             row = self.conn.execute(
                 "SELECT content_hash FROM corpus_documents WHERE url = ?", (url,)
             ).fetchone()
             if row and row[0] == content_hash:
                 # inalterado: só marca done, sem reindexar
-                self.conn.execute(
-                    "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-                    "leased_at = NULL WHERE run_id = ? AND url = ? "
-                    "AND worker_id = ? AND lease_version = ?",
-                    (run_id, url, worker_id, lease_version),
-                )
                 if before_commit is not None:
-                    before_commit()  # hook de teste dentro da transação
+                    before_commit()  # hook de teste antes do gate final
+                if not _finalize_done():
+                    self.conn.rollback()
+                    return "not_owned"
                 self.conn.commit()
                 return "unchanged"
             # escritas SEM commit interno (a transação faz o commit único)
@@ -1621,14 +1651,11 @@ class Storage:
             ents = extract_entities(title, h1, body)
             self.replace_corpus_entities(url, ents, commit=False)
             self.index_corpus_document(url, title, h1, body, commit=False)
-            self.conn.execute(
-                "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-                "leased_at = NULL WHERE run_id = ? AND url = ? "
-                "AND worker_id = ? AND lease_version = ?",
-                (run_id, url, worker_id, lease_version),
-            )
             if before_commit is not None:
-                before_commit()  # hook de teste dentro da transação
+                before_commit()  # hook de teste antes do gate final
+            if not _finalize_done():
+                self.conn.rollback()
+                return "not_owned"
             self.conn.commit()
             return "written"
         except Exception:

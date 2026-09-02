@@ -432,6 +432,73 @@ def test_commit_page_enforces_ttl_by_clock(tmp_path):
             page=page) == "written"
 
 
+def test_commit_page_revalidates_ttl_right_before_done(tmp_path):
+    """Fronteira TEMPORAL do TTL por relógio: o cutoff é revalidado também
+    IMEDIATAMENTE antes do UPDATE...done, não só no início da transação.
+    Lease válido quando a transação começa; before_commit envelhece o lease
+    além do TTL (simula o relógio cruzar a expiração durante extração/
+    escritas/hook — o relógio anda mesmo com o lock de escrita exclusivo).
+    corpus_commit_page(..., lease_seconds=...) deve devolver not_owned e
+    NENHUM documento/seção/entidade pode ter sido persistido (rollback das
+    escritas já feitas na mesma transação)."""
+    import datetime as _dt
+    from hermes_seo_agent.connectors.static_site import PageSnapshot
+    db = tmp_path / "ttl_boundary.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/"])
+        claim = storage.corpus_claim_pending_with_token(
+            rid, limit=1, worker_id="worker-A")[0]
+        token = claim["lease_version"]
+
+        page = PageSnapshot("https://x.com/a/", 200)
+        page.title = "A"; page.h1 = ["A"]
+        page.body_text = "conteúdo novo"
+        page.html = "<h1>A</h1><p>conteúdo novo</p>"
+        page.meta_robots = ""; page.canonical = "https://x.com/a/"
+
+        def _age_lease_beyond_ttl():
+            # dentro da transação, DEPOIS das escritas: o lease passa a ter
+            # expirado por relógio (equivalente ao tempo real decorrido).
+            past = (_dt.datetime.now(_dt.timezone.utc)
+                    - _dt.timedelta(seconds=7200)).isoformat()
+            storage.conn.execute(
+                "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+                (past,),
+            )
+
+        # TTL por relógio: o gate final (antes do done/commit) pega a expiração
+        result = storage.corpus_commit_page(
+            run_id=rid, url="https://x.com/a/", worker_id="worker-A",
+            lease_version=token, built_at="2026-01-01T00:00:00+00:00",
+            page=page, lease_seconds=3600,
+            before_commit=_age_lease_beyond_ttl)
+        assert result == "not_owned"   # gate final revogou
+        # rollback: NADA das escritas da transação persistiu
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 0
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_sections WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 0
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_entities WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 0
+        assert storage.conn.execute(
+            "SELECT COUNT(*) FROM corpus_fts WHERE url = 'https://x.com/a/'"
+        ).fetchone()[0] == 0
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 1
+        # sem lease_seconds (serializável), o mesmo envelhecimento NÃO revoga:
+        # fence+lock exclusivo bastam; o dono conclui e o hook não interfere.
+        result_b = storage.corpus_commit_page(
+            run_id=rid, url="https://x.com/a/", worker_id="worker-A",
+            lease_version=token, built_at="2026-01-01T00:00:00+00:00",
+            page=page, before_commit=_age_lease_beyond_ttl)
+        assert result_b == "written"
+        assert storage.corpus_queue_counts(rid)["done"] == 1
+
+
 def test_mark_failed_enforces_ttl_by_clock(tmp_path):
     """Caminho de FALHA alinhado ao TTL por relógio: fetch falhou depois de o
     lease expirar (sem recovery) -> mark_failed retorna False e a URL fica
