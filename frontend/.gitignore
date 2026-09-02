@@ -4,3 +4,6 @@ out/
 npm-debug.log*
 .npm-cache/
 *.tsbuildinfo
+test-results/
+playwright-report/
+coverage/

@@ -92,8 +92,9 @@ export default function LoginPage() {
         ) : (
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="mb-1 block text-sm font-medium">Email</label>
+              <label htmlFor="email" className="mb-1 block text-sm font-medium">Email</label>
               <Input
+                id="email"
                 type="email"
                 autoComplete="username"
                 value={email}
@@ -102,8 +103,9 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">Senha</label>
+              <label htmlFor="password" className="mb-1 block text-sm font-medium">Senha</label>
               <Input
+                id="password"
                 type="password"
                 autoComplete="current-password"
                 value={password}
