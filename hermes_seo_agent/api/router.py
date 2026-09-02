@@ -64,6 +64,9 @@ class Router:
         # produto
         a("GET", "/api/v1/dashboard/today", self._today, perm="dashboard.read")
         a("GET", "/api/v1/work-items", self._work_items, perm="opportunity.read")
+        a("POST", "/api/v1/work-items/{id}/approve", self._approve_item, perm="opportunity.review", csrf=True)
+        a("POST", "/api/v1/work-items/{id}/reject", self._reject_item, perm="opportunity.review", csrf=True)
+        a("POST", "/api/v1/work-items/{id}/snooze", self._snooze_item, perm="opportunity.review", csrf=True)
         a("GET", "/api/v1/integrations", self._integrations, perm="integration.read")
         a("GET", "/api/v1/activity", self._activity, perm="audit.read")
         a("GET", "/api/v1/agents", self._agents, perm="agent.read")
@@ -216,6 +219,27 @@ class Router:
             status=request.query.get("status") or None,
             limit=int(request.query.get("limit", "200")),
         )})
+
+    def _approve_item(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        return self._apply_decision(request, params, "approved")
+
+    def _reject_item(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        return self._apply_decision(request, params, "rejected")
+
+    def _snooze_item(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
+        return self._apply_decision(request, params, "snoozed")
+
+    def _apply_decision(self, request: HttpRequest, params: dict[str, str], status: str) -> HttpResponse:
+        session = request._session
+        body = request._json_body or {}
+        result = self.control.update_work_item_status(
+            params["id"], status,
+            actor=(session.email if session else "system"),
+            reason=body.get("reason", ""),
+        )
+        if result is None:
+            raise NotFound("Item não encontrado ou transição inválida.")
+        return HttpResponse.json(200, {"ok": True, "item": result})
 
     def _integrations(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         live = request.query.get("live", "") in {"1", "true", "yes"}

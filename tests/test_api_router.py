@@ -141,3 +141,28 @@ def test_unknown_route_404(tmp_path):
     storage, r = _router(tmp_path / "u.db")
     assert r.handle(_req("GET", "/api/v1/nao-existe")).status == 404
     storage.close()
+
+
+def test_work_item_decision_requires_review_perm_and_csrf(tmp_path):
+    storage, r = _router(tmp_path / "w.db")
+    storage.conn.execute(
+        "INSERT INTO improvement_checklist (url, item, action, status, created_at) "
+        "VALUES ('https://x.com', 'title', 'melhorar', 'pending', '2026-01-01T00:00:00+00:00')")
+    storage.conn.commit()
+
+    # editor tem opportunity.review -> aprova (com CSRF)
+    r.auth.create_user("edit@x.com", "E", PWD, ["editor"])
+    _, tok = _login(r, "edit@x.com", PWD)
+    cookie = f"__Host-seo_session={tok}"
+    csrf = r.handle(_req("GET", "/api/v1/auth/me", cookie=cookie)).body["csrf_token"]
+    ok = r.handle(_req("POST", "/api/v1/work-items/checklist:1/approve", body={},
+                       cookie=cookie, csrf=csrf))
+    assert ok.status == 200 and ok.body["ok"] is True
+
+    # viewer não tem opportunity.review -> 403 (deny-by-default, antes do CSRF)
+    r.auth.create_user("v@x.com", "V", PWD, ["viewer"])
+    _, vtok = _login(r, "v@x.com", PWD)
+    forbidden = r.handle(_req("POST", "/api/v1/work-items/checklist:1/approve",
+                              body={}, cookie=f"__Host-seo_session={vtok}"))
+    assert forbidden.status == 403 and forbidden.body["error"]["code"] == "PERMISSION_DENIED"
+    storage.close()

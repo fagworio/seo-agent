@@ -104,3 +104,37 @@ def test_activity_mixes_runs_and_events(tmp_path):
     assert any(a["type"] == "agent_run" for a in act)
     assert act == sorted(act, key=lambda a: a["ts"], reverse=True)
     storage.close()
+
+
+def test_update_work_item_status_approve(tmp_path):
+    storage, cp = _seed(tmp_path / "w.db")
+    # aprovar checklist (pending -> done)
+    res = cp.update_work_item_status("checklist:1", "approved", actor="admin@x.com")
+    assert res == {"id": "checklist:1", "source": "checklist", "status": "approved"}
+    row = storage.conn.execute(
+        "SELECT status FROM improvement_checklist WHERE id = 1").fetchone()
+    assert row[0] == "done"
+    # auditoria registrada
+    audit = storage.conn.execute(
+        "SELECT action_type FROM audit_log WHERE entity = 'checklist:1'").fetchone()
+    assert audit and audit[0] == "OPPORTUNITY_APPROVED"
+    storage.close()
+
+
+def test_update_work_item_status_backlog_and_errors(tmp_path):
+    storage, cp = _seed(tmp_path / "b.db")
+    # semear um backlog proposto
+    storage.conn.execute(
+        "INSERT INTO editorial_backlog (pauta_type, title, status, created_at) "
+        "VALUES ('expand', 'Titulo', 'proposed', '2026-01-01T00:00:00+00:00')")
+    storage.conn.commit()
+    assert cp.update_work_item_status("backlog:1", "approved", actor="op@x.com")["status"] == "approved"
+    assert cp.update_work_item_status("backlog:1", "snoozed", actor="op@x.com")["status"] == "snoozed"
+    # id inválido / fonte desconhecida -> None
+    assert cp.update_work_item_status("nope:1", "approved") is None
+    assert cp.update_work_item_status("backlog:999", "approved") is None
+    # status inválido -> ValueError
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        cp.update_work_item_status("backlog:1", "foo")
+    storage.close()

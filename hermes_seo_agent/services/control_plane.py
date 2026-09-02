@@ -32,6 +32,51 @@ class ControlPlaneService:
                    limit: int = 200) -> list[dict[str, Any]]:
         return self.opportunities.feed(source=source, status=status, limit=limit)
 
+    ACTION_EVENTS = {"approved": "OPPORTUNITY_APPROVED", "rejected": "OPPORTUNITY_REJECTED",
+                     "snoozed": "OPPORTUNITY_SNOOZED"}
+
+    def update_work_item_status(self, item_id: str, status: str, *, actor: str = "",
+                                reason: str = "") -> dict[str, Any] | None:
+        """Aplica uma decisão humana (approved/rejected/snoozed) a um work item.
+
+        Mapeia o id `source:key` para a tabela de origem e usa as transições
+        existentes (backlog usa transition_backlog com eventos; checklist usa
+        mark_checklist_done). Sempre registra o evento de auditoria.
+        """
+        event = self.ACTION_EVENTS.get(status)
+        if event is None:
+            raise ValueError(f"status inválido para work item: {status!r}")
+        source, _, key = item_id.partition(":")
+        if not key or not key.isdigit():
+            return None
+        key_id = int(key)
+        done = False
+        if source == "checklist":
+            if status == "approved":
+                done = self.storage.mark_checklist_done(key_id)
+            else:
+                done = self._update_simple("improvement_checklist", key_id, status, reason)
+        elif source == "content_brief":
+            done = self._update_simple("content_briefs", key_id, status, reason)
+        elif source == "interlink":
+            done = self._update_simple("interlink_suggestions", key_id, status, reason)
+        elif source == "backlog":
+            allowed = {"approved", "rejected", "snoozed"}
+            if status in allowed:
+                done = self.storage.transition_backlog(key_id, status, reason=reason)
+        if not done:
+            return None
+        self.storage.log_audit(actor or "system", event, item_id,
+                               {"status": status}, {"status": status, "reason": reason})
+        return {"id": item_id, "source": source, "status": status}
+
+    def _update_simple(self, table: str, row_id: int, status: str, reason: str) -> bool:
+        cur = self.storage.conn.execute(
+            f"UPDATE {table} SET status = ? WHERE id = ?", (status, row_id)
+        )
+        self.storage.conn.commit()
+        return cur.rowcount > 0
+
     # -- Hoje ----------------------------------------------------------------
     def today(self, *, limit: int = 10) -> dict[str, Any]:
         items = self.opportunities.feed(limit=200)
