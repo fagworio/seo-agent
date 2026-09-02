@@ -1205,7 +1205,7 @@ class Storage:
     def save_corpus_document(self, *, url: str, title: str, h1: str, body_text: str,
                              canonical: str = "", is_noindex: int = 0,
                              status_code: int = 0, content_hash: str = "",
-                             built_at: str = "") -> None:
+                             built_at: str = "", commit: bool = True) -> None:
         self.conn.execute(
             "INSERT INTO corpus_documents (url, title, h1, body_text, canonical, "
             "is_noindex, status_code, content_hash, built_at) "
@@ -1217,9 +1217,11 @@ class Storage:
             (url, title, h1, body_text, canonical, is_noindex, status_code,
              content_hash, built_at),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def replace_corpus_sections(self, url: str, sections: list[dict[str, Any]]) -> None:
+    def replace_corpus_sections(self, url: str, sections: list[dict[str, Any]],
+                                commit: bool = True) -> None:
         self.conn.execute("DELETE FROM corpus_sections WHERE url = ?", (url,))
         for sec in sections:
             self.conn.execute(
@@ -1228,9 +1230,11 @@ class Storage:
                 (url, sec.get("heading", ""), sec.get("heading_level", 2),
                  sec.get("position", 0), sec.get("text", ""), sec.get("hash", "")),
             )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def replace_corpus_entities(self, url: str, entities: list[dict[str, Any]]) -> None:
+    def replace_corpus_entities(self, url: str, entities: list[dict[str, Any]],
+                                commit: bool = True) -> None:
         self.conn.execute("DELETE FROM corpus_entities WHERE url = ?", (url,))
         for ent in entities:
             self.conn.execute(
@@ -1240,16 +1244,19 @@ class Storage:
                 (url, ent.get("entity", ""), ent.get("entity_type", "term"),
                  ent.get("count", 1)),
             )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def index_corpus_document(self, url: str, title: str, h1: str, body: str) -> None:
+    def index_corpus_document(self, url: str, title: str, h1: str, body: str,
+                              commit: bool = True) -> None:
         # FTS5 contentless: DELETE + INSERT reindexa a doc.
         self.conn.execute("DELETE FROM corpus_fts WHERE url = ?", (url,))
         self.conn.execute(
             "INSERT INTO corpus_fts (url, title, h1, body) VALUES (?, ?, ?, ?)",
             (url, title, h1, body),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def corpus_search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         """BM25 search sobre documentos (title+h1+body) — retorna doc + snippet."""
@@ -1488,42 +1495,109 @@ class Storage:
         return cur.rowcount
 
     def corpus_mark_done(self, run_id: int, url: str, worker_id: str,
-                         lease_version: int | None = None) -> bool:
-        """Marca done SOMENTE se o worker ainda é o dono do lease.
-
-        worker_id é OBRIGATÓRIO (a chamada sem dono não registra). Se
-        lease_version é dado (fencing), também exige que a versão concedida
-        seja a atual — um worker cujo lease foi recuperado por outro NÃO
-        registra o resultado; a URL será concluída pelo novo dono."""
-        if not worker_id:
+                         lease_version: int) -> bool:
+        """Marca done SOMENTE se o worker ainda é o dono com o FENCING TOKEN
+        correto. worker_id e lease_version são OBRIGATÓRIOS — chamada sem dono
+        ou com token defasado retorna False e não registra."""
+        if not worker_id or lease_version is None:
             return False
-        sql = ("UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
-               "leased_at = NULL WHERE run_id = ? AND url = ? AND worker_id = ?")
-        params: list[Any] = [run_id, url, worker_id]
-        if lease_version is not None:
-            sql += " AND lease_version = ?"
-            params.append(lease_version)
-        cur = self.conn.execute(sql, params)
+        cur = self.conn.execute(
+            "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+            "leased_at = NULL WHERE run_id = ? AND url = ? AND worker_id = ? "
+            "AND lease_version = ? AND status = 'in_progress'",
+            (run_id, url, worker_id, lease_version),
+        )
         self.conn.commit()
         return cur.rowcount > 0
 
     def corpus_mark_failed(self, run_id: int, url: str, error: str,
-                           worker_id: str,
-                           lease_version: int | None = None) -> bool:
-        """Marca failed SOMENTE se o worker ainda é o dono do lease (mesma
-        semântica de corpus_mark_done; worker_id obrigatório)."""
-        if not worker_id:
+                           worker_id: str, lease_version: int) -> bool:
+        """Marca failed SOMENTE se o worker ainda é o dono com o token correto
+        (worker_id e lease_version obrigatórios)."""
+        if not worker_id or lease_version is None:
             return False
-        sql = ("UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
-               "leased_at = NULL, error = ? WHERE run_id = ? AND url = ? "
-               "AND worker_id = ?")
-        params: list[Any] = [error, run_id, url, worker_id]
-        if lease_version is not None:
-            sql += " AND lease_version = ?"
-            params.append(lease_version)
-        cur = self.conn.execute(sql, params)
+        cur = self.conn.execute(
+            "UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
+            "leased_at = NULL, error = ? WHERE run_id = ? AND url = ? "
+            "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'",
+            (error, run_id, url, worker_id, lease_version),
+        )
         self.conn.commit()
         return cur.rowcount > 0
+
+    def corpus_commit_page(self, *, run_id: int, url: str, worker_id: str,
+                           lease_version: int, built_at: str,
+                           page: Any) -> str:
+        """Operação TRANSACIONAL ÚNICA: escreve documento+seções+entidades+FTS
+        e marca done em UM commit, sob BEGIN IMMEDIATE (escrita exclusiva).
+
+        A janela entre 'validar posse' e 'gravar' é ELIMINADA: a revalidação
+        (worker_id + lease_version + status='in_progress') acontece DENTRO da
+        transação exclusiva, imediatamente antes das escritas. Se B recuperou
+        o lease (token incrementado), a revalidação falha, tudo é revertido
+        (ROLLBACK) e NADA é gravado.
+
+        Retorna: 'written' | 'unchanged' (hash igual, só marca done) |
+        'not_owned' (posse perdida — zero alterações).
+        """
+        import hashlib
+        # Nota: extract_sections/extract_entities vivem em corpus.builder;
+        # são importados abaixo no ponto de uso (evita ciclo de import).
+        body = getattr(page, "body_text", "") or ""
+        content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        h1 = " ".join(getattr(page, "h1", []) or [])
+        title = getattr(page, "title", "") or ""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            # revalidação DENTRO da escrita exclusiva (fecha a janela)
+            owned = self.conn.execute(
+                "SELECT 1 FROM corpus_queue WHERE run_id = ? AND url = ? "
+                "AND worker_id = ? AND lease_version = ? AND status = 'in_progress'",
+                (run_id, url, worker_id, lease_version),
+            ).fetchone()
+            if not owned:
+                self.conn.rollback()
+                return "not_owned"
+            row = self.conn.execute(
+                "SELECT content_hash FROM corpus_documents WHERE url = ?", (url,)
+            ).fetchone()
+            if row and row[0] == content_hash:
+                # inalterado: só marca done, sem reindexar
+                self.conn.execute(
+                    "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+                    "leased_at = NULL WHERE run_id = ? AND url = ? "
+                    "AND worker_id = ? AND lease_version = ?",
+                    (run_id, url, worker_id, lease_version),
+                )
+                self.conn.commit()
+                return "unchanged"
+            # escritas SEM commit interno (a transação faz o commit único)
+            self.save_corpus_document(
+                url=url, title=title, h1=h1, body_text=body,
+                canonical=getattr(page, "canonical", "") or "",
+                is_noindex=int("noindex" in (getattr(page, "meta_robots", "") or "").lower()),
+                status_code=getattr(page, "status_code", 0),
+                content_hash=content_hash, built_at=built_at, commit=False)
+            from ..corpus.builder import extract_entities, extract_sections
+            secs = extract_sections(getattr(page, "html", "") or "", url)
+            self.replace_corpus_sections(url, secs, commit=False)
+            ents = extract_entities(title, h1, body)
+            self.replace_corpus_entities(url, ents, commit=False)
+            self.index_corpus_document(url, title, h1, body, commit=False)
+            self.conn.execute(
+                "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+                "leased_at = NULL WHERE run_id = ? AND url = ? "
+                "AND worker_id = ? AND lease_version = ?",
+                (run_id, url, worker_id, lease_version),
+            )
+            self.conn.commit()
+            return "written"
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
 
     def corpus_queue_counts(self, run_id: int) -> dict[str, int]:
         counts = {"pending": 0, "done": 0, "failed": 0, "in_progress": 0}

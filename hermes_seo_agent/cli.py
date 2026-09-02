@@ -2893,10 +2893,8 @@ def _cmd_integration_status(args: argparse.Namespace, config: Any) -> int:
 
 
 def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
-    """M2: memória editorial — rebuild (incremental por content_hash),
+    """M2: memória editorial — rebuild (incremental, fila com lease transacional),
     search (FTS5/BM25) e coverage (documentos/seções que cobrem um termo)."""
-    from .corpus.builder import build_corpus
-    from .corpus.builder import extract_sections as _extract_sections  # noqa: F401
 
     with Storage(config.sqlite_path) as storage:
         if args.action == "stats":
@@ -3001,7 +2999,6 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                             worker_id=worker_id)
                         if not claims:
                             break
-                        batch_changed: list[tuple[Any, str, int]] = []
                         for claim in claims:
                             url = claim["url"]
                             token = claim["lease_version"]
@@ -3017,47 +3014,24 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                                 failed += 1
                                 # marca failed SÓ se ainda é o dono (fencing)
                                 if storage.corpus_mark_failed(
-                                        run_id, url, str(exc)[:200], worker_id,
-                                        lease_version=token):
+                                        run_id, url, str(exc)[:200], worker_id, token):
                                     storage.record_corpus_failure(
                                         run_id, url, str(exc)[:200])
                                 continue
-                            # FENCING: antes de usar o conteúdo, confirma que
-                            # este worker AINDA é o dono com o token concedido.
-                            # Se o lease expirou e B o recuperou durante o
-                            # fetch, A NÃO grava nem conclui esta URL.
-                            if not storage.corpus_owns_lease(
-                                    run_id, url, worker_id, token):
-                                continue
-                            processed += 1
-                            body = getattr(page, "body_text", "") or ""
-                            h = hashlib.sha256(body.encode("utf-8")).hexdigest()
-                            row = storage.conn.execute(
-                                "SELECT content_hash FROM corpus_documents WHERE url = ?",
-                                (url,),
-                            ).fetchone()
-                            if row and row[0] == h:
-                                storage.corpus_mark_done(run_id, url, worker_id,
-                                                         lease_version=token)
-                                continue  # inalterado
-                            batch_changed.append((page, url, token))
-                        if batch_changed:
-                            # Fencing final antes do build: só grava quem ainda
-                            # é dono com o token correto (o build não pode ser
-                            # desfeito, então valida-se a posse no último
-                            # instante possível antes de gravar).
-                            still_owned = [
-                                (page, url, token) for page, url, token in batch_changed
-                                if storage.corpus_owns_lease(run_id, url, worker_id, token)
-                            ]
-                            if still_owned:
-                                counts = build_corpus(
-                                    storage, [p for p, _, _ in still_owned],
-                                    built_at=built_at)
-                                changed += counts["documents"]
-                                for _, url, token in still_owned:
-                                    storage.corpus_mark_done(run_id, url, worker_id,
-                                                             lease_version=token)
+                            # OPERAÇÃO TRANSACIONAL ÚNICA: grava doc+seções+
+                            # entidades+FTS e marca done sob BEGIN IMMEDIATE,
+                            # revalidando a posse DENTRO da transação — a
+                            # janela entre validação e escrita é eliminada.
+                            result = storage.corpus_commit_page(
+                                run_id=run_id, url=url, worker_id=worker_id,
+                                lease_version=token, built_at=built_at, page=page)
+                            if result == "not_owned":
+                                continue  # posse perdida durante o fetch: nada grava
+                            if result == "written":
+                                processed += 1
+                                changed += 1
+                            elif result == "unchanged":
+                                processed += 1
                         storage.update_corpus_run(
                             run_id, processed=processed, changed=changed, failed=failed)
                 status = "ok" if not failed else "partial"
