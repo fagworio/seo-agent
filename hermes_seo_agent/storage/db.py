@@ -434,6 +434,58 @@ CREATE TABLE IF NOT EXISTS auth_events (
     event TEXT NOT NULL,             -- LOGIN_SUCCESS, LOGIN_FAILURE, ...
     detail_json TEXT
 );
+
+-- ===== Control plane: agent run observability (ADR-0007) =====
+CREATE TABLE IF NOT EXISTS agents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL REFERENCES agents(id),
+    status TEXT NOT NULL,            -- queued|running|success|partial|failed|cancelled
+    trigger TEXT NOT NULL,           -- schedule|manual|system
+    intent TEXT,                     -- comando lógico: technical|sitemap|opportunities|content|url
+    mode TEXT,                       -- analyze|safe_fix
+    started_by TEXT,                 -- email / 'system' / 'schedule'
+    started_at TEXT,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    summary_json TEXT,
+    comparison_json TEXT,            -- delta vs run comparável
+    urls_analyzed INTEGER NOT NULL DEFAULT 0,
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    opportunities_count INTEGER NOT NULL DEFAULT 0,
+    safe_fixes_count INTEGER NOT NULL DEFAULT 0,
+    executed_changes_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status ON agent_runs(agent_id, status, id);
+CREATE TABLE IF NOT EXISTS agent_run_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES agent_runs(id),
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL,            -- pending|running|success|failed|skipped
+    started_at TEXT,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    detail_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_steps_run ON agent_run_steps(run_id);
+CREATE TABLE IF NOT EXISTS agent_run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES agent_runs(id),
+    ts TEXT NOT NULL,
+    event TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',  -- info|warning|error
+    message TEXT,
+    detail_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_run ON agent_run_events(run_id);
 """
 
 
