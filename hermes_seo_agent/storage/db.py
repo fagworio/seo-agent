@@ -324,10 +324,22 @@ CREATE TABLE IF NOT EXISTS corpus_runs (
     processed INTEGER NOT NULL DEFAULT 0,
     changed INTEGER NOT NULL DEFAULT 0,
     failed INTEGER NOT NULL DEFAULT 0,
+    sitemap_total INTEGER NOT NULL DEFAULT 0,   -- tamanho COMPLETO do sitemap
+    sitemap_signature TEXT,                     -- hash da lista de URLs (detecta mudança)
     started_at TEXT NOT NULL,
     finished_at TEXT,
     error TEXT
 );
+CREATE TABLE IF NOT EXISTS corpus_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed
+    error TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_corpus_queue_run ON corpus_queue(run_id, status);
 CREATE TABLE IF NOT EXISTS corpus_run_failures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL,
@@ -390,6 +402,10 @@ class Storage:
                 ("measured_28d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_56d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_90d", "INTEGER NOT NULL DEFAULT 0"),
+            ],
+            "corpus_runs": [
+                ("sitemap_total", "INTEGER NOT NULL DEFAULT 0"),
+                ("sitemap_signature", "TEXT"),
             ],
         }
         editorial_extra = [
@@ -1313,11 +1329,13 @@ class Storage:
 
     # -- corpus runs: checkpoint, failures e cobertura (endurecimento M2) -----
 
-    def start_corpus_run(self, *, total_urls: int) -> int:
+    def start_corpus_run(self, *, total_urls: int, sitemap_total: int = 0,
+                         sitemap_signature: str = "") -> int:
         cur = self.conn.execute(
-            "INSERT INTO corpus_runs (status, total_urls, started_at) "
-            "VALUES ('running', ?, ?)",
-            (total_urls, _now()),
+            "INSERT INTO corpus_runs (status, total_urls, sitemap_total, "
+            "sitemap_signature, started_at) "
+            "VALUES ('running', ?, ?, ?, ?)",
+            (total_urls, sitemap_total, sitemap_signature, _now()),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -1345,12 +1363,84 @@ class Storage:
         )
         self.conn.commit()
 
+    # -- fila de URLs por run (retomada real, não prefixo do sitemap) --------
+
+    def corpus_enqueue_urls(self, run_id: int, urls: list[str]) -> int:
+        """Adiciona URLs à fila do run como pending (idempotente por run+url)."""
+        added = 0
+        for url in urls:
+            try:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO corpus_queue (run_id, url, status, "
+                    "created_at) VALUES (?, ?, 'pending', ?)",
+                    (run_id, url, _now()),
+                )
+                added += 1
+            except Exception:
+                continue
+        self.conn.commit()
+        return added
+
+    def corpus_claim_pending(self, run_id: int, *, limit: int = 50) -> list[str]:
+        """Próximas URLs pending da fila (o cursor do run)."""
+        rows = self.conn.execute(
+            "SELECT url FROM corpus_queue WHERE run_id = ? AND status = 'pending' "
+            "ORDER BY id LIMIT ?",
+            (run_id, limit),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def corpus_mark_done(self, run_id: int, url: str) -> None:
+        self.conn.execute(
+            "UPDATE corpus_queue SET status = 'done' "
+            "WHERE run_id = ? AND url = ?",
+            (run_id, url),
+        )
+        self.conn.commit()
+
+    def corpus_mark_failed(self, run_id: int, url: str, error: str) -> None:
+        self.conn.execute(
+            "UPDATE corpus_queue SET status = 'failed', error = ? "
+            "WHERE run_id = ? AND url = ?",
+            (error, run_id, url),
+        )
+        self.conn.commit()
+
+    def corpus_queue_counts(self, run_id: int) -> dict[str, int]:
+        counts = {"pending": 0, "done": 0, "failed": 0}
+        for r in self.conn.execute(
+            "SELECT status, COUNT(*) FROM corpus_queue WHERE run_id = ? "
+            "GROUP BY status", (run_id,),
+        ).fetchall():
+            counts[r[0]] = r[1]
+        return counts
+
+    def latest_corpus_run(self, *, status: str | None = None) -> dict[str, Any] | None:
+        """Último run (running se status='running') com sitemap metadata."""
+        sql = ("SELECT id, status, total_urls, processed, changed, failed, "
+               "sitemap_total, sitemap_signature, started_at, finished_at, error "
+               "FROM corpus_runs")
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status = ?"
+            params.append(status)
+        sql += " ORDER BY id DESC LIMIT 1"
+        row = self.conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "status": row[1], "total_urls": row[2],
+            "processed": row[3], "changed": row[4], "failed": row[5],
+            "sitemap_total": row[6] or 0, "sitemap_signature": row[7] or "",
+            "started_at": row[8], "finished_at": row[9], "error": row[10] or "",
+        }
+
     def corpus_run_summary(self) -> dict[str, Any]:
         """Últimos runs + falhas (para operar o crawl incremental)."""
         runs = self.conn.execute(
             "SELECT id, status, total_urls, processed, changed, failed, "
-            "started_at, finished_at, error FROM corpus_runs "
-            "ORDER BY id DESC LIMIT 10"
+            "sitemap_total, sitemap_signature, started_at, finished_at, error "
+            "FROM corpus_runs ORDER BY id DESC LIMIT 10"
         ).fetchall()
         last_run_id = runs[0][0] if runs else None
         failures = []
@@ -1365,8 +1455,9 @@ class Storage:
         return {
             "runs": [
                 {"id": r[0], "status": r[1], "total_urls": r[2], "processed": r[3],
-                 "changed": r[4], "failed": r[5], "started_at": r[6],
-                 "finished_at": r[7], "error": r[8] or ""}
+                 "changed": r[4], "failed": r[5], "sitemap_total": r[6] or 0,
+                 "sitemap_signature": r[7] or "", "started_at": r[8],
+                 "finished_at": r[9], "error": r[10] or ""}
                 for r in runs
             ],
             "last_run_failures": failures,
@@ -1412,6 +1503,29 @@ class Storage:
                 (len(sitemap_set & corpus_urls) / len(sitemap_set)) * 100, 1
             ) if sitemap_set else 0.0
         return report
+
+    def corpus_global_coverage(self) -> dict[str, Any]:
+        """Cobertura GLOBAL vs o sitemap completo registrado no último run
+        com assinatura (independe do tamanho do lote que o criou).
+
+        Um run limitado (ex.: --limit 5000) tem sitemap_total=18889 e
+        sitemap_signature; aqui a cobertura global usa esses valores, não o
+        total_urls do lote — evita o 'coverage acima de 100%' reportado antes.
+        """
+        last = self.latest_corpus_run(status="ok") or self.latest_corpus_run()
+        if not last or not last["sitemap_total"]:
+            return {"global_sitemap_total": 0, "global_coverage_pct": None,
+                    "basis": "nenhum run com sitemap completo registrado"}
+        docs = self.conn.execute(
+            "SELECT COUNT(*) FROM corpus_documents").fetchone()[0]
+        pct = round((docs / last["sitemap_total"]) * 100, 1)
+        return {
+            "global_sitemap_total": last["sitemap_total"],
+            "global_docs_indexed": docs,
+            "global_coverage_pct": pct,
+            "basis": f"run {last['id']} (sitemap completo {last['sitemap_total']})",
+        }
+
 
     # -- M8: opportunity outcomes e aprendizado ------------------------------
 

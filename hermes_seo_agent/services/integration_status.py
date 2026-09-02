@@ -67,10 +67,9 @@ class IntegrationStatusService:
         stats = self.storage.corpus_stats()
         report = self.storage.corpus_coverage_report()
         runs = self.storage.corpus_run_summary()
+        global_cov = self.storage.corpus_global_coverage()
         last_run = runs["runs"][0] if runs["runs"] else None
         docs = stats["documents"]
-        sitemap_ref = report.get("sitemap_total") or (
-            (last_run or {}).get("total_urls") or 0)
         status = "missing"
         if docs:
             status = "available"
@@ -82,15 +81,14 @@ class IntegrationStatusService:
             detail=f"{docs} docs / {stats['sections']} seções indexadas",
             last_window=(last_run or {}).get("started_at", ""),
             rows=docs,
-            limitations="cobertura real vs sitemap só após corpus rebuild",
+            limitations="cobertura GLOBAL vs sitemap completo do último run",
             extras={
                 "documents": docs, "sections": stats["sections"],
                 "entities": stats["entities"],
                 "staleness": report.get("staleness", 0),
                 "unverifiable_docs": report.get("unverifiable_docs", 0),
-                "sitemap_total_ref": sitemap_ref,
-                "coverage_pct_ref": round((docs / sitemap_ref) * 100, 1)
-                if sitemap_ref else None,
+                "global_sitemap_total": global_cov["global_sitemap_total"],
+                "global_coverage_pct": global_cov["global_coverage_pct"],
                 "last_run_status": (last_run or {}).get("status"),
                 "last_run_failed": (last_run or {}).get("failed", 0),
             },

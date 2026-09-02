@@ -116,7 +116,8 @@ def test_integration_status_corpus_source(tmp_path):
         page.meta_robots = ""
         page.canonical = "https://x.com/a/"
         build_corpus(storage, [page], built_at="2026-01-01T00:00:00+00:00")
-        rid = storage.start_corpus_run(total_urls=1)
+        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                       sitemap_signature="abc")
         storage.finish_corpus_run(rid, status="ok")
         config = _config(db)
         service = IntegrationStatusService(config, storage)
@@ -125,7 +126,9 @@ def test_integration_status_corpus_source(tmp_path):
         assert corpus.data_status == "available"
         assert corpus.extras["documents"] == 1
         assert corpus.extras["last_run_status"] == "ok"
-        assert corpus.extras["coverage_pct_ref"] == 100.0
+        # cobertura GLOBAL vs sitemap completo registrado no run
+        assert corpus.extras["global_sitemap_total"] == 1
+        assert corpus.extras["global_coverage_pct"] == 100.0
         # docs sem registro no inventory NÃO são 'staleness' (são não-verificáveis)
         assert corpus.extras["staleness"] == 0
         assert corpus.extras.get("unverifiable_docs", 0) == 1

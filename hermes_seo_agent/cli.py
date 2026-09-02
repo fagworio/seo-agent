@@ -2900,90 +2900,118 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
             stats = storage.corpus_stats()
             report = storage.corpus_coverage_report()
             runs = storage.corpus_run_summary()
-            # cobertura offline: usa o total do último run como referência do
-            # sitemap (sem re-fetch); o rebuild online calcula o coverage real.
+            global_cov = storage.corpus_global_coverage()
             last_run = runs["runs"][0] if runs["runs"] else None
-            sitemap_ref = report.get("sitemap_total") or (
-                (last_run or {}).get("total_urls") or 0)
-            indexed = stats["documents"]
-            offline_coverage = round(
-                (indexed / sitemap_ref) * 100, 1) if sitemap_ref else None
+            # Cobertura GLOBAL usa o sitemap completo registrado no run
+            # (independente do tamanho do lote); a cobertura do lote usa o
+            # total_urls do último run como referência secundária.
+            sitemap_ref = global_cov["global_sitemap_total"] or (
+                (last_run or {}).get("sitemap_total") or 0)
             result = {"status": "ok",
                       "summary": {"command": "corpus", "action": "stats", **stats,
-                                  "sitemap_total_ref": sitemap_ref,
-                                  "coverage_pct_ref": offline_coverage,
+                                  "global_sitemap_total": sitemap_ref,
+                                  "global_coverage_pct": global_cov["global_coverage_pct"],
                                   "last_run_status": (
                                       last_run.get("status") if last_run else None)},
                       "findings": [], "safe_actions": [], "approval_required": [],
                       "stats": stats, "coverage": report, "runs": runs,
+                      "global_coverage": global_cov,
                       "coverage_note": (
-                          "cobertura offline usa o total do último run como "
-                          "referência; rode corpus rebuild para o valor real vs "
-                          "sitemap atual" if offline_coverage is not None else "")}
+                          "cobertura GLOBAL usa o sitemap completo do último run "
+                          "com assinatura (não o tamanho do lote)" if sitemap_ref else "")}
             _emit(result, force_json=True)
             return 0
 
         if args.action == "rebuild":
-            # Crawl incremental com CHECKPOINT: roda o sitemap todo, registra o
-            # run (processed/changed/failed), registra falhas por URL e só
-            # reindexa o que mudou (content_hash). Se o processo cair, o run
-            # fica 'running' e o próximo rebuild continua (sem reindexar o que
-            # já está igual — o idempotente por hash garante).
+            # Crawl incremental com FILA por URL (retomada real):
+            #  * cria um run e enfileira TODAS as URLs (sitemap completo), com
+            #    sitemap_total + assinatura gravados no run;
+            #  * processa em LOTES (claim pending), indexa cada lote e commita
+            #    — se o processo cair, a fila guarda o cursor (pending restam);
+            #  * re-executar retoma o run 'running' pendente em vez de recomeçar
+            #    do prefixo do sitemap.
+            import hashlib
+
             with StaticSiteClient(config) as static:
                 urls = static.all_sitemap_urls()
             cap = args.limit or config.max_corpus_docs
-            urls = urls[:cap]
-            run_id = storage.start_corpus_run(total_urls=len(urls))
-            changed: list[Any] = []
-            processed = failed = 0
+            batch_urls = urls[:cap]
+            sitemap_total = len(urls)
+            signature = hashlib.sha256("\n".join(urls).encode("utf-8")).hexdigest()[:16]
+
+            run = storage.latest_corpus_run(status="running")
+            if run and run["sitemap_signature"] != signature:
+                # sitemap mudou desde o run ativo: encerra e cria novo
+                storage.finish_corpus_run(run["id"], status="failed",
+                                          error="sitemap mudou durante run ativo")
+                run = None
+            if run:
+                run_id = run["id"]
+                resumed = True
+            else:
+                run_id = storage.start_corpus_run(
+                    total_urls=len(batch_urls), sitemap_total=sitemap_total,
+                    sitemap_signature=signature)
+                storage.corpus_enqueue_urls(run_id, batch_urls)
+                resumed = False
+
             built_at = _now()
+            processed = changed = failed = 0
             try:
                 with StaticSiteClient(config) as static:
-                    for url in urls:
-                        try:
-                            page = static.fetch_page(url)
-                        except Exception as exc:
-                            failed += 1
-                            storage.record_corpus_failure(run_id, url, str(exc)[:200])
-                            storage.update_corpus_run(
-                                run_id, processed=processed, changed=len(changed),
-                                failed=failed)
-                            continue
-                        processed += 1
-                        body = getattr(page, "body_text", "") or ""
-                        import hashlib
-                        h = hashlib.sha256(body.encode("utf-8")).hexdigest()
-                        row = storage.conn.execute(
-                            "SELECT content_hash FROM corpus_documents WHERE url = ?",
-                            (url,),
-                        ).fetchone()
-                        if row and row[0] == h:
-                            storage.update_corpus_run(
-                                run_id, processed=processed, changed=len(changed),
-                                failed=failed)
-                            continue  # inalterado
-                        changed.append(page)
+                    while True:
+                        pending = storage.corpus_claim_pending(run_id, limit=50)
+                        if not pending:
+                            break
+                        batch_changed: list[Any] = []
+                        for url in pending:
+                            try:
+                                page = static.fetch_page(url)
+                            except Exception as exc:
+                                failed += 1
+                                storage.corpus_mark_failed(run_id, url, str(exc)[:200])
+                                storage.record_corpus_failure(run_id, url, str(exc)[:200])
+                                continue
+                            processed += 1
+                            body = getattr(page, "body_text", "") or ""
+                            h = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                            row = storage.conn.execute(
+                                "SELECT content_hash FROM corpus_documents WHERE url = ?",
+                                (url,),
+                            ).fetchone()
+                            if row and row[0] == h:
+                                storage.corpus_mark_done(run_id, url)
+                                continue  # inalterado
+                            batch_changed.append(page)
+                        if batch_changed:
+                            counts = build_corpus(storage, batch_changed, built_at=built_at)
+                            changed += counts["documents"]
+                            for page in batch_changed:
+                                storage.corpus_mark_done(run_id, page.url)
                         storage.update_corpus_run(
-                            run_id, processed=processed, changed=len(changed),
-                            failed=failed)
-                counts = build_corpus(storage, changed, built_at=built_at)
+                            run_id, processed=processed, changed=changed, failed=failed)
                 status = "ok" if not failed else "partial"
                 storage.finish_corpus_run(run_id, status=status)
-            except Exception as exc:  # noqa: BLE001 — checkpoint registra a queda
+            except Exception as exc:  # noqa: BLE001 — a fila guarda o cursor
                 storage.finish_corpus_run(run_id, status="failed", error=str(exc)[:300])
                 print(json.dumps({"status": "error", "error": f"rebuild falhou: {exc}"},
                                  ensure_ascii=False))
                 return 2
-            report = storage.corpus_coverage_report(urls)
+            queue = storage.corpus_queue_counts(run_id)
+            global_cov = storage.corpus_global_coverage()
+            report = storage.corpus_coverage_report(batch_urls)
             result = {
                 "status": "ok",
                 "summary": {"command": "corpus", "action": "rebuild",
-                            "run_id": run_id, "total": len(urls),
-                            "processed": processed, "changed": len(changed),
+                            "run_id": run_id, "resumed": resumed,
+                            "batch_total": len(batch_urls),
+                            "sitemap_total": sitemap_total,
+                            "processed": processed, "changed": changed,
                             "failed": failed, "run_status": status,
-                            **counts},
+                            "queue": queue,
+                            "global_coverage_pct": global_cov["global_coverage_pct"]},
                 "findings": [], "safe_actions": [], "approval_required": [],
-                "coverage": report,
+                "coverage": report, "global_coverage": global_cov,
             }
             _emit(result, force_json=True)
             return 0
