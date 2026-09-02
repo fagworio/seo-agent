@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import sys
 import uuid
 from datetime import date, timedelta
@@ -2975,8 +2976,10 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                     resumed = True
             if run:
                 run_id = run["id"]
-                # leases órfãos de processo morto voltam a pending
-                storage.corpus_reset_in_progress(run_id)
+                # Recupera APENAS leases expirados (TTL) de processo morto —
+                # NUNCA toca leases vivos de outro worker concorrente.
+                storage.corpus_recover_expired_leases(
+                    run_id, ttl_seconds=config.corpus_lease_seconds)
             else:
                 run_id = storage.start_corpus_run(
                     total_urls=sitemap_total, sitemap_total=sitemap_total,
@@ -2984,17 +2987,24 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                 storage.corpus_enqueue_urls(run_id, urls)  # snapshot completo
                 resumed = False
 
+            worker_id = f"pid-{os.getpid()}-{uuid.uuid4().hex[:8]}"
             built_at = _now()
-            processed = changed = failed = 0
+            attempted = processed = changed = failed = 0
             try:
                 with StaticSiteClient(config) as static:
-                    while processed < exec_limit:
+                    # O ORÇAMENTO do --limit é `attempted` (tentativas), não
+                    # `processed` (sucessos): falhas de fetch consomem o limite
+                    # para a execução não estourar a fila de falhas.
+                    while attempted < exec_limit:
                         pending = storage.corpus_claim_pending(
-                            run_id, limit=min(50, exec_limit - processed))
+                            run_id, limit=min(50, exec_limit - attempted),
+                            worker_id=worker_id,
+                            lease_seconds=config.corpus_lease_seconds)
                         if not pending:
                             break
                         batch_changed: list[Any] = []
                         for url in pending:
+                            attempted += 1  # antes do fetch (orçamento real)
                             try:
                                 page = static.fetch_page(url)
                             except Exception as exc:
@@ -3042,12 +3052,14 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                             "run_id": run_id, "resumed": resumed,
                             "exec_limit": exec_limit,
                             "sitemap_total": sitemap_total,
+                            "attempted_this_run": attempted,
                             "processed_this_run": processed,
                             "changed_this_run": changed,
                             "failed_this_run": failed,
                             "run_status": status, "finished": finished,
                             "queue": queue,
-                            "global_coverage_pct": global_cov["global_coverage_pct"]},
+                            "global_coverage_pct": global_cov["global_coverage_pct"],
+                            "coverage_basis_run_id": global_cov["coverage_basis_run_id"]},
                 "findings": [], "safe_actions": [], "approval_required": [],
                 "coverage": report, "global_coverage": global_cov,
             }

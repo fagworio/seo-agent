@@ -334,7 +334,9 @@ CREATE TABLE IF NOT EXISTS corpus_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL,
     url TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed
+    status TEXT NOT NULL DEFAULT 'pending',     -- pending | in_progress | done | failed
+    worker_id TEXT,                             -- dono do lease (processo)
+    leased_at TEXT,                             -- quando o lease foi tomado
     error TEXT,
     created_at TEXT NOT NULL,
     UNIQUE(run_id, url)
@@ -406,6 +408,10 @@ class Storage:
             "corpus_runs": [
                 ("sitemap_total", "INTEGER NOT NULL DEFAULT 0"),
                 ("sitemap_signature", "TEXT"),
+            ],
+            "corpus_queue": [
+                ("worker_id", "TEXT"),
+                ("leased_at", "TEXT"),
             ],
         }
         editorial_extra = [
@@ -1381,43 +1387,64 @@ class Storage:
         self.conn.commit()
         return added
 
-    def corpus_claim_pending(self, run_id: int, *, limit: int = 50) -> list[str]:
+    def corpus_claim_pending(self, run_id: int, *, limit: int = 50,
+                             worker_id: str = "", lease_seconds: int = 3600
+                             ) -> list[str]:
         """Claim ATOMÁTICO: marca o lote como in_progress no mesmo UPDATE
-        (RETURNING). Dois rebuilds simultâneos NUNCA buscam o mesmo lote —
-        cada claim pega um conjunto disjunto de pending."""
+        (RETURNING), registrando o worker (dono) e o timestamp do lease.
+
+        Dois rebuilds simultâneos NUNCA buscam o mesmo lote — cada claim pega
+        um conjunto disjunto de pending e cada lote fica preso ao seu worker
+        até ser concluído (done/failed) ou o lease expirar.
+        """
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         rows = self.conn.execute(
-            "UPDATE corpus_queue SET status = 'in_progress' "
+            "UPDATE corpus_queue SET status = 'in_progress', worker_id = ?, "
+            "leased_at = ? "
             "WHERE id IN (SELECT id FROM corpus_queue WHERE run_id = ? "
             "AND status = 'pending' ORDER BY id LIMIT ?) "
             "RETURNING url",
-            (run_id, limit),
+            (worker_id, now, run_id, limit),
         ).fetchall()
         self.conn.commit()
         return [r[0] for r in rows]
 
-    def corpus_reset_in_progress(self, run_id: int) -> int:
-        """Devolve leases órfãos (in_progress de um processo que caiu) a
-        pending, para serem retomados na próxima execução."""
-        cur = self.conn.execute(
-            "UPDATE corpus_queue SET status = 'pending' "
-            "WHERE run_id = ? AND status = 'in_progress'",
-            (run_id,),
-        )
+    def corpus_recover_expired_leases(self, run_id: int, *,
+                                      ttl_seconds: int = 3600,
+                                      exclude_worker: str = "") -> int:
+        """Recupera APENAS leases expirados (TTL) para pending.
+
+        NÃO toca leases vivos de outro processo — a exclusão mútua entre
+        workers concorrentes é preservada. Um lease expirado (processo morto)
+        volta a pending para ser retomado.
+        """
+        import datetime as _dt
+        cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                  - _dt.timedelta(seconds=ttl_seconds)).isoformat()
+        sql = ("UPDATE corpus_queue SET status = 'pending', worker_id = NULL, "
+               "leased_at = NULL WHERE run_id = ? AND status = 'in_progress' "
+               "AND leased_at < ?")
+        params: list[Any] = [run_id, cutoff]
+        if exclude_worker:
+            sql += " AND COALESCE(worker_id, '') != ?"
+            params.append(exclude_worker)
+        cur = self.conn.execute(sql, params)
         self.conn.commit()
         return cur.rowcount
 
     def corpus_mark_done(self, run_id: int, url: str) -> None:
         self.conn.execute(
-            "UPDATE corpus_queue SET status = 'done' "
-            "WHERE run_id = ? AND url = ?",
+            "UPDATE corpus_queue SET status = 'done', worker_id = NULL, "
+            "leased_at = NULL WHERE run_id = ? AND url = ?",
             (run_id, url),
         )
         self.conn.commit()
 
     def corpus_mark_failed(self, run_id: int, url: str, error: str) -> None:
         self.conn.execute(
-            "UPDATE corpus_queue SET status = 'failed', error = ? "
-            "WHERE run_id = ? AND url = ?",
+            "UPDATE corpus_queue SET status = 'failed', worker_id = NULL, "
+            "leased_at = NULL, error = ? WHERE run_id = ? AND url = ?",
             (error, run_id, url),
         )
         self.conn.commit()
@@ -1524,36 +1551,48 @@ class Storage:
         """Cobertura GLOBAL por INTERSEÇÃO EXATA entre as URLs do sitemap
         daquele run (a fila é o snapshot) e corpus_documents.
 
-        Difere da contagem simples docs/sitemap_total: URLs removidas do
-        sitemap mas mantidas no corpus NÃO inflam a cobertura. Usa o último
-        run concluído com fila (snapshot) como base.
+        Escolhe o snapshot mais recente ADEQUADO: o último run concluído
+        (ok/partial) com fila; se nenhum existe, o run running mais recente.
+        `coverage_basis_run_id` deixa EXPLÍCITO qual run serviu de base —
+        durante uma execução em andamento, a métrica pode refletir um snapshot
+        anterior (histórico), não o crawl em curso.
         """
         last = None
-        for status in ("ok", "partial", "running", "failed"):
+        for status in ("ok", "partial"):
             candidate = self.latest_corpus_run(status=status)
-            if candidate:
+            if candidate and candidate["sitemap_total"]:
                 last = candidate
                 break
-        if not last or not last["sitemap_total"]:
+        basis_run = last
+        if not basis_run:
+            running = self.latest_corpus_run(status="running")
+            if running and running["sitemap_total"]:
+                basis_run = running
+        if not basis_run or not basis_run["sitemap_total"]:
             return {"global_sitemap_total": 0, "global_coverage_pct": None,
-                    "basis": "nenhum run com sitemap completo registrado"}
+                    "coverage_basis_run_id": None,
+                    "basis": "nenhum run concluído com sitemap completo registrado"}
         # interseção exata: docs no corpus QUE estão no snapshot do sitemap
         row = self.conn.execute(
             "SELECT COUNT(*) FROM corpus_queue q "
             "JOIN corpus_documents d ON d.url = q.url "
             "WHERE q.run_id = ?",
-            (last["id"],),
+            (basis_run["id"],),
         ).fetchone()
         in_sitemap = row[0] if row else 0
         total_snapshot = self.conn.execute(
-            "SELECT COUNT(*) FROM corpus_queue WHERE run_id = ?", (last["id"],)
+            "SELECT COUNT(*) FROM corpus_queue WHERE run_id = ?",
+            (basis_run["id"],),
         ).fetchone()[0]
         pct = round((in_sitemap / total_snapshot) * 100, 1) if total_snapshot else 0.0
         return {
             "global_sitemap_total": total_snapshot,
             "global_docs_in_sitemap": in_sitemap,
             "global_coverage_pct": pct,
-            "basis": f"run {last['id']} ({last['status']}) — interseção exata fila×corpus",
+            "coverage_basis_run_id": basis_run["id"],
+            "coverage_basis_status": basis_run["status"],
+            "basis": (f"run {basis_run['id']} ({basis_run['status']}) — "
+                      "interseção exata fila×corpus"),
         }
 
 

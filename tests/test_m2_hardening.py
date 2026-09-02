@@ -67,24 +67,61 @@ def test_corpus_queue_cursor_and_resume(tmp_path):
 
 
 def test_corpus_claim_is_atomic_lease(tmp_path):
-    """Claim ATOMÁTICO: marca in_progress no mesmo UPDATE; dois claims
-    simultâneos pegam lotes disjuntos (nunca a mesma URL)."""
+    """Claim ATOMÁTICO: marca in_progress com worker+leased_at; dois claims
+    simultâneos pegam lotes disjuntos; leases EXPIRADOS voltam a pending (TTL),
+    leases vivos de outro worker NÃO são tocados."""
     db = tmp_path / "lease.db"
     with Storage(str(db)) as storage:
         rid = storage.start_corpus_run(total_urls=6, sitemap_total=6,
                                        sitemap_signature="s")
         urls = [f"https://x.com/p{i}/" for i in range(6)]
         storage.corpus_enqueue_urls(rid, urls)
-        # dois 'processos' chamam claim ao mesmo tempo
-        a = storage.corpus_claim_pending(rid, limit=3)
-        b = storage.corpus_claim_pending(rid, limit=3)
+        # dois 'processos' chamam claim ao mesmo tempo (workers distintos)
+        a = storage.corpus_claim_pending(rid, limit=3, worker_id="worker-A")
+        b = storage.corpus_claim_pending(rid, limit=3, worker_id="worker-B")
         assert set(a) & set(b) == set()      # disjuntos
         assert sorted(a + b) == sorted(urls)  # cobrem tudo
         counts = storage.corpus_queue_counts(rid)
         assert counts["in_progress"] == 6
-        # leases órfãos (processo morreu) voltam a pending
-        assert storage.corpus_reset_in_progress(rid) == 6
-        assert storage.corpus_queue_counts(rid)["pending"] == 6
+        # leases VIVOS (não expirados) não são recuperados, mesmo de outro worker
+        assert storage.corpus_recover_expired_leases(
+            rid, ttl_seconds=3600, exclude_worker="worker-B") == 0
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 6
+        # lease EXPiRADO (TTL antigo) volta a pending — só o do worker A
+        import datetime as _dt
+        past = (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=7200)).isoformat()
+        storage.conn.execute(
+            "UPDATE corpus_queue SET leased_at = ? WHERE worker_id = 'worker-A'",
+            (past,),
+        )
+        storage.conn.commit()
+        assert storage.corpus_recover_expired_leases(
+            rid, ttl_seconds=3600) == 3
+        counts = storage.corpus_queue_counts(rid)
+        assert counts["pending"] == 3      # os do A (expirados) voltaram
+        assert counts["in_progress"] == 3  # os do B (vivos) permanecem
+
+
+def test_corpus_recover_excludes_active_worker(tmp_path):
+    """O worker atual NÃO rouba seus próprios leases vivos (exclude_worker)
+    mesmo quando o TTL é curto — exclusão mútua entre execuções do mesmo
+    processo e de processos concorrentes."""
+    db = tmp_path / "lease2.db"
+    with Storage(str(db)) as storage:
+        rid = storage.start_corpus_run(total_urls=2, sitemap_total=2,
+                                       sitemap_signature="s")
+        storage.corpus_enqueue_urls(rid, ["https://x.com/a/", "https://x.com/b/"])
+        storage.corpus_claim_pending(rid, limit=2, worker_id="worker-A")
+        # o mesmo worker retoma com TTL curto: excluir o próprio worker
+        # preserva os leases que ele acabou de tomar (não se auto-rouba)
+        assert storage.corpus_recover_expired_leases(
+            rid, ttl_seconds=0, exclude_worker="worker-A") == 0
+        assert storage.corpus_queue_counts(rid)["in_progress"] == 2
+        # mas um worker concorrente (B) pode recuperar leases de A expirados
+        assert storage.corpus_recover_expired_leases(
+            rid, ttl_seconds=0, exclude_worker="worker-B") == 2
+        assert storage.corpus_queue_counts(rid)["pending"] == 2
 
 
 def test_global_coverage_independent_of_batch(tmp_path):
@@ -105,23 +142,62 @@ def test_global_coverage_independent_of_batch(tmp_path):
         assert cov["global_coverage_pct"] == 1.0   # 1 doc / 100, não 50%
 
 
-def test_global_coverage_exact_intersection_not_inflated(tmp_path):
-    """URLs removidas do sitemap mas mantidas no corpus NÃO inflam a cobertura
-    (interseção exata fila×corpus, não docs total / sitemap_total)."""
-    db = tmp_path / "gint.db"
+def test_rebuild_limit_counts_attempts_not_successes(monkeypatch, capsys, tmp_path):
+    """O orçamento de --limit é TENTATIVAS: se muitas URLs falham, a execução
+    não estoura o limite nem drena a fila de falhas (o bug apontado)."""
+    db = tmp_path / "attempt.db"
+    fetches: list[str] = []
+
+    class _FakeStatic:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def all_sitemap_urls(self):
+            return [f"https://x.com/p{i}/" for i in range(10)]
+
+        def fetch_page(self, url):
+            fetches.append(url)
+            if int(url.rstrip("/").split("/")[-1][1:]) % 2 == 0:  # pares falham
+                raise ConnectionError("boom")
+            return _page(url=url)
+
+    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
+    args = argparse.Namespace(action="rebuild", limit=4, resume_id=0)
+    rc = _cmd_corpus(args, config)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    # --limit 4 = 4 TENTATIVAS (2 sucessos + 2 falhas), não 4 sucessos
+    assert out["summary"]["attempted_this_run"] == 4
+    assert len(fetches) == 4
+    assert out["summary"]["processed_this_run"] == 2
+    assert out["summary"]["failed_this_run"] == 2
+    assert out["summary"]["queue"]["pending"] == 6  # fila não foi drenada
+
+
+def test_global_coverage_exposes_basis_run_id(tmp_path):
+    """A cobertura global expõe coverage_basis_run_id: durante uma execução em
+    curso, fica explícito que a base é um run histórico, não o crawl atual."""
+    db = tmp_path / "basis.db"
     with Storage(str(db)) as storage:
-        # corpus com 2 docs: 1 no sitemap atual, 1 removido
-        build_corpus(storage, [_page(url="https://x.com/keep/"),
-                               _page(url="https://x.com/removed/")],
-                     built_at="2026-01-01T00:00:00+00:00")
-        sitemap = ["https://x.com/keep/"]  # só o que permanece no sitemap
-        rid = storage.start_corpus_run(total_urls=1, sitemap_total=1,
-                                       sitemap_signature="s")
-        storage.corpus_enqueue_urls(rid, sitemap)
-        storage.finish_corpus_run(rid, status="ok")
+        sitemap = ["https://x.com/a/"]
+        r1 = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                      sitemap_signature="s1")
+        storage.corpus_enqueue_urls(r1, sitemap)
+        storage.finish_corpus_run(r1, status="ok")
         cov = storage.corpus_global_coverage()
-        assert cov["global_coverage_pct"] == 100.0   # 1/1, não 2/1=200%
-        assert "interseção exata" in cov["basis"]
+        assert cov["coverage_basis_run_id"] == r1
+        assert cov["coverage_basis_status"] == "ok"
+        # run em curso NÃO substitui a base concluída
+        r2 = storage.start_corpus_run(total_urls=1, sitemap_total=1,
+                                      sitemap_signature="s2")
+        storage.corpus_enqueue_urls(r2, ["https://x.com/new/"])
+        cov2 = storage.corpus_global_coverage()
+        assert cov2["coverage_basis_run_id"] == r1  # ainda o histórico
+        assert cov2["coverage_basis_status"] == "ok"
 
 
 def test_coverage_report_matches_sitemap(tmp_path):

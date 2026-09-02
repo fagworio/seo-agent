@@ -50,6 +50,7 @@ class Config:
     max_external_calls: int = 50             # chamadas a provedores externos por execução
     external_budget_cents: int = 0           # teto de custo por execução (0 = desligado)
     max_corpus_docs: int = 20_000            # teto de documentos no corpus
+    corpus_lease_seconds: int = 3600         # TTL do lease de URL no corpus rebuild
 
     # Alerting (Phase 5)
     alert_webhook_url: str = ""
@@ -200,6 +201,7 @@ def load_config() -> Config:
         max_external_calls=_int("MAX_EXTERNAL_CALLS", 50, 0, 100_000),
         external_budget_cents=_int("EXTERNAL_BUDGET_CENTS", 0, 0, 10_000_000),
         max_corpus_docs=_int("MAX_CORPUS_DOCS", 20_000, 1, 1_000_000),
+        corpus_lease_seconds=_int("CORPUS_LEASE_SECONDS", 3600, 60, 7 * 24 * 3600),
         alert_webhook_url=_env("ALERT_WEBHOOK_URL"),
         alert_high_threshold=_int("ALERT_HIGH_THRESHOLD", 10, 1, 10_000),
         dry_run=dry_run,
