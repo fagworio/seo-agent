@@ -1299,7 +1299,8 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         and float(r.get("ctr", 0)) <= args.max_ctr
     ]
     low_ctr.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
-    targets = low_ctr[: args.limit or 20]
+    # --limit 0 (default) = TODOS os elegíveis; >0 = top N.
+    targets = low_ctr if not args.limit else low_ctr[: args.limit]
 
     # — dedup: NÃO re-analisar URLs já em revisão de título ou com medição em
     # andamento (evita o laço de repetir candidatos que o agente já tratou).
