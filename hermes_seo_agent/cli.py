@@ -1301,6 +1301,21 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     low_ctr.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
     targets = low_ctr[: args.limit or 20]
 
+    # — dedup: NÃO re-analisar URLs já em revisão de título ou com medição em
+    # andamento (evita o laço de repetir candidatos que o agente já tratou).
+    skipped: list[dict[str, Any]] = []
+    eligible: list[dict[str, Any]] = []
+    with Storage(config.sqlite_path) as storage:
+        for row in targets:
+            url = (row.get("keys") or [""])[0]
+            skip, reason = storage.title_review_skippable(
+                url, measurement_days=config.editorial_measurement_min_days)
+            if skip:
+                skipped.append({"url": url, "reason": reason})
+            else:
+                eligible.append(row)
+    targets = eligible
+
     with StaticSiteClient(config) as static, WordPressClient(config) as wp:
         for row in targets:
             url = (row.get("keys") or [""])[0]
@@ -1335,11 +1350,13 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         "status": "ok",
         "summary": {"command": "title-opportunities",
                     "candidates": len(candidates_rows),
-                    "window_days": config.search_analytics_days},
+                    "window_days": config.search_analytics_days,
+                    "skipped": len(skipped)},
         "findings": [],
         "safe_actions": [],
         "approval_required": [],
         "candidates": candidates_rows,
+        "skipped": skipped,
         "warnings": warnings,
     }
 

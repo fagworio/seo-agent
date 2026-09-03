@@ -955,6 +955,37 @@ class Storage:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def title_review_skippable(self, url: str, *, measurement_days: int) -> tuple[bool, str]:
+        """Uma URL NÃO deve ser re-analisada para título se já está em revisão ou
+        se a medição está em andamento (reaplicar quebraria a janela de medição).
+
+        Evita que o agente repita candidatos que ele já tratou (laço de re-análise).
+        """
+        import datetime as _dt
+
+        # (1) já há revisão de título pendente para esta URL
+        row = self.conn.execute(
+            "SELECT id FROM improvement_checklist WHERE url = ? AND status = 'pending' "
+            "AND (item LIKE '%title%' OR item = 'title_opportunity') LIMIT 1",
+            (url,),
+        ).fetchone()
+        if row:
+            return True, "já existe revisão de título pendente"
+
+        # (2) oportunidade aprovada e implementada recentemente -> medição em andamento
+        cutoff = (
+            _dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=measurement_days)
+        ).isoformat()
+        row2 = self.conn.execute(
+            "SELECT id FROM opportunity_outcomes WHERE url = ? AND human_decision = 'approved' "
+            "AND implemented_at IS NOT NULL AND implemented_at >= ? LIMIT 1",
+            (url, cutoff),
+        ).fetchone()
+        if row2:
+            return True, "baseline recente (medição em andamento)"
+        return False, ""
+
     def get_checklist_item(self, checklist_id: int) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT id, url, item, reason, action, gain_clicks, status, created_at, done_at, "
