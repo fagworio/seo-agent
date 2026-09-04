@@ -435,6 +435,7 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Item 9: alinha work items legados ao lifecycle canônico (Caixa como fila de decisão)")
     p.add_argument("--apply", action="store_true",
                    help="grava o lifecycle (padrão é dry-run só relatar)")
+    p.add_argument("--json", action="store_true", help="force JSON output")
     p.set_defaults(func=_cmd_reconcile_work_items)
 
     parser.add_argument("--dry-run", action="store_true", help="no-op; safety posture (default)")
