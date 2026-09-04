@@ -3983,7 +3983,7 @@ def _cmd_today(args: argparse.Namespace, config: Any) -> int:
 def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
     """R3: coletar fontes como um AgentRun refresh_data (nunca escreve no site)."""
     from .services.agent_runs import REFRESH_SOURCES, AgentRunService
-    from .services.data_refresh import build_refresh_collectors, run_refresh
+    from .services.data_refresh import build_refresh_collectors, collect_reconcile, run_refresh
 
     sources = [s.strip() for s in (args.sources or "").split(",") if s.strip()]
     if not sources:
@@ -4002,7 +4002,8 @@ def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
                                    started_by=config.app_user or "system",
                                    sources=sources)
         run = run_refresh(storage, run_id, sources=sources,
-                          collectors=build_refresh_collectors(config, storage))
+                          collectors=build_refresh_collectors(config, storage),
+                          reconcile=collect_reconcile(config))
         summary = run.get("summary") or {}
         _emit({"status": "ok",
                "summary": {"command": "refresh-data", "run_id": run_id,

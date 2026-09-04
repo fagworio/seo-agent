@@ -70,3 +70,20 @@ def test_run_refresh_skipped_source_not_failure(tmp_path):
     steps = {s["stage"]: s for s in run["steps"]}
     assert steps["gsc"]["status"] == "skipped"
     storage.close()
+
+
+def test_run_refresh_with_reconcile_stage(tmp_path):
+    storage, svc = _make(tmp_path / "e.db")
+    run_id = svc.start_run("hermes-seo-agent", intent="refresh_data", mode="analyze",
+                           sources=["wordpress"])
+    collectors = {"wordpress": lambda: StageResult("wordpress", records_read=10)}
+    reconcile = lambda: StageResult("reconcile", records_read=10,
+                                    extra={"missing_from_sitemap": 2, "orphan_in_sitemap": 1})
+    run = run_refresh(storage, run_id, sources=["wordpress"],
+                      collectors=collectors, reconcile=reconcile)
+    assert run["status"] == "success"
+    steps = {s["stage"]: s for s in run["steps"]}
+    assert "reconcile" in steps
+    assert steps["reconcile"]["detail"]["missing_from_sitemap"] == 2
+    assert steps["reconcile"]["detail"]["orphan_in_sitemap"] == 1
+    storage.close()

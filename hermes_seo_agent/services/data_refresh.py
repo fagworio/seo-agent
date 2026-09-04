@@ -31,6 +31,7 @@ class StageResult:
     records_updated: int = 0
     data_window: str = ""
     error: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def as_detail(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -38,6 +39,7 @@ class StageResult:
             "records_created": self.records_created,
             "records_updated": self.records_updated,
             "data_window": self.data_window,
+            **self.extra,
         }
         if self.error:
             d["error"] = self.error
@@ -50,11 +52,13 @@ def run_refresh(
     *,
     sources: list[str],
     collectors: dict[str, Collector],
+    reconcile: Collector | None = None,
 ) -> dict[str, Any]:
     """Executa os estágios de um run refresh_data e registra steps + status final.
 
     - `sources`: subconjunto de STAGE_ORDER a executar (na ordem canônica).
     - `collectors`: mapa source -> callable que retorna StageResult.
+    - `reconcile`: opcional; roda como etapa final (pós-coleta) — R5.
     Retorna o run completo (com steps), já finalizado como success|partial|failed.
     """
     svc = AgentRunService(storage)
@@ -82,8 +86,21 @@ def run_refresh(
             svc.mark_step(run_id, stage, res.status, detail=res.as_detail())
         results[stage] = {**res.as_detail(), "status": res.status}
 
+    # R5 — reconciliação pós-coleta (não é uma fonte; roda sempre que fornecida)
+    if reconcile is not None:
+        try:
+            rres = reconcile()
+        except Exception as exc:
+            rres = StageResult(source="reconcile", status="failed", error=str(exc))
+        if rres.status == "failed":
+            svc.mark_step(run_id, "reconcile", "failed", detail=rres.as_detail())
+            failures += 1
+        else:
+            svc.mark_step(run_id, "reconcile", rres.status, detail=rres.as_detail())
+        results["reconcile"] = {**rres.as_detail(), "status": rres.status}
+
     status = "partial" if failures else "success"
-    if failures and failures == len(stages):
+    if failures and failures == len(results):
         status = "failed"
     svc.complete(
         run_id, status=status,
@@ -164,3 +181,23 @@ def _collect_crux(config: Config) -> StageResult:
 def _collect_corpus(storage: Storage) -> StageResult:
     stats = storage.corpus_stats()
     return StageResult("corpus", records_read=stats.get("documents", 0))
+
+
+def collect_reconcile(config: Config) -> StageResult:
+    """R5: reconciliação WordPress × sitemap (três vias) após a coleta.
+
+    Detecta páginas ausentes no sitemap, órfãs no sitemap e mismatches
+    WordPress×estático — modificações feitas FORA do SEO Agent.
+    """
+    from urllib.parse import urlsplit
+    from ..connectors.static_site import StaticSiteClient
+    from ..connectors.wordpress import WordPressClient
+    from ..inventory.reconcile import reconcile
+
+    static_host = urlsplit(getattr(config, "static_site_url", "")).netloc or "www.unicorniohater.com.br"
+    with WordPressClient(config) as wp:
+        posts = wp.list_posts(status="publish")
+    with StaticSiteClient(config) as static:
+        sitemap_urls = static.all_sitemap_urls()
+    report = reconcile(posts, sitemap_urls, static_host=static_host)
+    return StageResult("reconcile", records_read=len(posts), extra=report.summary())
