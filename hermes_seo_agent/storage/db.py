@@ -744,6 +744,38 @@ class Storage:
         )
         self.conn.commit()
 
+    def persist_title_candidates(self, candidates: list[dict[str, Any]], *, cycle_id: str) -> int:
+        """B4 — persiste candidatos de título como ações safe_fix (status pending)
+        + item de checklist, reutilizando fingerprint/idempotência do executor.
+
+        Assim os candidatos aparecem em "Correções disponíveis" (actions) e na
+        Caixa de trabalho (checklist), prontos para uma campanha de títulos.
+        """
+        from ..executor.executor import _fingerprint
+        n = 0
+        for c in candidates:
+            url = c.get("url", "")
+            suggested = c.get("suggested_title", "")
+            post_id = c.get("post_id")
+            if not post_id or not suggested or not url:
+                continue
+            current = c.get("current_title", "")
+            detail = f"título ancorado na query '{c.get('top_query', '')}'"
+            fix = {"type": "wp_post_meta", "post_id": post_id,
+                   "meta": {"rank_math_title": suggested}}
+            fingerprint = _fingerprint("title_opportunity", url, detail, fix)
+            self.record_action(
+                cycle_id=cycle_id, rule_id="title_opportunity", url=url, level="safe_fix",
+                fingerprint=fingerprint, before={"rank_math_title": current},
+                after={"rank_math_title": suggested},
+                rollback={"type": "wp_post_meta", "post_id": post_id,
+                          "meta": {"rank_math_title": current}},
+                status="pending")
+            self.save_checklist_item(url=url, item="title", reason=detail, action=suggested,
+                                     gain_clicks=c.get("clicks"), explainable_score=None)
+            n += 1
+        return n
+
     # -- inspection queue ----------------------------------------------------
 
     def enqueue_urls(self, entries: list[dict[str, Any]]) -> int:

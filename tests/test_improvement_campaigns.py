@@ -153,3 +153,20 @@ def test_run_campaign_marks_failure_partial(tmp_path):
     assert run["status"] == "partial"
     assert run["executed_items"] == 1 and run["failed_items"] == 1
     storage.close()
+
+
+def test_persist_title_candidates_creates_action_and_checklist(tmp_path):
+    from hermes_seo_agent.storage.db import Storage
+    storage = Storage(str(tmp_path / "t.db"))
+    n = storage.persist_title_candidates([
+        {"url": "https://x.com/a/", "current_title": "velho", "suggested_title": "novo",
+         "top_query": "q", "post_id": 5, "clicks": 3},
+    ], cycle_id="c1")
+    assert n == 1
+    row = storage.conn.execute(
+        "SELECT fingerprint, status, rule_id FROM actions WHERE url='https://x.com/a/'").fetchone()
+    assert row is not None and row[2] == "title_opportunity" and row[1] == "pending"
+    chk = storage.conn.execute(
+        "SELECT item FROM improvement_checklist WHERE url='https://x.com/a/'").fetchone()
+    assert chk is not None and chk[0] == "title"
+    storage.close()

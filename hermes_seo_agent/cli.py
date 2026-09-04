@@ -156,6 +156,8 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="CTR máximo para considerar (oportunidade de título)")
             p.add_argument("--write", action="store_true",
                            help="grava title-opportunities-fixes.json")
+            p.add_argument("--persist", action="store_true",
+                           help="persiste candidatos como ações safe_fix (pending) + checklist")
         if name == "impact":
             p.add_argument("--days", type=int, default=28,
                            help="janela antes/depois em dias")
@@ -1404,6 +1406,12 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         "skipped": skipped,
         "warnings": warnings,
     }
+
+    if getattr(args, "persist", False):
+        with Storage(config.sqlite_path) as storage:
+            persisted = storage.persist_title_candidates(
+                candidates_rows, cycle_id=f"title-opp-{uuid.uuid4().hex[:12]}")
+        result["summary"]["persisted"] = persisted
 
     if getattr(args, "write", False):
         fixes = [
