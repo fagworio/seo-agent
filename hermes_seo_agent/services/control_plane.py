@@ -135,19 +135,20 @@ class ControlPlaneService:
         window = self._latest_gsc_window()
 
         rows = self.storage.conn.execute(
-            "SELECT rule_id, url, severity, detail_json, created_at FROM findings "
+            "SELECT id, rule_id, url, severity, detail_json, created_at FROM findings "
             "WHERE 1=1"
             + (" AND rule_id = ?" if rule else "")
             + " ORDER BY id DESC LIMIT ?", (*([] if not rule else [rule]), limit),
         ).fetchall()
         out = []
         for r in rows:
-            rule_id, url, severity = r[0], r[1], r[2]
+            rule_id, url, severity = r[1], r[2], r[3]
             identity = self._resolve_page_identity(url)
             pres = rule_presentation(rule_id)
             gsc = self._google_evidence(identity["public_url"], window)
             expectation = self._traffic_expectation(identity["public_url"])
             out.append({
+                "id": r[0],
                 "rule_id": rule_id,
                 "rule": pres,
                 "severity": severity or pres["severity"],
@@ -155,7 +156,7 @@ class ControlPlaneService:
                 "title": self._page_title(identity["public_url"]),
                 "google": gsc,
                 "potential": expectation,
-                "created_at": r[4],
+                "created_at": r[5],
             })
         if sort == "potential":
             out.sort(key=lambda f: (f["potential"]["realistic"] is None,

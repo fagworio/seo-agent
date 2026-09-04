@@ -333,6 +333,7 @@ class PageIdentityModel(BaseModel):
 
 
 class TechnicalFindingModel(BaseModel):
+    id: int
     rule_id: str
     rule: RuleModel
     severity: str = "medium"

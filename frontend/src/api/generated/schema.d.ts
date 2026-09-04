@@ -2191,6 +2191,8 @@ export interface components {
         };
         /** TechnicalFindingModel */
         TechnicalFindingModel: {
+            /** Id */
+            id: number;
             /** Rule Id */
             rule_id: string;
             rule: components["schemas"]["RuleModel"];

@@ -299,6 +299,7 @@ export interface Finding {
 }
 
 export interface TechnicalFinding {
+  id: number;
   rule_id: string;
   rule: {
     rule_id: string;

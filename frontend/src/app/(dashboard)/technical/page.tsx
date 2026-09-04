@@ -133,7 +133,7 @@ export default function TechnicalPage() {
           </thead>
           <tbody>
             {visibleFindings.map((f) => (
-              <tr key={`${f.rule_id}:${f.page.public_url}`} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]">
+              <tr key={f.id} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]">
                 <td className="max-w-[15rem] px-3 py-2">
                   <div className="truncate font-medium">{f.rule.label}</div>
                   <div className="truncate text-[11px] text-[var(--muted)]">{layerLabel(f.rule.layer)}</div>
