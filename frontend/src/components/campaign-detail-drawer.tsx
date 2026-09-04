@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, Campaign } from "@/lib/api";
-import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Drawer } from "@/design-system/drawer";
+import { StatusBadge } from "@/components/status-badge";
 
 type CampaignItem = {
   id: number;
@@ -23,14 +23,6 @@ type CampaignItem = {
 };
 
 type CampaignDetail = Campaign & { items: CampaignItem[] };
-
-const STATUS_LABELS: Record<string, string> = {
-  pending: "Pendente",
-  executed: "Implementado",
-  failed: "Falhou",
-  stale: "Precisa revisão",
-  skipped: "Ignorado",
-};
 
 export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: number; onClose: () => void }) {
   const qc = useQueryClient();
@@ -60,7 +52,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
     <Drawer title={c.name} onClose={onClose}>
       <div className="space-y-4 text-sm">
         <div className="flex items-center justify-between">
-          <Badge tone={campaignTone(c.status)}>{c.status}</Badge>
+          <StatusBadge status={c.status} />
           <span className="text-xs text-[var(--muted)]">{c.executed_items} / {c.total_items} concluídas · {c.pending_items} pendentes{c.failed_items ? ` · ${c.failed_items} falhas` : ""}</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-raised)]">
@@ -91,7 +83,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
                 <span className="truncate text-xs text-[var(--muted)]">{shortUrl(it.url)}</span>
                 <span className="flex items-center gap-2">
                   {it.failure_reason && <span className="max-w-40 truncate text-[11px] text-[var(--muted)]">{it.failure_reason}</span>}
-                  <Badge tone={itemTone(it.status)}>{STATUS_LABELS[it.status] ?? it.status}</Badge>
+                  <StatusBadge status={it.status} />
                 </span>
               </li>
             ))}
@@ -101,22 +93,6 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
       </div>
     </Drawer>
   );
-}
-
-function campaignTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "completed" || status === "measured") return "success";
-  if (status === "failed" || status === "cancelled") return "danger";
-  if (status === "partial") return "warning";
-  if (status === "running" || status === "queued") return "info";
-  return "neutral";
-}
-
-function itemTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "executed") return "success";
-  if (status === "failed") return "danger";
-  if (status === "stale") return "warning";
-  if (status === "skipped") return "neutral";
-  return "info";
 }
 
 function shortUrl(u: string): string {

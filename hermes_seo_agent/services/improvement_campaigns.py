@@ -191,6 +191,7 @@ class ImprovementCampaignService:
                 "fingerprint": fp, "rule_id": rule_id, "url": url,
                 "before": before, "after": after,
                 "risk": self._risk(rule_id), "reversible": True,
+                "context": self._link_context(url, fix),
             })
         action_types = {e["rule_id"] for e in eligible}
         homogeneous = len(action_types) == 1
@@ -211,6 +212,25 @@ class ImprovementCampaignService:
         if rule_id in ("internal_link", "interlink"):
             return "review_required"   # B10: links internos exigem revisão humana
         return "review_required"
+
+    @staticmethod
+    def _link_context(url: str, fix: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Contexto de revisão para links internos (spec UI §item 4/26).
+
+        Extrai origem/destino/trecho/âncora do fix `wp_post_content_patch`, para a
+        prévia humana no drawer "Revisar lote" sem re-crawlear o WordPress.
+        Determinístico: confiança = trecho tematicamente compatível identificado.
+        """
+        if not isinstance(fix, dict) or fix.get("type") != "wp_post_content_patch":
+            return None
+        context_before = (fix.get("context_before") or "").strip()
+        return {
+            "source_url": url,
+            "target_url": fix.get("target_url"),
+            "anchor": fix.get("anchor"),
+            "context_before": context_before,
+            "confidence": "high" if context_before else "low",
+        }
 
     def list_campaigns(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         sql = "SELECT id, name, action_type, status, created_by, approved_by, execution_mode, " \

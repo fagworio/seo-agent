@@ -342,7 +342,7 @@ function CorrectionsView({ items, selected, onSelect, onClose, canExecute, execu
           <Button size="sm" onClick={onDelegate} disabled={!canExecute}>Delegar correções ({bulk.size})</Button>
         )}
       </div>
-      <div className="overflow-hidden rounded-[9px] border border-[var(--border)]">
+      <div className="hidden md:block overflow-hidden rounded-[9px] border border-[var(--border)]">
         <table className="w-full text-sm">
           <thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]">
             <tr><th className="w-8 px-3 py-2"><span className="sr-only">Selecionar</span></th><th className="px-3 py-2">Regra</th><th className="px-3 py-2">URL</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"><span className="sr-only">Ação</span></th></tr>
@@ -360,6 +360,26 @@ function CorrectionsView({ items, selected, onSelect, onClose, canExecute, execu
             {items.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-[var(--muted)]">Nenhuma correção registrada.</td></tr>}
           </tbody>
         </table>
+        <Pagination page={page} pageSize={PAGE_SIZE} total={items.length} onPageChange={setPage} label="correções" />
+      </div>
+
+      <div className="space-y-3 md:hidden">
+        {visibleItems.map((c) => (
+          <div key={c.fingerprint} className="rounded-[9px] border border-[var(--border)] p-3">
+            <div className="flex items-start justify-between gap-2">
+              <input type="checkbox" checked={bulk.has(c.fingerprint)} disabled={c.status === "executed" || c.status === "reverted"} onChange={() => toggleOne(c.fingerprint)} aria-label={`Selecionar ${c.url}`} className="mt-1" />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">{c.label || friendlyRule(c.rule_id)}</div>
+                <div className="truncate text-xs text-[var(--muted)]">{c.url}</div>
+              </div>
+              <Badge tone={c.status === "executed" ? "success" : "warning"}>{c.status}</Badge>
+            </div>
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" variant="secondary" onClick={() => onSelect(c)}>Preview</Button>
+            </div>
+          </div>
+        ))}
+        {items.length === 0 && <p className="py-6 text-center text-sm text-[var(--muted)]">Nenhuma correção registrada.</p>}
         <Pagination page={page} pageSize={PAGE_SIZE} total={items.length} onPageChange={setPage} label="correções" />
       </div>
 

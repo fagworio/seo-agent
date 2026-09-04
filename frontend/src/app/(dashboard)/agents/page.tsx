@@ -8,10 +8,16 @@ import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
 import { Button } from "@/design-system/button";
 import { CampaignDetailDrawer } from "@/components/campaign-detail-drawer";
+import { StatusBadge } from "@/components/status-badge";
+
+type Tab = "execucoes" | "campanhas";
+type Intent = "normal_cycle" | "technical" | "sitemap_indexing" | "opportunities" | "content" | "specific_url";
+type RunMode = "analyze" | "safe_fix";
 
 export default function AgentsPage() {
-  const [intent, setIntent] = useState<"normal_cycle" | "technical" | "sitemap_indexing" | "opportunities" | "content" | "specific_url">("normal_cycle");
-  const [mode, setMode] = useState<"analyze" | "safe_fix">("analyze");
+  const [tab, setTab] = useState<Tab>("execucoes");
+  const [intent, setIntent] = useState<Intent>("normal_cycle");
+  const [mode, setMode] = useState<RunMode>("analyze");
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
   const { data, error, isLoading } = useQuery({
@@ -45,6 +51,54 @@ export default function AgentsPage() {
   const agents = data!.agents;
   const runList = runs.data!.runs;
   const canRun = me.data?.user.permissions.includes("agent.run") ?? false;
+
+  return (
+    <div className="space-y-4">
+      <div role="tablist" aria-label="Agentes e execuções" className="flex gap-1 border-b border-[var(--border)]">
+        {([["execucoes", "Execuções"], ["campanhas", "Campanhas"]] as [Tab, string][]).map(([k, label]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => setTab(k)}
+            className={`rounded-t-md px-4 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
+              tab === k
+                ? "border-b-2 border-[var(--primary)] font-medium text-[var(--primary)]"
+                : "text-[var(--muted)] hover:text-[var(--foreground)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "execucoes" ? (
+        <ExecutionsTab agents={agents} runList={runList} canRun={canRun} intent={intent} mode={mode}
+          queuePending={queue.isPending} queueError={queue.error as ApiError | null}
+          onIntent={setIntent} onMode={setMode} onQueue={() => queue.mutate()} />
+      ) : (
+        <CampaignsSection
+          campaigns={campaigns.data?.campaigns ?? []}
+          pending={campaignAction.isPending}
+          onAction={(id, action) => campaignAction.mutate({ id, action })}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExecutionsTab({ agents, runList, canRun, intent, mode, queuePending, queueError, onIntent, onMode, onQueue }: {
+  agents: Agent[];
+  runList: AgentRun[];
+  canRun: boolean;
+  intent: Intent;
+  mode: RunMode;
+  queuePending: boolean;
+  queueError: ApiError | null;
+  onIntent: (v: Intent) => void;
+  onMode: (v: RunMode) => void;
+  onQueue: () => void;
+}) {
   const byStatus = { running: runList.filter((r) => r.status === "running" || r.status === "queued"),
                      failed: runList.filter((r) => r.status === "failed" || r.status === "partial"),
                      recent: runList.filter((r) => !["running", "queued", "failed", "partial"].includes(r.status)) };
@@ -54,12 +108,12 @@ export default function AgentsPage() {
       <Card title="Solicitar execução">
         <p className="mb-3 text-sm text-[var(--muted)]">A solicitação entra na fila; Hermes muda o estado para “em execução” quando o worker a assumir.</p>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="text-sm">Intenção<select value={intent} onChange={(event) => setIntent(event.target.value as typeof intent)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="normal_cycle">Ciclo normal</option><option value="technical">SEO técnico</option><option value="sitemap_indexing">Sitemap e indexação</option><option value="opportunities">Oportunidades</option><option value="content">Conteúdo</option><option value="specific_url">URL específica</option></select></label>
-          <label className="text-sm">Modo<select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="analyze">Somente analisar</option><option value="safe_fix">Gerar safe fixes</option></select></label>
-          <Button onClick={() => queue.mutate()} disabled={!canRun || queue.isPending}>{queue.isPending ? "Solicitando…" : "Solicitar execução"}</Button>
+          <label className="text-sm">Intenção<select value={intent} onChange={(event) => onIntent(event.target.value as typeof intent)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="normal_cycle">Ciclo normal</option><option value="technical">SEO técnico</option><option value="sitemap_indexing">Sitemap e indexação</option><option value="opportunities">Oportunidades</option><option value="content">Conteúdo</option><option value="specific_url">URL específica</option></select></label>
+          <label className="text-sm">Modo<select value={mode} onChange={(event) => onMode(event.target.value as typeof mode)} className="mt-1 block h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3"><option value="analyze">Somente analisar</option><option value="safe_fix">Gerar safe fixes</option></select></label>
+          <Button onClick={onQueue} disabled={!canRun || queuePending}>{queuePending ? "Solicitando…" : "Solicitar execução"}</Button>
         </div>
         {!canRun && <p className="mt-2 text-xs text-[var(--muted)]">Você não possui a permissão para executar agentes.</p>}
-        {queue.error && <p className="mt-2 text-sm text-[var(--danger)]">{(queue.error as ApiError).message}</p>}
+        {queueError && <p className="mt-2 text-sm text-[var(--danger)]">{queueError.message}</p>}
       </Card>
       <div className="grid gap-4 md:grid-cols-2">
         {agents.map((agent) => (
@@ -78,9 +132,9 @@ export default function AgentsPage() {
       </div>
 
       {[
-        { label: "Em execução", items: byStatus.running, tone: "info" as const },
-        { label: "Falhas / parciais", items: byStatus.failed, tone: "danger" as const },
-        { label: "Recentes", items: byStatus.recent, tone: "neutral" as const },
+        { label: "Em execução", items: byStatus.running },
+        { label: "Falhas / parciais", items: byStatus.failed },
+        { label: "Recentes", items: byStatus.recent },
       ].map((section) => (
         <Card key={section.label} title={section.label}>
           {section.items.length === 0 ? (
@@ -94,7 +148,7 @@ export default function AgentsPage() {
                   </Link>
                   <span className="flex items-center gap-2 text-xs text-[var(--muted)]">
                     {run.started_at ?? ""} · {run.urls_analyzed} URLs · {run.findings_count} findings
-                    <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+                    <StatusBadge status={run.status} />
                   </span>
                 </li>
               ))}
@@ -102,12 +156,6 @@ export default function AgentsPage() {
           )}
         </Card>
       ))}
-
-      <CampaignsSection
-        campaigns={campaigns.data?.campaigns ?? []}
-        pending={campaignAction.isPending}
-        onAction={(id, action) => campaignAction.mutate({ id, action })}
-      />
     </div>
   );
 }
@@ -136,7 +184,7 @@ function CampaignsSection({ campaigns, pending, onAction }: {
                     <div className="text-xs text-[var(--muted)]">{done} / {c.total_items} concluídas · {c.pending_items} pendentes{c.failed_items ? ` · ${c.failed_items} falhas` : ""}{c.stale_items ? ` · ${c.stale_items} stale` : ""}</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge tone={campaignTone(c.status)}>{c.status}</Badge>
+                    <StatusBadge status={c.status} />
                     <Button size="sm" variant="secondary" onClick={() => setOpenId(c.id)}>Abrir</Button>
                     {["paused"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "resume")}>Continuar</Button>}
                     {["approved", "queued", "running", "partial"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "pause")}>Pausar</Button>}
@@ -158,21 +206,4 @@ function CampaignsSection({ campaigns, pending, onAction }: {
       {openId != null && <CampaignDetailDrawer campaignId={openId} onClose={() => setOpenId(null)} />}
     </Card>
   );
-}
-
-function campaignTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "completed" || status === "measured") return "success";
-  if (status === "failed" || status === "cancelled") return "danger";
-  if (status === "partial") return "warning";
-  if (status === "running" || status === "queued") return "info";
-  if (status === "paused") return "neutral";
-  return "neutral";
-}
-
-function statusTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "success") return "success";
-  if (status === "failed") return "danger";
-  if (status === "partial") return "warning";
-  if (status === "running" || status === "queued") return "info";
-  return "neutral";
 }

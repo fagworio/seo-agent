@@ -71,7 +71,7 @@ function Workbox() {
       </div>
     )}
 
-    <div className="overflow-x-auto rounded-[9px] border border-[var(--border)]">
+    <div className="hidden md:block overflow-x-auto rounded-[9px] border border-[var(--border)]">
       <table className="w-full text-sm">
         <thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]">
           <tr><th className="w-8 px-3 py-2"><span className="sr-only">Selecionar</span></th><th className="px-3 py-2">Decisão</th><th className="px-3 py-2">Evidência principal</th><th className="px-3 py-2">Classe</th><th className="px-3 py-2">Prioridade</th></tr>
@@ -90,6 +90,31 @@ function Workbox() {
           {!items.length && <tr><td colSpan={5} className="px-3 py-6 text-center text-[var(--muted)]">Nenhuma decisão nesta visão.</td></tr>}
         </tbody>
       </table>
+      <Pagination page={page} pageSize={pageSize} total={items.length} onPageChange={(next) => { setPage(next); setParam("page", String(next)); }} label="decisões" />
+    </div>
+
+    <div className="space-y-3 md:hidden">
+      {visible.map((item) => {
+        const view = presentOpportunity(item);
+        return (
+          <div key={item.id} className="rounded-[9px] border border-[var(--border)] p-3">
+            <div className="flex items-start justify-between gap-2">
+              <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} className="mt-1" />
+              <div className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span>
+                <button onClick={() => setParam("item", item.id)} className="block max-w-full text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]">{displayTitle(item)}</button>
+                <span className="mt-0.5 block text-xs text-[var(--muted)]">{view.detail}</span>
+              </div>
+              <ActionBadge value={item.action_class} />
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]">
+              <span>{opportunityEvidenceSummary(item)}</span>
+              <span className="tabular-nums">Prioridade {formatPriority(item.score)}</span>
+            </div>
+          </div>
+        );
+      })}
+      {!items.length && <p className="py-6 text-center text-sm text-[var(--muted)]">Nenhuma decisão nesta visão.</p>}
       <Pagination page={page} pageSize={pageSize} total={items.length} onPageChange={(next) => { setPage(next); setParam("page", String(next)); }} label="decisões" />
     </div>
     {!canReview && bulk.size > 0 && <p className="text-xs text-[var(--muted)]">🔒 Você pode inspecionar, mas não possui permissão (opportunity.review) para selecionar em lote.</p>}

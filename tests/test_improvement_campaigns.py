@@ -244,4 +244,38 @@ def test_resolve_fingerprints_by_url(tmp_path):
     svc = ImprovementCampaignService(storage)
     res = svc.resolve_fingerprints(["https://x.com/a/", "https://x.com/inexistente/"])
     assert res["fingerprints"] == ["fp-title-1"]
+
+
+def test_preview_internal_link_context(tmp_path):
+    """B10/spec UI — prévia de links internos expõe origem/destino/trecho/âncora/confiança."""
+    from hermes_seo_agent.executor.executor import _fingerprint
+    from hermes_seo_agent.report.interlinks import build_interlink_fix
+
+    body = "<p>Veja o elenco completo.</p>"
+    fix = build_interlink_fix(source_url="https://x.com/a/", target_url="https://x.com/b/",
+                              source_context={"body_text": body, "title": "Filme X"},
+                              anchor="elenco completo", excerpt="Veja o elenco completo.",
+                              post_id=7)
+    assert fix is not None
+    storage = Storage(str(tmp_path / "ilctx.db"))
+    fp = _fingerprint("internal_link", "https://x.com/a/", "link interno", fix)
+    storage.record_action(cycle_id="c1", rule_id="internal_link", url="https://x.com/a/",
+                          level="safe_fix", fingerprint=fp,
+                          before={"content": body}, after={"content": body}, rollback=fix,
+                          status="pending", fix=fix)
+    svc = ImprovementCampaignService(storage)
+    res = svc.preview([fp], max_actions_per_run=5)
+    assert len(res["eligible"]) == 1
+    ctx = res["eligible"][0]["context"]
+    assert ctx is not None
+    assert ctx["source_url"] == "https://x.com/a/"
+    assert ctx["target_url"] == "https://x.com/b/"
+    assert ctx["anchor"] == "elenco completo"
+    assert "Veja o elenco completo." in ctx["context_before"]
+    assert ctx["confidence"] == "high"
+    # tipos não-link não expõem contexto
+    _seed_actions(storage)
+    res2 = svc.preview(["fp-title-1"], max_actions_per_run=5)
+    assert res2["eligible"][0]["context"] is None
+    storage.close()
     storage.close()

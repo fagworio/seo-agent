@@ -16,6 +16,13 @@ type EligibleItem = {
   after: Record<string, unknown>;
   risk: string;
   reversible: boolean;
+  context?: {
+    source_url?: string;
+    target_url?: string;
+    anchor?: string;
+    context_before?: string;
+    confidence?: "high" | "low" | string;
+  } | null;
 };
 
 type Preview = {
@@ -140,6 +147,9 @@ export function DelegateCampaignModal({ fingerprints, onClose, onCreated }: {
                   <div className="mt-1 text-[11px] text-[var(--muted)]">
                     Risco {riskLabel(it.rule_id)} · {it.reversible ? "Reversível" : "Não reversível"}
                   </div>
+                  {it.context && (
+                    <LinkContext context={it.context} />
+                  )}
                 </div>
               ))}
             </div>
@@ -225,4 +235,29 @@ function shortUrl(u: string): string {
   const path = u.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const parts = path.split("/");
   return parts.length > 1 ? `/${parts.slice(1).join("/")}` : u;
+}
+
+function LinkContext({ context }: { context: NonNullable<EligibleItem["context"]> }) {
+  return (
+    <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-2 text-[11px]">
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-[var(--muted)]">Origem:</span>
+        <span className="truncate">{shortUrl(context.source_url ?? "") || "—"}</span>
+        <span className="text-[var(--muted)]">→ Destino:</span>
+        <span className="truncate">{shortUrl(context.target_url ?? "") || "—"}</span>
+      </div>
+      {context.anchor && (
+        <div className="mb-1"><span className="text-[var(--muted)]">Âncora:</span> “{context.anchor}”</div>
+      )}
+      {context.context_before && (
+        <div className="mb-1 line-clamp-2"><span className="text-[var(--muted)]">Trecho:</span> {context.context_before}</div>
+      )}
+      <div className="flex items-center gap-2">
+        <span className="text-[var(--muted)]">Confiança:</span>
+        <Badge tone={context.confidence === "high" ? "success" : "warning"}>
+          {context.confidence === "high" ? "trecho identificado" : "trecho não identificado"}
+        </Badge>
+      </div>
+    </div>
+  );
 }
