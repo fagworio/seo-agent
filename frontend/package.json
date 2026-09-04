@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bash ./scripts/dev.sh",
+    "dev:web": "next dev",
+    "dev:api": "bash ./scripts/dev-api.sh",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
