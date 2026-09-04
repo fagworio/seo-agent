@@ -7,6 +7,7 @@ import { api, Agent, AgentRun, ApiError, Campaign } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
 import { Button } from "@/design-system/button";
+import { CampaignDetailDrawer } from "@/components/campaign-detail-drawer";
 
 export default function AgentsPage() {
   const [intent, setIntent] = useState<"normal_cycle" | "technical" | "sitemap_indexing" | "opportunities" | "content" | "specific_url">("normal_cycle");
@@ -116,6 +117,7 @@ function CampaignsSection({ campaigns, pending, onAction }: {
   pending: boolean;
   onAction: (id: number, action: "pause" | "resume" | "cancel") => void;
 }) {
+  const [openId, setOpenId] = useState<number | null>(null);
   return (
     <Card title="Campanhas">
       {campaigns.length === 0 ? (
@@ -135,6 +137,7 @@ function CampaignsSection({ campaigns, pending, onAction }: {
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge tone={campaignTone(c.status)}>{c.status}</Badge>
+                    <Button size="sm" variant="secondary" onClick={() => setOpenId(c.id)}>Abrir</Button>
                     {["paused"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "resume")}>Continuar</Button>}
                     {["approved", "queued", "running", "partial"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "pause")}>Pausar</Button>}
                     {!["cancelled", "completed", "measured"].includes(c.status) && <Button size="sm" variant="ghost" disabled={pending} onClick={() => onAction(c.id, "cancel")}>Cancelar</Button>}
@@ -152,6 +155,7 @@ function CampaignsSection({ campaigns, pending, onAction }: {
           })}
         </ul>
       )}
+      {openId != null && <CampaignDetailDrawer campaignId={openId} onClose={() => setOpenId(null)} />}
     </Card>
   );
 }
