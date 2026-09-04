@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
-import { api, Agent, AgentRun, ApiError } from "@/lib/api";
+import { api, Agent, AgentRun, ApiError, Campaign } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
 import { Button } from "@/design-system/button";
@@ -24,6 +24,15 @@ export default function AgentsPage() {
   const queue = useMutation({
     mutationFn: () => api.post<{ ok: boolean; run: AgentRun }>("/runs", { intent, mode }, me.data?.csrf_token),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runs"] }),
+  });
+  const campaigns = useQuery({
+    queryKey: ["campaigns"],
+    queryFn: () => api.get<{ campaigns: Campaign[] }>("/campaigns"),
+  });
+  const campaignAction = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: "pause" | "resume" | "cancel" }) =>
+      api.post<Campaign>(`/campaigns/${id}/${action}`, {}, me.data?.csrf_token),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["campaigns"] }),
   });
 
   if (isLoading || runs.isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -92,8 +101,68 @@ export default function AgentsPage() {
           )}
         </Card>
       ))}
+
+      <CampaignsSection
+        campaigns={campaigns.data?.campaigns ?? []}
+        pending={campaignAction.isPending}
+        onAction={(id, action) => campaignAction.mutate({ id, action })}
+      />
     </div>
   );
+}
+
+function CampaignsSection({ campaigns, pending, onAction }: {
+  campaigns: Campaign[];
+  pending: boolean;
+  onAction: (id: number, action: "pause" | "resume" | "cancel") => void;
+}) {
+  return (
+    <Card title="Campanhas">
+      {campaigns.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">Nenhuma campanha. Selecione correções e use “Delegar melhorias”.</p>
+      ) : (
+        <ul className="space-y-4">
+          {campaigns.map((c) => {
+            const done = c.executed_items;
+            const total = c.total_items || 1;
+            const pct = Math.round((done / total) * 100);
+            return (
+              <li key={c.id} className="rounded-md border border-[var(--border)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-xs text-[var(--muted)]">{done} / {c.total_items} concluídas · {c.pending_items} pendentes{c.failed_items ? ` · ${c.failed_items} falhas` : ""}{c.stale_items ? ` · ${c.stale_items} stale` : ""}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge tone={campaignTone(c.status)}>{c.status}</Badge>
+                    {["paused"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "resume")}>Continuar</Button>}
+                    {["approved", "queued", "running", "partial"].includes(c.status) && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(c.id, "pause")}>Pausar</Button>}
+                    {!["cancelled", "completed", "measured"].includes(c.status) && <Button size="sm" variant="ghost" disabled={pending} onClick={() => onAction(c.id, "cancel")}>Cancelar</Button>}
+                  </div>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-raised)]">
+                  <div className="h-full rounded-full bg-[var(--primary)]" style={{ width: `${pct}%` }} />
+                </div>
+                <div className="mt-1 flex justify-between text-xs text-[var(--muted)]">
+                  <span>Política: {c.max_actions_per_run} por ciclo</span>
+                  {c.next_run_at && <span>Próxima: {c.next_run_at}</span>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function campaignTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
+  if (status === "completed" || status === "measured") return "success";
+  if (status === "failed" || status === "cancelled") return "danger";
+  if (status === "partial") return "warning";
+  if (status === "running" || status === "queued") return "info";
+  if (status === "paused") return "neutral";
+  return "neutral";
 }
 
 function statusTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {

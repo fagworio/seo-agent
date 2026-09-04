@@ -330,6 +330,13 @@ class ImprovementCampaignService:
             if fp in executed:
                 self._set_item_status(it["id"], ITEM_EXECUTED, run_id=run_id)
                 executed_n += 1
+                # B8 — vincula ao pipeline de revalidação (baseline before/after).
+                after_vals = list((it.get("after") or {}).values())
+                self.storage.record_implemented_outcome(
+                    url=it["url"], action_type=it["action_type"],
+                    implemented_action=after_vals[0] if after_vals else it["action_type"],
+                    before=it.get("before") or {}, after=it.get("after") or {},
+                    implemented_at=_now())
             elif fp in unverified:
                 self._set_item_status(it["id"], ITEM_FAILED, run_id=run_id,
                                       reason="confirmação REST pós-write falhou")

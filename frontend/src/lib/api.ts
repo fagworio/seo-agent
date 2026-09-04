@@ -224,6 +224,29 @@ export interface AgentRun {
   sources?: string[] | null;
 }
 
+export interface Campaign {
+  id: number;
+  name: string;
+  action_type: string;
+  status: string;
+  created_by?: string | null;
+  approved_by?: string | null;
+  execution_mode: string;
+  schedule_policy: string | null;
+  max_actions_per_run: number;
+  total_items: number;
+  pending_items: number;
+  executed_items: number;
+  failed_items: number;
+  stale_items: number;
+  created_at: string;
+  approved_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  last_run_id: number | null;
+  next_run_at: string | null;
+}
+
 export interface IntegrationSource {
   source: string;
   data_status: string;

@@ -170,3 +170,19 @@ def test_persist_title_candidates_creates_action_and_checklist(tmp_path):
         "SELECT item FROM improvement_checklist WHERE url='https://x.com/a/'").fetchone()
     assert chk is not None and chk[0] == "title"
     storage.close()
+
+
+def test_run_campaign_links_outcome_for_revalidation(tmp_path):
+    storage = Storage(str(tmp_path / "r3.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    camp = svc.create("Títulos", "title_manual", ["fp-title-1"], created_by="admin@x.com",
+                      max_actions_per_run=10)
+    cid = camp["id"]
+    svc.approve(cid, approved_by="admin@x.com")
+    def fake_apply(actions): return {"executed": actions, "skipped": [], "previewed": [], "unverified": []}
+    svc.run(cid, actor="admin@x.com", apply=fake_apply)
+    row = storage.conn.execute(
+        "SELECT human_decision, url FROM opportunity_outcomes WHERE url='https://x.com/a/'").fetchone()
+    assert row is not None and row[0] == "approved"
+    storage.close()

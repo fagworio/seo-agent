@@ -776,6 +776,24 @@ class Storage:
             n += 1
         return n
 
+    def record_implemented_outcome(self, *, url: str, action_type: str,
+                                   implemented_action: str, before: Any, after: Any,
+                                   implemented_at: str) -> None:
+        """B8 — vincula uma melhoria executada ao pipeline de revalidação.
+
+        Cria um opportunity_outcome (human_decision=approved, implemented_at) com
+        o baseline (before/after da correção). O fluxo de revalidação já existente
+        (`_revalidations` → `revalidate_outcome`) passa a medir este item.
+        """
+        self.conn.execute(
+            "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+            "human_decision, implemented_action, url, baseline_json, implemented_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (url, action_type, action_type, "approved", implemented_action, url,
+             json.dumps({"before": before, "after": after}, ensure_ascii=False, default=str),
+             implemented_at, implemented_at))
+        self.conn.commit()
+
     # -- inspection queue ----------------------------------------------------
 
     def enqueue_urls(self, entries: list[dict[str, Any]]) -> int:
