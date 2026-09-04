@@ -231,6 +231,8 @@ export interface IntegrationSource {
   last_window: string;
   rows: number;
   limitations: string;
+  // ação de recuperação sugerida (determinística); vazia quando available
+  recovery: string;
   // extras (coverage, documentos, provider, etc.) projetados pelo backend
   [key: string]: unknown;
 }

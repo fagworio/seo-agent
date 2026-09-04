@@ -9,8 +9,10 @@ import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
 import { Input } from "@/design-system/input";
 import { Drawer as AccessibleDrawer } from "@/design-system/drawer";
+import { Pagination, pageSlice } from "@/components/pagination";
 
 type SortKey = "potential" | "impressions" | "severity" | "recent";
+const PAGE_SIZE = 20;
 
 const TONES: Record<string, "danger" | "warning" | "success" | "neutral" | "info"> = {
   critical: "danger", high: "danger", medium: "warning", low: "neutral", info: "info",
@@ -25,6 +27,7 @@ export default function TechnicalPage() {
   const [selected, setSelected] = useState<TechnicalFinding | null>(null);
   const [view, setView] = useState<"problems" | "corrections">("problems");
   const [selCorrection, setSelCorrection] = useState<Correction | null>(null);
+  const [findingPage, setFindingPage] = useState(1);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
 
@@ -40,6 +43,10 @@ export default function TechnicalPage() {
   const all = useMemo(() => data?.findings ?? [], [data?.findings]);
   const approveFix = useMutation({
     mutationFn: (fingerprint: string) => api.post<{ ok: boolean; approved: boolean; dry_run: boolean }>(`/actions/${fingerprint}/execute`, {}, me.data?.csrf_token),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["corrections"] }),
+  });
+  const rollbackFix = useMutation({
+    mutationFn: (fingerprint: string) => api.post<{ ok: boolean; reversible: boolean }>(`/actions/${fingerprint}/rollback`, {}, me.data?.csrf_token),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["corrections"] }),
   });
 
@@ -64,17 +71,18 @@ export default function TechnicalPage() {
   }, [all, corrections.data]);
 
   const ruleOptions = useMemo(() => Array.from(new Set(all.map((f) => f.rule_id))).sort(), [all]);
+  const visibleFindings = pageSlice(filtered, findingPage, PAGE_SIZE);
 
   if (isLoading || corrections.isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
   if (error || corrections.error) return <div className="text-sm text-[var(--danger)]">{((error ?? corrections.error) as ApiError).message}</div>;
 
   return (
     <div className="space-y-4">
-      {/* Toggle diagnóstico / correções */}
-      <div className="flex gap-1">
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-xl font-semibold">SEO técnico</h1><p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">Diagnóstico, evidência e correções verificáveis — sem confundir finding com ação.</p></div>
+      <div className="flex gap-1 rounded-md border border-[var(--border)] p-1" role="tablist" aria-label="Visão de SEO técnico">
         <Tab active={view === "problems"} onClick={() => setView("problems")}>Problemas ({summary.problems})</Tab>
         <Tab active={view === "corrections"} onClick={() => setView("corrections")}>Correções disponíveis ({summary.corrections})</Tab>
-      </div>
+      </div></div>
       {/* Resumo (≤4 indicadores) */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Kpi label="Problemas" value={summary.problems} />
@@ -87,21 +95,21 @@ export default function TechnicalPage() {
         <>
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="w-64"><Input placeholder="Buscar post ou URL…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
-        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={ruleFilter} onChange={(e) => setRuleFilter(e.target.value)}>
+        <div className="w-64"><Input placeholder="Buscar post ou URL…" value={search} onChange={(e) => { setSearch(e.target.value); setFindingPage(1); }} /></div>
+        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={ruleFilter} onChange={(e) => { setRuleFilter(e.target.value); setFindingPage(1); }}>
           <option value="">Problema · Todos</option>
-          {ruleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+          {ruleOptions.map((r) => <option key={r} value={r}>{all.find((finding) => finding.rule_id === r)?.rule.label ?? "Problema técnico"}</option>)}
         </select>
-        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={severityFilter} onChange={(e) => { setSeverityFilter(e.target.value); setFindingPage(1); }}>
           <option value="">Severidade · Todas</option>
           {["critical", "high", "medium", "low"].map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={googleFilter} onChange={(e) => setGoogleFilter(e.target.value)}>
+        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={googleFilter} onChange={(e) => { setGoogleFilter(e.target.value); setFindingPage(1); }}>
           <option value="">Dados Google · Todos</option>
           <option value="available">Disponíveis</option>
           <option value="missing">Sem dados</option>
         </select>
-        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+        <select className="h-9 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm" value={sort} onChange={(e) => { setSort(e.target.value as SortKey); setFindingPage(1); }}>
           <option value="potential">Ordenar · Maior potencial</option>
           <option value="impressions">Mais impressões</option>
           <option value="severity">Severidade</option>
@@ -124,11 +132,11 @@ export default function TechnicalPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((f) => (
+            {visibleFindings.map((f) => (
               <tr key={`${f.rule_id}:${f.page.public_url}`} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]">
                 <td className="max-w-[15rem] px-3 py-2">
                   <div className="truncate font-medium">{f.rule.label}</div>
-                  <div className="truncate text-[11px] text-[var(--muted)]">{f.rule_id}</div>
+                  <div className="truncate text-[11px] text-[var(--muted)]">{layerLabel(f.rule.layer)}</div>
                 </td>
                 <td className="max-w-[16rem] truncate px-3 py-2">{f.title || "Página sem título identificado"}</td>
                 <td className="px-3 py-2">
@@ -173,6 +181,7 @@ export default function TechnicalPage() {
             )}
           </tbody>
         </table>
+        <Pagination page={findingPage} pageSize={PAGE_SIZE} total={filtered.length} onPageChange={setFindingPage} label="findings" />
       </div>
         </>
       )}
@@ -188,6 +197,10 @@ export default function TechnicalPage() {
           result={approveFix.data}
           error={approveFix.error}
           onApprove={(fingerprint) => approveFix.mutate(fingerprint)}
+          rollingBack={rollbackFix.isPending}
+          rollbackError={rollbackFix.error}
+          rollbackResult={rollbackFix.data}
+          onRollback={(fingerprint) => rollbackFix.mutate(fingerprint)}
         />
       )}
 
@@ -206,7 +219,7 @@ function FindingDrawer({ finding, onClose }: { finding: TechnicalFinding; onClos
         </div>
         <div className="mb-4 flex items-center gap-2">
           <Badge tone={TONES[f.severity] ?? "neutral"}>{f.severity}</Badge>
-          <span className="text-[11px] text-[var(--muted)]">{f.rule_id}</span>
+          <span className="text-[11px] text-[var(--muted)]">{layerLabel(f.rule.layer)}</span>
         </div>
 
         <Section title="Post">
@@ -292,10 +305,13 @@ function FindingDrawer({ finding, onClose }: { finding: TechnicalFinding; onClos
   );
 }
 
-function CorrectionsView({ items, selected, onSelect, onClose, canExecute, executing, result, error, onApprove }: {
+function CorrectionsView({ items, selected, onSelect, onClose, canExecute, executing, result, error, onApprove, rollingBack, rollbackError, rollbackResult, onRollback }: {
   items: Correction[]; selected: Correction | null; onSelect: (c: Correction) => void; onClose: () => void;
   canExecute: boolean; executing: boolean; result: { ok: boolean; approved: boolean; dry_run: boolean } | undefined; error: Error | null; onApprove: (fingerprint: string) => void;
+  rollingBack: boolean; rollbackError: Error | null; rollbackResult: { ok: boolean; reversible: boolean } | undefined; onRollback: (fingerprint: string) => void;
 }) {
+  const [page, setPage] = useState(1);
+  const visibleItems = pageSlice(items, page, PAGE_SIZE);
   return (
     <>
       <div className="overflow-hidden rounded-[9px] border border-[var(--border)]">
@@ -304,9 +320,9 @@ function CorrectionsView({ items, selected, onSelect, onClose, canExecute, execu
             <tr><th className="px-3 py-2">Regra</th><th className="px-3 py-2">URL</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"><span className="sr-only">Ação</span></th></tr>
           </thead>
           <tbody>
-            {items.map((c) => (
+            {visibleItems.map((c) => (
               <tr key={c.fingerprint} className="border-t border-[var(--border)]">
-                <td className="px-3 py-2">{c.rule_id}</td>
+                <td className="px-3 py-2 font-medium">{c.label || friendlyRule(c.rule_id)}</td>
                 <td className="max-w-md truncate px-3 py-2">{c.url}</td>
                 <td className="px-3 py-2"><Badge tone={c.status === "executed" ? "success" : "warning"}>{c.status}</Badge></td>
                 <td className="px-3 py-2 text-right"><Button size="sm" variant="secondary" onClick={() => onSelect(c)}>Preview</Button></td>
@@ -315,34 +331,44 @@ function CorrectionsView({ items, selected, onSelect, onClose, canExecute, execu
             {items.length === 0 && <tr><td colSpan={4} className="px-3 py-6 text-center text-[var(--muted)]">Nenhuma correção registrada.</td></tr>}
           </tbody>
         </table>
+        <Pagination page={page} pageSize={PAGE_SIZE} total={items.length} onPageChange={setPage} label="correções" />
       </div>
 
       {selected && (
-        <AccessibleDrawer title={`Safe fix ${selected.rule_id}`} onClose={onClose}>
+        <AccessibleDrawer title={`Correção · ${selected.label || friendlyRule(selected.rule_id)}`} onClose={onClose}>
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Safe fix · {selected.rule_id}</h2>
+              <h2 className="text-lg font-semibold">Correção · {selected.label || friendlyRule(selected.rule_id)}</h2>
               <Button variant="ghost" size="sm" onClick={onClose} aria-label="Fechar preview">Fechar</Button>
             </div>
             <div className="mb-2 text-xs text-[var(--muted)]">{selected.url}</div>
             <div className="mb-4 grid gap-4 md:grid-cols-2">
-              <div className="rounded-md border border-[var(--border)] p-3 text-sm">
-                <div className="mb-1 text-xs font-medium text-[var(--muted)]">Antes</div>
-                <pre className="whitespace-pre-wrap font-mono text-xs">{JSON.stringify(selected.before ?? {}, null, 2)}</pre>
-              </div>
-              <div className="rounded-md border border-[var(--border)] p-3 text-sm">
-                <div className="mb-1 text-xs font-medium text-[var(--muted)]">Depois</div>
-                <pre className="whitespace-pre-wrap font-mono text-xs">{JSON.stringify(selected.after ?? {}, null, 2)}</pre>
-              </div>
+              <FieldCard tone="danger" title="Antes" value={metaValue(selected.before)} field={metaField(selected.before)} />
+              <FieldCard tone="success" title="Depois" value={metaValue(selected.after)} field={metaField(selected.after)} />
             </div>
             <div className="mb-3">
-              <div className="mb-1 text-xs font-medium text-[var(--muted)]">Rollback</div>
-              <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--muted)]">{JSON.stringify(selected.rollback ?? {}, null, 2)}</pre>
+              <div className="mb-1 text-xs font-medium text-[var(--muted)]">Rollback (reversão)</div>
+              {reversible(selected) ? (
+                <div className="rounded-md border border-[var(--border)] p-3 text-sm">
+                  <div className="mb-1 text-[11px] text-[var(--muted)]">Redefine para o valor anterior · {metaField(selected.rollback)}</div>
+                  <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--muted)]">{JSON.stringify(selected.rollback ?? {}, null, 2)}</pre>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--muted)]">{JSON.stringify(selected.rollback ?? {}, null, 2)}</pre>
+              )}
             </div>
             <p className="mb-3 text-xs text-[var(--muted)]">A aprovação exige a permissão technical.safe_fix e reautenticação. O worker executará conforme dry-run, idempotência e blast radius.</p>
-            <Button onClick={() => onApprove(selected.fingerprint)} disabled={!canExecute || executing || selected.status === "executed"}>{executing ? "Aprovando…" : "Aprovar execução"}</Button>
-            {!canExecute && <p className="mt-2 text-xs text-[var(--muted)]">Você não possui permissão para aprovar esta correção.</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => onApprove(selected.fingerprint)} disabled={!canExecute || executing || selected.status === "executed"}>{executing ? "Aprovando…" : "Aprovar execução"}</Button>
+              {selected.status === "executed" && (
+                <Button variant="danger" onClick={() => onRollback(selected.fingerprint)} disabled={!canExecute || rollingBack || !reversible(selected)}>{rollingBack ? "Revertendo…" : "Reverter alteração"}</Button>
+              )}
+              {!reversible(selected) && selected.status === "executed" && <span className="text-[11px] text-[var(--muted)]">Rollback não mapeado para esta correção.</span>}
+            </div>
+            {!canExecute && <p className="mt-2 text-xs text-[var(--muted)]">Você não possui permissão para aprovar ou reverter esta correção.</p>}
             {result && <p className="mt-2 text-sm text-[var(--success)]">Aprovação registrada{result.dry_run ? " em dry-run" : ""}. O worker fará a execução e verificação.</p>}
+            {rollbackResult && <p className="mt-2 text-sm text-[var(--success)]">Revert registrado. O worker restaurará o valor anterior.</p>}
             {error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}
+            {rollbackError && <p className="mt-2 text-sm text-[var(--danger)]">{rollbackError.message}</p>}
         </AccessibleDrawer>
       )}
     </>
@@ -376,5 +402,39 @@ function Kpi({ label, value, tone }: { label: string; value: number; tone?: "suc
 function layerLabel(layer: string) {
   const map: Record<string, string> = { wordpress: "WordPress / Rank Math", headless: "Pipeline Headless / publicação", both: "WordPress + Headless", external: "Fonte externa / infra", manual_review: "Revisão manual" };
   return map[layer] ?? layer;
+}
+function friendlyRule(ruleId: string) {
+  const labels: Record<string, string> = {
+    title_manual: "Ajuste manual de título", title_opportunity: "Oportunidade de título",
+    title_too_long: "Título longo", wp_static_mismatch: "Conteúdo não sincronizado",
+    image_no_alt: "Imagem sem texto alternativo",
+  };
+  return labels[ruleId] ?? "Correção técnica";
+}
+function metaField(rec: Record<string, unknown> | null): string {
+  const keys = Object.keys(rec ?? {});
+  if (keys.length === 0) return "Campo";
+  const k = keys[0];
+  const map: Record<string, string> = { rank_math_title: "Título SEO (Rank Math)", alt_text: "Texto alternativo (alt)" };
+  return map[k] ?? k;
+}
+function metaValue(rec: Record<string, unknown> | null): string {
+  if (!rec) return "";
+  const v = Object.values(rec)[0];
+  return v == null ? "" : String(v);
+}
+function reversible(rec: Correction): boolean {
+  const fix = rec.rollback as Record<string, unknown> | null;
+  const t = fix?.type;
+  return t === "wp_post_meta" || t === "wp_media_alt";
+}
+function FieldCard({ title, value, field, tone }: { title: string; value: string; field: string; tone: "danger" | "success" }) {
+  return (
+    <div className="rounded-md border border-[var(--border)] p-3 text-sm">
+      <div className="mb-1 text-xs font-medium" style={{ color: `var(--${tone})` }}>{title} · {field}</div>
+      <p className="whitespace-pre-wrap break-words">{value || <span className="text-[var(--muted)]">(vazio)</span>}</p>
+      <div className="mt-2 text-[11px] text-[var(--muted)]">chars: {value.length}</div>
+    </div>
+  );
 }
 function shortUrl(u: string) { const host = u.replace(/^https?:\/\//, ""); const path = host.includes("/") ? host.slice(host.indexOf("/")) : ""; return `${host.split("/")[0]}${path.length > 40 ? "…" + path.slice(-24) : path}`; }

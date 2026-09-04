@@ -87,6 +87,38 @@ class ControlPlaneService:
                 "before": self._json(r[4]), "after": self._json(r[5]),
                 "rollback": self._json(r[6]), "executed_at": r[7]}
 
+    def rollback_action(self, fingerprint: str) -> dict[str, Any] | None:
+        """Plano de reversão determinístico a partir do rollback_json persistido.
+
+        rollback_json já é uma spec de fix reverso (ex.: wp_post_meta com os
+        valores anteriores). reversible = existe um fix reverso suportado.
+        A aplicação é do executor (dry-run respeitado).
+        """
+        action = self.action_preview(fingerprint)
+        if action is None:
+            return None
+        fix = action.get("rollback")
+        reversible = bool(fix and fix.get("type") in {"wp_post_meta", "wp_media_alt"})
+        return {
+            "fingerprint": fingerprint,
+            "rule_id": action["rule_id"],
+            "url": action["url"],
+            "status": action["status"],
+            "rollback_fix": fix,
+            "reversible": reversible,
+        }
+
+    def mark_action_reverted(self, fingerprint: str, *, actor: str = "") -> bool:
+        cur = self.storage.conn.execute(
+            "UPDATE actions SET status = 'reverted' WHERE fingerprint = ? AND "
+            "status = 'executed'", (fingerprint,))
+        self.storage.conn.commit()
+        if cur.rowcount:
+            self.storage.log_audit(actor or "system", "SAFE_FIX_ROLLED_BACK",
+                                   fingerprint, {"status": "executed"}, {"status": "reverted"})
+            return True
+        return False
+
     def technical_findings(self, *, rule: str | None = None, limit: int = 200,
                            sort: str = "potential") -> list[dict[str, Any]]:
         """Read model ENRIQUECIDO para a tela SEO Técnico (fila de decisão).

@@ -641,6 +641,88 @@
         }
       }
     },
+    "/api/v1/actions/{fingerprint}/rollback": {
+      "get": {
+        "tags": [
+          "technical"
+        ],
+        "summary": "Rollback Preview",
+        "operationId": "technical_rollback_preview",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fingerprint"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollbackPreviewModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "technical"
+        ],
+        "summary": "Rollback",
+        "operationId": "technical_rollback",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fingerprint"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents": {
       "get": {
         "tags": [
@@ -2993,8 +3075,14 @@
             "type": "string",
             "title": "Limitations",
             "default": ""
+          },
+          "recovery": {
+            "type": "string",
+            "title": "Recovery",
+            "default": ""
           }
         },
+        "additionalProperties": true,
         "type": "object",
         "required": [
           "source",
@@ -3735,6 +3823,29 @@
           "roles"
         ],
         "title": "RolesRequest"
+      },
+      "RollbackPreviewModel": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "reversible": {
+            "type": "boolean",
+            "title": "Reversible"
+          },
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reversible",
+          "strategy"
+        ],
+        "title": "RollbackPreviewModel"
       },
       "RuleModel": {
         "properties": {

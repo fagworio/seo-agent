@@ -131,6 +131,26 @@ def test_integrations_missing_not_zero(tmp_path):
     storage.close()
 
 
+def test_integrations_recovery_hint(tmp_path):
+    storage, cp = _seed(tmp_path / "i2.db")
+    sources = cp.integrations()
+    by = {s["source"]: s for s in sources}
+    # fonte disponível => recovery vazio (nenhuma ação)
+    # (nenhuma fonte é available com _seed sem credenciais)
+    for s in sources:
+        assert "recovery" in s, "toda fonte expõe recovery"
+    # gsc sem credencial => recovery orienta a configuração
+    gsc = by["gsc"]
+    assert gsc["data_status"] == "missing" and gsc["configured"] is False
+    assert "Configuração ausente" in gsc["recovery"]
+    assert "service account" in gsc["recovery"]
+    # wordpress sem URL configurada => recovery menciona WORDPRESS_URL
+    wp = by["wordpress"]
+    assert wp["configured"] is False
+    assert "WORDPRESS_URL" in wp["recovery"]
+    storage.close()
+
+
 def test_activity_mixes_runs_and_events(tmp_path):
     storage, cp = _seed(tmp_path / "a.db")
     act = cp.activity()
@@ -332,6 +352,47 @@ def test_technical_splits_problems_and_corrections(tmp_path):
     preview = cp.action_preview("fp-tech")
     assert preview["rollback"]["type"] == "wp_post_meta"
     assert cp.action_preview("desconhecido") is None
+    storage.close()
+
+
+def test_rollback_plan_and_mark_reverted(tmp_path):
+    import json as _json
+    storage, cp = _seed(tmp_path / "rb.db")
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, before_json, "
+        "after_json, rollback_json, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "title_manual", "https://x.com/b/", "safe_fix", "executed", "fp-rollback",
+         _json.dumps({"rank_math_title": "título antigo"}),
+         _json.dumps({"rank_math_title": "título novo"}),
+         _json.dumps({"type": "wp_post_meta", "post_id": 9,
+                      "meta": {"rank_math_title": "título antigo"}}),
+         "2026-01-01T00:00:00+00:00"),
+    )
+    storage.conn.commit()
+
+    plan = cp.rollback_action("fp-rollback")
+    assert plan is not None
+    assert plan["reversible"] is True
+    assert plan["rollback_fix"]["meta"]["rank_math_title"] == "título antigo"
+    assert plan["status"] == "executed"
+
+    # reverter marca status + audit
+    assert cp.mark_action_reverted("fp-rollback", actor="op@x.com") is True
+    row = storage.conn.execute(
+        "SELECT status FROM actions WHERE fingerprint = 'fp-rollback'").fetchone()
+    assert row[0] == "reverted"
+    audit = storage.conn.execute(
+        "SELECT action_type FROM audit_log WHERE entity = 'fp-rollback' ORDER BY id DESC").fetchone()
+    assert audit[0] == "SAFE_FIX_ROLLED_BACK"
+    # segunda reversão não muda nada
+    assert cp.mark_action_reverted("fp-rollback", actor="op@x.com") is False
+    storage.close()
+
+
+def test_rollback_plan_unknown_is_none(tmp_path):
+    storage, cp = _seed(tmp_path / "rb2.db")
+    assert cp.rollback_action("nao-existe") is None
+    assert cp.mark_action_reverted("nao-existe") is False
     storage.close()
 
 

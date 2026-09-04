@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # -- auth --------------------------------------------------------------------
@@ -54,6 +54,12 @@ class OkModel(BaseModel):
     ok: bool = True
     message: str | None = None
     revoked: int | None = None
+
+
+class RollbackPreviewModel(BaseModel):
+    ok: bool = True
+    reversible: bool
+    strategy: str
 
 
 class SessionModel(BaseModel):
@@ -213,6 +219,10 @@ class IntegrationSourceModel(BaseModel):
     last_window: str = ""
     rows: int = 0
     limitations: str = ""
+    recovery: str = ""
+    # extras (coverage, documentos, provider, staleness…) projetados pelo
+    # backend: qualquer campo adicional é aceito e repassado ao frontend.
+    model_config = ConfigDict(extra="allow")
 
 
 class TodayModel(BaseModel):

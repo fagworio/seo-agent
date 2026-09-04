@@ -31,6 +31,12 @@ export default function IntegrationsPage() {
             {typeof s.global_coverage_pct === "number" && <Row k="Cobertura" v={`${s.global_coverage_pct}%`} />}
             {typeof s.provider === "string" && <Row k="Provedor" v={s.provider} />}
           </dl>
+          {s.recovery && (
+            <div className="mt-3 rounded-[7px] border border-[var(--warning)] bg-[var(--surface-raised)] p-3 text-xs text-[var(--foreground)]">
+              <div className="mb-1 font-medium text-[var(--warning)]">Como recuperar</div>
+              <p>{s.recovery}</p>
+            </div>
+          )}
           {s.limitations && <p className="mt-3 text-xs text-[var(--muted)]">Limitação: {s.limitations}</p>}
         </Card>
       ))}

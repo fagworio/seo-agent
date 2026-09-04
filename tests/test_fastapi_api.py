@@ -118,3 +118,59 @@ def test_fastapi_editorial_and_run_mutations(tmp_path):
     # POST /runs/{id}/cancel
     r = client.post(f"/api/v1/runs/{run_id}/cancel", headers={"X-CSRF-Token": csrf})
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
+
+
+def test_fastapi_action_rollback(tmp_path):
+    import json as _json
+
+    db = tmp_path / "rb.db"
+    _prepare(db)
+    storage = Storage(str(db))
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, before_json, "
+        "after_json, rollback_json, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "title_manual", "https://x.com/b/", "safe_fix", "executed", "fp-rb",
+         _json.dumps({"rank_math_title": "título antigo"}),
+         _json.dumps({"rank_math_title": "título novo"}),
+         _json.dumps({"type": "wp_post_meta", "post_id": 9,
+                      "meta": {"rank_math_title": "título antigo"}}),
+         "2026-01-01T00:00:00+00:00"))
+    storage.conn.commit()
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+
+    # preview GET exige a permissão safe_fix; com CSRF (o GET carrega CSRF pela factory)
+    r = client.get("/api/v1/actions/fp-rb/rollback")
+    assert r.status_code == 200 and r.json()["reversible"] is True
+
+    # mutação rollback sem CSRF -> 403
+    r = client.post("/api/v1/actions/fp-rb/rollback")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "CSRF_INVALID"
+
+    # com CSRF -> 200, reverte e audita
+    r = client.post("/api/v1/actions/fp-rb/rollback", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+    s = Storage(str(db))
+    row = s.conn.execute(
+        "SELECT status FROM actions WHERE fingerprint = 'fp-rb'").fetchone()
+    assert row[0] == "reverted"
+    audit = s.conn.execute(
+        "SELECT action_type FROM audit_log WHERE entity = 'fp-rb' ORDER BY id DESC").fetchone()
+    assert audit[0] == "SAFE_FIX_ROLLED_BACK"
+    s.close()
+
+    # reverter de novo -> 412 (não está mais executada)
+    r = client.post("/api/v1/actions/fp-rb/rollback", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 412 and r.json()["error"]["code"] == "PRECONDITION_FAILED"
+
+    # viewer sem safe_fix -> 403
+    client.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
+    client.post("/api/v1/auth/login", json={"email": "v@x.com", "password": PWD})
+    vcsrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+    r = client.post("/api/v1/actions/fp-rb/rollback", headers={"X-CSRF-Token": vcsrf})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "PERMISSION_DENIED"

@@ -43,6 +43,7 @@ from .schemas import (
     PermissionsEnvelope,
     ResetPasswordRequest,
     RolesEnvelope,
+    RollbackPreviewModel,
     RolesRequest,
     RunCreateRequest,
     RunDetailModel,
@@ -255,6 +256,29 @@ def read_routers() -> list[APIRouter]:
         services.storage.log_audit(session.email, "SAFE_FIX_APPROVED", fingerprint,
                                    {"url": preview["url"]},
                                    {"status": "approved", "dry_run": getattr(services.config, "dry_run", True)})
+        return {"ok": True}
+    @te.get("/actions/{fingerprint}/rollback", response_model=RollbackPreviewModel, operation_id="technical_rollback_preview")
+    def rollback_preview(fingerprint: str, services: Services = Depends(get_services),
+                         session=Depends(authenticated("technical.safe_fix"))) -> dict[str, Any]:
+        plan = services.control.rollback_action(fingerprint)
+        if plan is None:
+            raise NotFound("Correção não encontrada.")
+        return {"ok": True, "reversible": plan["reversible"], "strategy": "rollback_json"}
+    @te.post("/actions/{fingerprint}/rollback", response_model=OkModel, operation_id="technical_rollback")
+    def rollback(fingerprint: str, services: Services = Depends(get_services),
+                 session=Depends(authenticated("technical.safe_fix", csrf=True))) -> dict[str, Any]:
+        plan = services.control.rollback_action(fingerprint)
+        if plan is None:
+            raise NotFound("Correção não encontrada.")
+        if not plan["reversible"]:
+            from .errors import PreconditionFailed
+            raise PreconditionFailed("Revert não disponível: correção não é reversível.")
+        if not services.auth.verify_recent_strong_auth(session.session_id):
+            from .errors import ReauthRequired
+            raise ReauthRequired()
+        if not services.control.mark_action_reverted(fingerprint, actor=session.email):
+            from .errors import PreconditionFailed
+            raise PreconditionFailed("Não é possível reverter: correção não está executada.")
         return {"ok": True}
     out.append(te)
 

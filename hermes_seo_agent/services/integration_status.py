@@ -15,6 +15,18 @@ from ..config import Config
 from ..report.data_status import normalize_status
 from ..storage.db import Storage
 
+# Ação de recuperação sugerida por fonte (determinística, legível por humano).
+# O agente NUNCA executa; é orientação para o operador.
+RECOVERY_HINTS: dict[str, str] = {
+    "wordpress": "configure WORDPRESS_URL, gere um Application Password e rode a coleta de inventário editorial.",
+    "sitemap": "configure SITEMAP_URL e confirme que o sitemap estático está publicado e acessível.",
+    "corpus": "rode um novo run do corpus para atualizar cobertura e reduzir staleness.",
+    "gsc": "configure GOOGLE_APPLICATION_CREDENTIALS (service account), autorize a propriedade e rode a coleta do Search Console.",
+    "ga4": "confirme GA4_PROPERTY_ID e as permissões de leitura e rode a coleta semanal do Analytics.",
+    "crux": "configure CRUX_API_KEY/PAGESPEED_API_KEY; os dados CrUX são eventualmente consistentes.",
+    "external": "configure o provedor externo (M4): credenciais, quota e custo.",
+}
+
 
 @dataclass
 class SourceStatus:
@@ -36,8 +48,25 @@ class SourceStatus:
             "last_window": self.last_window,
             "rows": self.rows,
             "limitations": self.limitations,
+            "recovery": self.recovery(),
             **self.extras,
         }
+
+    def recovery(self) -> str:
+        """Ação determinística de recuperação, legível por humano.
+
+        available => vazio (sem ação). Qualquer outro estado descreve o que o
+        operador pode executar para restaurar a fonte. Nunca sugere execução
+        automática: o agente não age sem aprovação.
+        """
+        if self.data_status == "available":
+            return ""
+        base = RECOVERY_HINTS.get(self.source, "Revise a configuração e rode uma nova coleta.")
+        if not self.configured:
+            return f"Configuração ausente: {base}"
+        if self.data_status == "invalid":
+            return f"Fonte indisponível ou bloqueada: {base}"
+        return f"{base}"
 
 
 class IntegrationStatusService:

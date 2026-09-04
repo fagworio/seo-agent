@@ -49,3 +49,8 @@ class NotFound(ApiError):
 class BadRequest(ApiError):
     def __init__(self, message: str = "Requisição inválida.") -> None:
         super().__init__(400, "BAD_REQUEST", message)
+
+
+class PreconditionFailed(ApiError):
+    def __init__(self, message: str = "Pré-condição falhou.") -> None:
+        super().__init__(412, "PRECONDITION_FAILED", message)

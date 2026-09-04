@@ -191,6 +191,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/actions/{fingerprint}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rollback Preview */
+        get: operations["technical_rollback_preview"];
+        put?: never;
+        /** Rollback */
+        post: operations["technical_rollback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents": {
         parameters: {
             query?: never;
@@ -1290,6 +1308,13 @@ export interface components {
              * @default
              */
             limitations: string;
+            /**
+             * Recovery
+             * @default
+             */
+            recovery: string;
+        } & {
+            [key: string]: unknown;
         };
         /** IntegrationsEnvelope */
         IntegrationsEnvelope: {
@@ -1709,6 +1734,18 @@ export interface components {
         RolesRequest: {
             /** Roles */
             roles: string[];
+        };
+        /** RollbackPreviewModel */
+        RollbackPreviewModel: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Reversible */
+            reversible: boolean;
+            /** Strategy */
+            strategy: string;
         };
         /** RuleModel */
         RuleModel: {
@@ -2549,6 +2586,68 @@ export interface operations {
         };
     };
     technical_execute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fingerprint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    technical_rollback_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fingerprint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RollbackPreviewModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    technical_rollback: {
         parameters: {
             query?: never;
             header?: never;
