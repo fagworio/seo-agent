@@ -46,6 +46,8 @@ from .schemas import (
     PermissionsEnvelope,
     ResetPasswordRequest,
     RolesEnvelope,
+    RevalidationResultModel,
+    RevalidationsEnvelope,
     RollbackPreviewModel,
     RolesRequest,
     RunCreateRequest,
@@ -363,6 +365,20 @@ def read_routers() -> list[APIRouter]:
                     limit: int = Query(100, ge=1, le=200)) -> dict[str, Any]:
         return {"experiments": services.control.experiments(limit=limit)}
     out.append(ex)
+
+    rv = APIRouter(tags=["revalidations"])
+    @rv.get("/revalidations", response_model=RevalidationsEnvelope, operation_id="revalidations_list")
+    def revalidations_list(services: Services = Depends(get_services),
+                           session=Depends(authenticated("opportunity.read")),
+                           limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+        return {"revalidations": services.control.revalidations(limit=limit)}
+
+    @rv.post("/revalidations/{id}/revalidate", response_model=RevalidationResultModel,
+             operation_id="revalidations_revalidate")
+    def revalidate(id: int, services: Services = Depends(get_services),
+                   session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        return services.control.revalidate_outcome(id)
+    out.append(rv)
 
     return out
 

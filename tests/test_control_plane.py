@@ -436,3 +436,21 @@ def test_rule_presentation_uses_friendly_title_labels():
     assert rule_presentation("title_manual")["label"] == "Ajuste manual de título"
     assert rule_presentation("title_opportunity")["label"] == "Oportunidade de título"
     assert rule_presentation("image_no_alt")["label"] == "Imagem sem texto alternativo"
+
+
+def test_revalidate_outcome_skips_before_minimum_window(tmp_path):
+    """R7: revalidar antes da janela mínima => skipped; id inexistente => missing."""
+    import json as _json
+    storage, cp = _seed(tmp_path / "rv.db")
+    # implementado HOJE => elapsed 0 < 7 dias
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    cur = storage.conn.execute(
+        "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, human_decision, "
+        "implemented_action, url, implemented_at, baseline_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("kw", "expand_existing", "expand_existing", "approved", "x",
+         "https://x.com/a/", today, _json.dumps({"gsc": {"clicks": 1}}), today))
+    oid = cur.lastrowid
+    storage.conn.commit()
+    assert cp.revalidate_outcome(oid)["status"] == "skipped"
+    assert cp.revalidate_outcome(999999)["status"] == "missing"
+    storage.close()

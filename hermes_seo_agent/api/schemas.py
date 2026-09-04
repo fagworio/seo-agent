@@ -362,6 +362,32 @@ class EditorialTransitionRequest(BaseModel):
     published_url: str = Field(default="")
 
 
+class RevalidationItemModel(BaseModel):
+    id: int
+    keyword: str = ""
+    opportunity_type: str = ""
+    url: str = ""
+    implemented_action: str = ""
+    implemented_at: str = ""
+    due_at: str = ""
+    elapsed_days: int = 0
+    state: str = ""
+    baseline_status: str = "missing"
+    latest_google_window_end: str = ""
+    verdict: str = ""
+
+
+class RevalidationsEnvelope(BaseModel):
+    revalidations: list[RevalidationItemModel]
+
+
+class RevalidationResultModel(BaseModel):
+    status: str
+    verdict: str | None = None
+    reason: str = ""
+    elapsed_days: int | None = None
+
+
 # -- envelopes (mesma forma que o frontend já consome) ----------------------
 class AgentModel(BaseModel):
     id: int

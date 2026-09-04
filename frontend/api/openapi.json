@@ -1154,6 +1154,93 @@
         }
       }
     },
+    "/api/v1/revalidations": {
+      "get": {
+        "tags": [
+          "revalidations"
+        ],
+        "summary": "Revalidations List",
+        "operationId": "revalidations_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevalidationsEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/revalidations/{id}/revalidate": {
+      "post": {
+        "tags": [
+          "revalidations"
+        ],
+        "summary": "Revalidate",
+        "operationId": "revalidations_revalidate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevalidationResultModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -3886,6 +3973,74 @@
         ],
         "title": "ResetPasswordRequest"
       },
+      "RevalidationItemModel": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "keyword": {
+            "type": "string",
+            "title": "Keyword",
+            "default": ""
+          },
+          "opportunity_type": {
+            "type": "string",
+            "title": "Opportunity Type",
+            "default": ""
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "implemented_action": {
+            "type": "string",
+            "title": "Implemented Action",
+            "default": ""
+          },
+          "implemented_at": {
+            "type": "string",
+            "title": "Implemented At",
+            "default": ""
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At",
+            "default": ""
+          },
+          "elapsed_days": {
+            "type": "integer",
+            "title": "Elapsed Days",
+            "default": 0
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": ""
+          },
+          "baseline_status": {
+            "type": "string",
+            "title": "Baseline Status",
+            "default": "missing"
+          },
+          "latest_google_window_end": {
+            "type": "string",
+            "title": "Latest Google Window End",
+            "default": ""
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "RevalidationItemModel"
+      },
       "RevalidationModel": {
         "properties": {
           "id": {
@@ -3953,6 +4108,62 @@
           "id"
         ],
         "title": "RevalidationModel"
+      },
+      "RevalidationResultModel": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "elapsed_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "RevalidationResultModel"
+      },
+      "RevalidationsEnvelope": {
+        "properties": {
+          "revalidations": {
+            "items": {
+              "$ref": "#/components/schemas/RevalidationItemModel"
+            },
+            "type": "array",
+            "title": "Revalidations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revalidations"
+        ],
+        "title": "RevalidationsEnvelope"
       },
       "RoleModel": {
         "properties": {

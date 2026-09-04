@@ -784,3 +784,66 @@ class ControlPlaneService:
             "waiting_google": sum(r["state"] == "waiting_google" for r in revalidations),
             "ready": sum(r["state"] == "ready" for r in revalidations),
         }
+
+    # -- R7/R8: revalidação de melhorias -------------------------------------
+    def revalidations(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Itens implementados com estado de revalidação (waiting_7d/ready/measured)."""
+        return self._revalidations(limit=limit, minimum_days=7)
+
+    def revalidate_outcome(self, outcome_id: int, *, days: int = 7) -> dict[str, Any]:
+        """Revalida uma melhoria pronta: re-lê GSC/GA4 pós-implementação e mede.
+
+        Reutiliza a mesma lógica determinística do CLI `outcomes revalidate-due`
+        (impact_deltas + combined_verdict). NUNCA reaplica a correção (ADR-0010).
+        Retorna {status: measured|skipped|missing, verdict?, reason?}.
+        """
+        import datetime as _dt
+
+        outcome = next((o for o in self.storage.list_opportunity_outcomes(limit=500)
+                        if o.get("id") == outcome_id), None)
+        if outcome is None:
+            return {"status": "missing"}
+        if outcome.get("human_decision") != "approved":
+            return {"status": "skipped", "reason": "decisão não aprovada"}
+        if outcome.get("measured", {}).get(f"{days}d"):
+            return {"status": "skipped", "reason": f"já medido em {days}d"}
+        ref = outcome.get("implemented_at") or ""
+        if not ref:
+            return {"status": "skipped", "reason": "sem data de implementação"}
+        try:
+            implemented = _dt.datetime.fromisoformat(ref.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            return {"status": "skipped", "reason": "data de implementação inválida"}
+        elapsed = (_dt.date.today() - implemented).days
+        if elapsed < days:
+            return {"status": "skipped", "reason": f"janela mínima de {days}d não atingida"}
+        baseline = outcome.get("baseline") or {}
+        if not (getattr(self.config, "google_credentials", "") and baseline.get("gsc")
+                and outcome.get("url")):
+            return {"status": "skipped", "reason": "GSC/baseline/URL indisponível"}
+        try:
+            from ..connectors.search_console import SearchConsoleClient
+            from ..report.impact import impact_deltas
+            from ..report.impact_ga4 import baseline_gsc, baseline_ga4, combined_verdict, engagement_deltas
+
+            gsc = SearchConsoleClient(self.config)
+            end = _dt.date.today()
+            start = end - _dt.timedelta(days=days)
+            now_metrics = gsc.page_metrics(
+                outcome["url"], start_date=start.isoformat(), end_date=end.isoformat()
+            ) or None
+            if not now_metrics:
+                return {"status": "skipped", "reason": "Search Console ainda sem dados pós-implementação"}
+            now_ga4 = self.storage.ga4_metrics_for_url(outcome["url"]) or None
+            gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
+            ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
+            verdict = combined_verdict(gsc_deltas, ga4_deltas)
+            self.storage.set_outcome_verdict(
+                outcome["id"], verdict=verdict, days=days,
+                result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
+                        "now_gsc": now_metrics, "now_ga4": now_ga4,
+                        "elapsed_days": elapsed},
+            )
+            return {"status": "measured", "verdict": verdict, "elapsed_days": elapsed}
+        except Exception as exc:
+            return {"status": "skipped", "reason": str(exc)}

@@ -346,6 +346,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/revalidations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Revalidations List */
+        get: operations["revalidations_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/revalidations/{id}/revalidate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revalidate */
+        post: operations["revalidations_revalidate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1724,6 +1758,66 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /** RevalidationItemModel */
+        RevalidationItemModel: {
+            /** Id */
+            id: number;
+            /**
+             * Keyword
+             * @default
+             */
+            keyword: string;
+            /**
+             * Opportunity Type
+             * @default
+             */
+            opportunity_type: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /**
+             * Implemented Action
+             * @default
+             */
+            implemented_action: string;
+            /**
+             * Implemented At
+             * @default
+             */
+            implemented_at: string;
+            /**
+             * Due At
+             * @default
+             */
+            due_at: string;
+            /**
+             * Elapsed Days
+             * @default 0
+             */
+            elapsed_days: number;
+            /**
+             * State
+             * @default
+             */
+            state: string;
+            /**
+             * Baseline Status
+             * @default missing
+             */
+            baseline_status: string;
+            /**
+             * Latest Google Window End
+             * @default
+             */
+            latest_google_window_end: string;
+            /**
+             * Verdict
+             * @default
+             */
+            verdict: string;
+        };
         /** RevalidationModel */
         RevalidationModel: {
             /** Id */
@@ -1783,6 +1877,25 @@ export interface components {
              * @default
              */
             verdict: string;
+        };
+        /** RevalidationResultModel */
+        RevalidationResultModel: {
+            /** Status */
+            status: string;
+            /** Verdict */
+            verdict?: string | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Elapsed Days */
+            elapsed_days?: number | null;
+        };
+        /** RevalidationsEnvelope */
+        RevalidationsEnvelope: {
+            /** Revalidations */
+            revalidations: components["schemas"]["RevalidationItemModel"][];
         };
         /** RoleModel */
         RoleModel: {
@@ -3021,6 +3134,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExperimentsEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revalidations_list: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevalidationsEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revalidations_revalidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevalidationResultModel"];
                 };
             };
             /** @description Validation Error */
