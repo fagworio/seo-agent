@@ -115,6 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("today", "Control plane: read model da tela Hoje (atenção, runs, integrações)"),
         ("serve", "Control plane: servir /api/v1 via HTTP (stdlib; trocável por FastAPI)"),
         ("user", "Control plane: manage users, roles and bootstrap admin"),
+        ("refresh-data", "Control plane: coletar fontes como AgentRun refresh_data (R3)"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -413,6 +414,10 @@ def _build_parser() -> argparse.ArgumentParser:
             ro.add_argument("--user-id", type=int, required=True)
             ro.add_argument("--roles", required=True, help="comma-separated roles")
             ro.set_defaults(func=_cmd_user)
+        elif name == "refresh-data":
+            p.add_argument("--sources", default="",
+                           help="fontes separadas por vírgula (wordpress,sitemap,gsc,ga4,crux,corpus); vazio = todas")
+            p.set_defaults(func=_cmd_refresh_data)
         else:
             p.set_defaults(func=_cmd_inventory)
 
@@ -3973,6 +3978,38 @@ def _cmd_today(args: argparse.Namespace, config: Any) -> int:
     }
     _emit(result, force_json=True)
     return 0
+
+
+def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
+    """R3: coletar fontes como um AgentRun refresh_data (nunca escreve no site)."""
+    from .services.agent_runs import REFRESH_SOURCES, AgentRunService
+    from .services.data_refresh import build_refresh_collectors, run_refresh
+
+    sources = [s.strip() for s in (args.sources or "").split(",") if s.strip()]
+    if not sources:
+        sources = list(REFRESH_SOURCES)
+    invalid = [s for s in sources if s not in REFRESH_SOURCES]
+    if invalid:
+        _emit({"status": "error", "error": f"fontes inválidas: {', '.join(invalid)}"},
+              force_json=True)
+        return 1
+    with Storage(config.sqlite_path) as storage:
+        svc = AgentRunService(storage)
+        run_id = svc.claim_queued_run("hermes-seo-agent", intent="refresh_data")
+        if run_id is None:
+            run_id = svc.start_run("hermes-seo-agent", trigger="manual",
+                                   intent="refresh_data", mode="analyze",
+                                   started_by=config.app_user or "system",
+                                   sources=sources)
+        run = run_refresh(storage, run_id, sources=sources,
+                          collectors=build_refresh_collectors(config, storage))
+        summary = run.get("summary") or {}
+        _emit({"status": "ok",
+               "summary": {"command": "refresh-data", "run_id": run_id,
+                           "status": run.get("status"), "sources": sources,
+                           "results": summary.get("results", {})}},
+              force_json=bool(getattr(args, "json", False)))
+        return 0
 
 
 def _cmd_serve(args: argparse.Namespace, config: Any) -> int:
