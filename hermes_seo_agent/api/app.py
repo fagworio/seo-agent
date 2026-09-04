@@ -676,6 +676,15 @@ def campaigns_router() -> APIRouter:
             raise PreconditionFailed("Não foi possível aprovar a campanha.")
         return svc.get(id) or {}
 
+    @r.post("/{id}/run", response_model=CampaignDetailModel, operation_id="campaigns_run")
+    def campaigns_run(id: int, services: Services = Depends(get_services),
+                      session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage, config=services.config)
+        res = svc.run(id, actor=session.email)
+        if res is None:
+            raise PreconditionFailed("Campanha não pode ser executada agora.")
+        return res
+
     @r.post("/{id}/pause", response_model=CampaignDetailModel, operation_id="campaigns_pause")
     def campaigns_pause(id: int, services: Services = Depends(get_services),
                         session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:

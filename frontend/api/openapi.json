@@ -2597,6 +2597,48 @@
         }
       }
     },
+    "/api/v1/campaigns/{id}/run": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Campaigns Run",
+        "operationId": "campaigns_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignDetailModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{id}/pause": {
       "post": {
         "tags": [

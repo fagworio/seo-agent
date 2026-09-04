@@ -67,9 +67,10 @@ def _now() -> str:
 
 
 class ImprovementCampaignService:
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: Storage, config: Any | None = None):
         self.storage = storage
         self.conn = storage.conn
+        self.config = config
 
     # -- criação -------------------------------------------------------------
     def create(
@@ -273,6 +274,114 @@ class ImprovementCampaignService:
     def schedule(self, campaign_id: int, *, policy: str, next_run_at: str | None = None) -> bool:
         return self._set_status(campaign_id, QUEUED, schedule_policy=policy,
                                 next_run_at=next_run_at or _now())
+
+    # -- B5: runner ----------------------------------------------------------
+    def run(self, campaign_id: int, *, actor: str = "system",
+            apply: Any | None = None) -> dict[str, Any] | None:
+        """Executa o próximo lote (até max_actions_per_run) reutilizando o executor.
+
+        Cria um AgentRun (intent=improvement_campaign, mode=safe_fix) e aplica as
+        ações via `apply_safe_actions` (o MESMO motor do cron). `apply` é injetável
+        para testes: callable(actions) -> {executed, skipped, previewed, unverified}.
+        """
+        from ..services.agent_runs import AgentRunService
+
+        camp = self.get(campaign_id)
+        if camp is None or camp["status"] not in (DRAFT, REVIEW_REQUIRED, APPROVED, QUEUED, RUNNING, PARTIAL):
+            return None
+        pending = [it for it in camp["items"] if it["status"] == ITEM_PENDING][:camp["max_actions_per_run"]]
+        if not pending:
+            self._set_status(campaign_id, COMPLETED, finished_at=_now())
+            self.storage.log_audit(actor, "CAMPAIGN_COMPLETED", f"campaign:{campaign_id}",
+                                   {}, {"status": COMPLETED})
+            return self.get(campaign_id)
+
+        self._set_status(campaign_id, RUNNING, started_at=camp["started_at"] or _now())
+        svc = AgentRunService(self.storage)
+        run_id = svc.start_run("hermes-seo-agent", trigger="manual", intent="improvement_campaign",
+                               mode="safe_fix", started_by=actor)
+        self._set_status(campaign_id, RUNNING, last_run_id=run_id)
+
+        actions = [{
+            "rule_id": it["action_type"], "url": it["url"],
+            "detail": it["action_type"], "fix": it["fix"],
+            "_campaign_fp": it["action_fingerprint"],
+        } for it in pending]
+
+        if apply is None:
+            from ..connectors.wordpress import WordPressClient
+            from ..executor.executor import Executor
+            with WordPressClient(self.config) as wp:
+                executor = Executor(self.config, wp, self.storage)
+                outcome = executor.apply_safe_actions(
+                    actions, cycle_id=f"campaign-{campaign_id}",
+                    max_actions=camp["max_actions_per_run"], verify=None)
+        else:
+            outcome = apply(actions)
+
+        executed = {a.get("_campaign_fp") for a in outcome.get("executed", [])}
+        unverified = {a.get("_campaign_fp") for a in outcome.get("unverified", [])}
+        previewed = {a.get("_campaign_fp") for a in outcome.get("previewed", [])}
+        skipped = {a.get("_campaign_fp"): a.get("reason", "") for a in outcome.get("skipped", [])}
+
+        executed_n = failed_n = skipped_n = 0
+        for it in pending:
+            fp = it["action_fingerprint"]
+            if fp in executed:
+                self._set_item_status(it["id"], ITEM_EXECUTED, run_id=run_id)
+                executed_n += 1
+            elif fp in unverified:
+                self._set_item_status(it["id"], ITEM_FAILED, run_id=run_id,
+                                      reason="confirmação REST pós-write falhou")
+                failed_n += 1
+            elif fp in previewed:
+                self._set_item_status(it["id"], ITEM_SKIPPED, run_id=run_id,
+                                      reason="dry-run: não executado")
+                skipped_n += 1
+            elif fp in skipped:
+                self._set_item_status(it["id"], ITEM_SKIPPED, run_id=run_id, reason=skipped[fp])
+                skipped_n += 1
+            else:
+                self._set_item_status(it["id"], ITEM_FAILED, run_id=run_id,
+                                      reason="sem resultado do executor")
+                failed_n += 1
+
+        self._recount(campaign_id)
+        camp2 = self.get(campaign_id)
+        remaining = camp2["pending_items"]
+        if remaining == 0:
+            new_status = PARTIAL if failed_n else COMPLETED
+        else:
+            new_status = PARTIAL if failed_n else QUEUED
+        self._set_status(campaign_id, new_status)
+
+        svc.mark_step(run_id, "campaign_batch", "success" if failed_n == 0 else "partial",
+                      detail={"executed": executed_n, "failed": failed_n,
+                              "skipped": skipped_n, "remaining": remaining})
+        svc.complete(run_id, status="success" if failed_n == 0 else "partial",
+                     urls=executed_n, safe_fixes=executed_n, executed=executed_n)
+        return self.get(campaign_id)
+
+    def _set_item_status(self, item_id: int, status: str, *, run_id: int | None = None,
+                         reason: str = "") -> None:
+        self.conn.execute(
+            "UPDATE improvement_campaign_items SET status = ?, failure_reason = ?, "
+            "executed_run_id = ?, executed_at = ?, verified_at = ? WHERE id = ?",
+            (status, reason or "", run_id,
+             _now() if status == ITEM_EXECUTED else None,
+             _now() if status == ITEM_EXECUTED else None, item_id))
+        self.conn.commit()
+
+    def _recount(self, campaign_id: int) -> None:
+        counts = {r[0]: r[1] for r in self.conn.execute(
+            "SELECT status, COUNT(*) FROM improvement_campaign_items WHERE campaign_id = ? "
+            "GROUP BY status", (campaign_id,)).fetchall()}
+        self.conn.execute(
+            "UPDATE improvement_campaigns SET pending_items = ?, executed_items = ?, "
+            "failed_items = ?, stale_items = ? WHERE id = ?",
+            (counts.get(ITEM_PENDING, 0), counts.get(ITEM_EXECUTED, 0),
+             counts.get(ITEM_FAILED, 0), counts.get(ITEM_STALE, 0), campaign_id))
+        self.conn.commit()
 
     # -- helpers -------------------------------------------------------------
     @staticmethod

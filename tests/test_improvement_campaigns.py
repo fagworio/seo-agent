@@ -108,3 +108,48 @@ def test_preview_non_homogeneous_gives_per_cycle_zero(tmp_path):
     assert res["action_type"] is None
     assert res["per_cycle"] == 0
     storage.close()
+
+
+def test_run_campaign_batches(tmp_path):
+    storage = Storage(str(tmp_path / "r.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    camp = svc.create("Títulos", "title_manual", ["fp-title-1", "fp-title-2"],
+                      created_by="admin@x.com", max_actions_per_run=1)
+    cid = camp["id"]
+    svc.approve(cid, approved_by="admin@x.com")
+
+    def fake_apply(actions):
+        return {"executed": actions, "skipped": [], "previewed": [], "unverified": []}
+
+    # 1º lote: executa 1 (max_actions_per_run=1), sobra 1
+    run = svc.run(cid, actor="admin@x.com", apply=fake_apply)
+    assert run is not None and run["status"] == "queued"
+    assert run["executed_items"] == 1 and run["pending_items"] == 1
+
+    # 2º lote: executa o restante -> completed
+    run2 = svc.run(cid, actor="admin@x.com", apply=fake_apply)
+    assert run2["status"] == "completed"
+    assert run2["executed_items"] == 2 and run2["pending_items"] == 0
+    storage.close()
+
+
+def test_run_campaign_marks_failure_partial(tmp_path):
+    storage = Storage(str(tmp_path / "r2.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    camp = svc.create("Títulos", "title_manual", ["fp-title-1", "fp-title-2"],
+                      created_by="admin@x.com", max_actions_per_run=10)
+    cid = camp["id"]
+    svc.approve(cid, approved_by="admin@x.com")
+
+    def fake_apply(actions):
+        # primeiro executado, segundo unverified (falha)
+        executed = [a for a in actions if a["_campaign_fp"] == "fp-title-1"]
+        unverified = [a for a in actions if a["_campaign_fp"] == "fp-title-2"]
+        return {"executed": executed, "skipped": [], "previewed": [], "unverified": unverified}
+
+    run = svc.run(cid, actor="admin@x.com", apply=fake_apply)
+    assert run["status"] == "partial"
+    assert run["executed_items"] == 1 and run["failed_items"] == 1
+    storage.close()
