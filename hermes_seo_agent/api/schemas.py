@@ -452,6 +452,20 @@ class CampaignScheduleRequest(BaseModel):
     next_run_at: str | None = None
 
 
+class CampaignPreviewRequest(BaseModel):
+    fingerprints: list[str]
+
+
+class CampaignPreviewModel(BaseModel):
+    eligible: list[dict[str, Any]] = []
+    incompatible: list[dict[str, Any]] = []
+    missing: list[str] = []
+    action_type: str | None = None
+    homogeneous: bool = False
+    per_cycle: int = 0
+    max_actions_per_run: int = 10
+
+
 # -- envelopes (mesma forma que o frontend já consome) ----------------------
 class AgentModel(BaseModel):
     id: int

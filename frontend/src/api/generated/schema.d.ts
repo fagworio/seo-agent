@@ -878,6 +878,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/campaigns/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Preview */
+        post: operations["campaigns_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{id}": {
         parameters: {
             query?: never;
@@ -1359,6 +1376,50 @@ export interface components {
             last_run_id?: number | null;
             /** Next Run At */
             next_run_at?: string | null;
+        };
+        /** CampaignPreviewModel */
+        CampaignPreviewModel: {
+            /**
+             * Eligible
+             * @default []
+             */
+            eligible: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Incompatible
+             * @default []
+             */
+            incompatible: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Missing
+             * @default []
+             */
+            missing: string[];
+            /** Action Type */
+            action_type?: string | null;
+            /**
+             * Homogeneous
+             * @default false
+             */
+            homogeneous: boolean;
+            /**
+             * Per Cycle
+             * @default 0
+             */
+            per_cycle: number;
+            /**
+             * Max Actions Per Run
+             * @default 10
+             */
+            max_actions_per_run: number;
+        };
+        /** CampaignPreviewRequest */
+        CampaignPreviewRequest: {
+            /** Fingerprints */
+            fingerprints: string[];
         };
         /** CampaignScheduleRequest */
         CampaignScheduleRequest: {
@@ -4509,6 +4570,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignPreviewModel"];
                 };
             };
             /** @description Validation Error */

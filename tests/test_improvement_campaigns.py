@@ -77,3 +77,34 @@ def test_approve_pause_resume_cancel(tmp_path):
     svc.cancel(cid)
     assert svc.get(cid)["status"] == "cancelled"
     storage.close()
+
+
+def test_preview_eligible_and_missing(tmp_path):
+    storage = Storage(str(tmp_path / "p.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    res = svc.preview(["fp-title-1", "fp-title-2", "nao-existe"], max_actions_per_run=10)
+    assert res["homogeneous"] is True
+    assert res["action_type"] == "title_manual"
+    assert len(res["eligible"]) == 2
+    assert res["missing"] == ["nao-existe"]
+    assert res["per_cycle"] == 2
+    storage.close()
+
+
+def test_preview_non_homogeneous_gives_per_cycle_zero(tmp_path):
+    storage = Storage(str(tmp_path / "p2.db"))
+    _seed_actions(storage)
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, before_json, "
+        "after_json, rollback_json) VALUES ('c1','image_no_alt','https://x.com/c/','safe_fix',"
+        "'pending','fp-alt',?,?,?)",
+        (json.dumps({"alt_text": ""}), json.dumps({"alt_text": "x"}),
+         json.dumps({"type": "wp_media_alt", "media_id": 1, "alt_text": ""})))
+    storage.conn.commit()
+    svc = ImprovementCampaignService(storage)
+    res = svc.preview(["fp-title-1", "fp-alt"], max_actions_per_run=10)
+    assert res["homogeneous"] is False
+    assert res["action_type"] is None
+    assert res["per_cycle"] == 0
+    storage.close()

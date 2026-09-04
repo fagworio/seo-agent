@@ -27,6 +27,8 @@ from .schemas import (
     AuthSettingsModel,
     CampaignCreateRequest,
     CampaignDetailModel,
+    CampaignPreviewModel,
+    CampaignPreviewRequest,
     CampaignsEnvelope,
     CampaignScheduleRequest,
     ChangeEmailRequest,
@@ -649,6 +651,13 @@ def campaigns_router() -> APIRouter:
         if res is None:
             raise PreconditionFailed("Seleção inválida: campanha exige ações homogêneas com fix suportado.")
         return res
+
+    @r.post("/preview", response_model=CampaignPreviewModel, operation_id="campaigns_preview")
+    def campaigns_preview(body: CampaignPreviewRequest, services: Services = Depends(get_services),
+                          session=Depends(authenticated("opportunity.review", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        return svc.preview(body.fingerprints,
+                           max_actions_per_run=getattr(services.config, "max_safe_fix_per_cycle", 10))
 
     @r.get("/{id}", response_model=CampaignDetailModel, operation_id="campaigns_detail")
     def campaigns_detail(id: int, services: Services = Depends(get_services),

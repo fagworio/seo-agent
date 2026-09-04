@@ -2472,6 +2472,47 @@
         }
       }
     },
+    "/api/v1/campaigns/preview": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Campaigns Preview",
+        "operationId": "campaigns_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPreviewModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{id}": {
       "get": {
         "tags": [
@@ -3559,6 +3600,80 @@
           "status"
         ],
         "title": "CampaignModel"
+      },
+      "CampaignPreviewModel": {
+        "properties": {
+          "eligible": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Eligible",
+            "default": []
+          },
+          "incompatible": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Incompatible",
+            "default": []
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing",
+            "default": []
+          },
+          "action_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Type"
+          },
+          "homogeneous": {
+            "type": "boolean",
+            "title": "Homogeneous",
+            "default": false
+          },
+          "per_cycle": {
+            "type": "integer",
+            "title": "Per Cycle",
+            "default": 0
+          },
+          "max_actions_per_run": {
+            "type": "integer",
+            "title": "Max Actions Per Run",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "title": "CampaignPreviewModel"
+      },
+      "CampaignPreviewRequest": {
+        "properties": {
+          "fingerprints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fingerprints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprints"
+        ],
+        "title": "CampaignPreviewRequest"
       },
       "CampaignScheduleRequest": {
         "properties": {

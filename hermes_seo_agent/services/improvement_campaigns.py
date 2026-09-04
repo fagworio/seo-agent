@@ -139,6 +139,56 @@ class ImprovementCampaignService:
         return self.get(campaign_id)
 
     # -- leitura -------------------------------------------------------------
+    def preview(self, fingerprints: list[str], *, max_actions_per_run: int = 10) -> dict[str, Any]:
+        """B1 — valida a seleção antes de criar a campanha.
+
+        Retorna elegíveis (homogêneos, com fix suportado e não-executados),
+        incompatíveis, ausentes, risco, reversibilidade e quantidade por ciclo.
+        """
+        eligible: list[dict[str, Any]] = []
+        incompatible: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for fp in fingerprints:
+            row = self.conn.execute(
+                "SELECT rule_id, url, before_json, after_json, rollback_json, status "
+                "FROM actions WHERE fingerprint = ?", (fp,)).fetchone()
+            if row is None:
+                missing.append(fp)
+                continue
+            rule_id, url, before_j, after_j, rollback_j, status = row
+            before = json.loads(before_j) if before_j else {}
+            after = json.loads(after_j) if after_j else {}
+            rollback = json.loads(rollback_j) if rollback_j else {}
+            fix = forward_fix(after, rollback)
+            if fix is None:
+                incompatible.append({"fingerprint": fp, "reason": "sem fix suportado"})
+                continue
+            if status in ("executed", "reverted"):
+                incompatible.append({"fingerprint": fp, "reason": f"status {status}"})
+                continue
+            eligible.append({
+                "fingerprint": fp, "rule_id": rule_id, "url": url,
+                "before": before, "after": after,
+                "risk": self._risk(rule_id), "reversible": True,
+            })
+        action_types = {e["rule_id"] for e in eligible}
+        homogeneous = len(action_types) == 1
+        return {
+            "eligible": eligible,
+            "incompatible": incompatible,
+            "missing": missing,
+            "action_type": next(iter(action_types)) if homogeneous else None,
+            "homogeneous": homogeneous,
+            "per_cycle": min(len(eligible), max_actions_per_run) if homogeneous else 0,
+            "max_actions_per_run": max_actions_per_run,
+        }
+
+    @staticmethod
+    def _risk(rule_id: str) -> str:
+        if rule_id in ("title_manual", "title_opportunity", "image_no_alt"):
+            return "low"
+        return "review_required"
+
     def list_campaigns(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         sql = "SELECT id, name, action_type, status, created_by, approved_by, execution_mode, " \
               "schedule_policy, max_actions_per_run, total_items, pending_items, executed_items, " \
