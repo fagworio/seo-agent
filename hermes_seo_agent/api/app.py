@@ -330,10 +330,17 @@ def read_routers() -> list[APIRouter]:
     def runs_create(body: RunCreateRequest, services: Services = Depends(get_services),
                     session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
         sources = _normalize_refresh_sources(body.intent, body.sources)
-        run_id = services.runs.start_run("hermes-seo-agent", trigger="manual",
-                                         intent=body.intent, mode=body.mode,
-                                         started_by=session.email, target_url=body.target_url,
-                                         sources=sources)
+        if body.intent == "refresh_data":
+            # Atualização de dados é uma solicitação ENFILEIRADA (R9-R12): o worker
+            # (refresh-data/schedule) reivindica e executa; a UI faz polling.
+            run_id = services.runs.queue_run("hermes-seo-agent", intent="refresh_data",
+                                             mode=body.mode, started_by=session.email,
+                                             sources=sources)
+        else:
+            run_id = services.runs.start_run("hermes-seo-agent", trigger="manual",
+                                             intent=body.intent, mode=body.mode,
+                                             started_by=session.email, target_url=body.target_url,
+                                             sources=sources)
         return services.runs.get_run(run_id) or {}
 
     @runs.post("/{id}/cancel", response_model=AgentRunModel, operation_id="runs_cancel")

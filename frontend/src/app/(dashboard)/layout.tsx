@@ -1,5 +1,6 @@
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DashboardNav } from "@/components/dashboard-nav";
+import { RefreshDataButton } from "@/components/refresh-data-button";
 
 const NAV = [
   { href: "/today", label: "Hoje" },
@@ -27,6 +28,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="text-sm font-medium text-[var(--muted)]">Central de operações</div>
           <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
             <span>unicorniohater.com.br</span>
+            <RefreshDataButton />
             <ThemeToggle />
           </div>
         </header>

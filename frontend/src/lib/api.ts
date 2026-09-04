@@ -221,6 +221,7 @@ export interface AgentRun {
   summary: Record<string, unknown> | null;
   error: string | null;
   target_url?: string | null;
+  sources?: string[] | null;
 }
 
 export interface IntegrationSource {
