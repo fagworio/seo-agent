@@ -218,8 +218,12 @@ def read_routers() -> list[APIRouter]:
     def pages(services: Services = Depends(get_services),
               session=Depends(authenticated("pages.read")),
               q: str = "", limit: int = Query(100, ge=1, le=500),
-              offset: int = Query(0, ge=0)) -> dict[str, Any]:
-        return {"pages": services.control.pages(query=q, limit=limit, offset=offset)}
+              offset: int = Query(0, ge=0),
+              sort: str = "captured", health: str | None = None,
+              index: str | None = None) -> dict[str, Any]:
+        res = services.control.pages(query=q, limit=limit, offset=offset,
+                                     sort=sort, health=health, index=index)
+        return {"pages": res["items"], "total": res["total"]}
     @pg.get("/{url}/history", operation_id="pages_history")
     def page_history(url: str, services: Services = Depends(get_services),
                      session=Depends(authenticated("pages.read"))) -> dict[str, Any]:
@@ -532,6 +536,21 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
         request.state.request_id = rid
         response = await call_next(request)
         response.headers["x-request-id"] = rid
+        return response
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        """Headers de segurança/observabilidade (CSP final no proxy TLS; aqui o
+        mínimo defensivo). Nada de credenciais em resposta."""
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        )
         return response
 
     for r in read_routers():

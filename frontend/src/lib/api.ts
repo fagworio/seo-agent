@@ -381,6 +381,7 @@ export interface Experiment {
   verdict: string | null;
   windows: Record<string, boolean>;
   measurement_state: string;
+  limitations?: string;
 }
 
 // Contrato OpenAPI gerado: o schema tipado oficial vem de

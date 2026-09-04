@@ -371,6 +371,48 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "captured",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "health",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Health"
+            }
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Index"
+            }
           }
         ],
         "responses": {
@@ -2629,6 +2671,11 @@
             "type": "string",
             "title": "Measurement State",
             "default": "waiting_data"
+          },
+          "limitations": {
+            "type": "string",
+            "title": "Limitations",
+            "default": ""
           }
         },
         "type": "object",
@@ -3424,6 +3471,11 @@
             },
             "type": "array",
             "title": "Pages"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
           }
         },
         "type": "object",

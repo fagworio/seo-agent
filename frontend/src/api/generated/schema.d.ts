@@ -1088,6 +1088,11 @@ export interface components {
              * @default waiting_data
              */
             measurement_state: string;
+            /**
+             * Limitations
+             * @default
+             */
+            limitations: string;
         };
         /** ExperimentsEnvelope */
         ExperimentsEnvelope: {
@@ -1577,6 +1582,11 @@ export interface components {
         PagesEnvelope: {
             /** Pages */
             pages: components["schemas"]["PageSummaryModel"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
         };
         /** PermissionModel */
         PermissionModel: {
@@ -2411,6 +2421,9 @@ export interface operations {
                 q?: string;
                 limit?: number;
                 offset?: number;
+                sort?: string;
+                health?: string | null;
+                index?: string | null;
             };
             header?: never;
             path?: never;

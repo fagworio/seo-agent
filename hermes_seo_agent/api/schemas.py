@@ -266,6 +266,7 @@ class ExperimentModel(BaseModel):
     verdict: str | None = None
     windows: dict[str, bool] = {}
     measurement_state: str = "waiting_data"
+    limitations: str = ""
 
 
 class RuleModel(BaseModel):
@@ -356,6 +357,7 @@ class WorkItemsEnvelope(BaseModel):
 
 class PagesEnvelope(BaseModel):
     pages: list[PageSummaryModel]
+    total: int = 0
 
 
 class FindingsEnvelope(BaseModel):

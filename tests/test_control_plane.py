@@ -76,8 +76,42 @@ def test_today_aggregates_attention_and_runs(tmp_path):
     # orgânico agregado da janela
     org = today["organic_summary"]
     assert org["clicks"] == 80 and org["impressions"] == 1800
+    assert today["google_data"]["data_status"] == "available"
+    assert today["google_data"]["connection_configured"] is False
+    assert today["search_trend"][0]["window_start"] == "2026-01-01"
+    assert today["top_searches"][0]["query"] == "q1"
+    assert all(item["gsc_metrics"]["has_queries"] for item in today["top_opportunities"])
     # integrações: fontes sem credencial aparecem como missing (não zero)
     src = {s["source"]: s["data_status"] for s in today["integration_warnings"]}
+    storage.close()
+
+
+def test_today_revalidation_states_require_elapsed_time_and_post_google_data(tmp_path):
+    import json as _json
+    storage, cp = _seed(tmp_path / "revalidation.db")
+    today = datetime.date.today()
+    old = (today - datetime.timedelta(days=10)).isoformat()
+    recent = (today - datetime.timedelta(days=2)).isoformat()
+    after_due = (today - datetime.timedelta(days=1)).isoformat()
+    baseline = _json.dumps({"gsc": {"clicks": 1, "impressions": 10}})
+    storage.conn.executemany(
+        "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+        "human_decision, implemented_action, url, implemented_at, baseline_json, created_at) "
+        "VALUES (?, 'title_meta', 'refresh', 'approved', 'novo título', ?, ?, ?, ?)",
+        [("ready", "https://x.com/ready/", old, baseline, old),
+         ("recent", "https://x.com/recent/", recent, baseline, recent),
+         ("no google", "https://x.com/missing/", old, baseline, old)],
+    )
+    storage.conn.execute(
+        "INSERT INTO query_pages (query, url, window_start, window_end, clicks, impressions, ctr, position) "
+        "VALUES ('query ready', 'https://x.com/ready/', ?, ?, 2, 20, .1, 4)",
+        (old, after_due),
+    )
+    storage.conn.commit()
+    states = {item["keyword"]: item["state"] for item in cp.today()["revalidations"]}
+    assert states["ready"] == "ready"
+    assert states["recent"] == "waiting_7d"
+    assert states["no google"] == "waiting_google"
     storage.close()
 
 
@@ -153,10 +187,13 @@ def test_pages_and_history(tmp_path):
         ("https://x.com/a/", "2026-01-02T00:00:00+00:00", "executor", 200, "A (novo)", "", "https://x.com/a/", 1200))
     storage.conn.commit()
 
-    pages = cp.pages()
+    pages = cp.pages()["items"]
     assert any(p["url"] == "https://x.com/a/" for p in pages)
     page = next(p for p in pages if p["url"] == "https://x.com/a/")
     assert page["title"] == "A (novo)"           # snapshot mais recente
+    # server-side: ordenação por título + filtro de saúde + total
+    assert cp.pages(sort="title")["items"][0]["url"] == "https://x.com/a/"
+    assert cp.pages(health="ok")["total"] >= 1
     hist = cp.page_history("https://x.com/a/")
     assert len(hist) == 2
     assert hist[0]["title"] == "A"
@@ -192,6 +229,8 @@ def test_experiments_measurement_state(tmp_path):
     assert by_keyword["one piece"]["measurement_state"] == "measured"
     assert by_keyword["one piece"]["verdict"] == "improved"
     assert by_keyword["gojo idade"]["baseline"]["gsc"]["position"] == 6.7
+    assert "current" in by_keyword["gojo idade"]
+    assert "delta" in by_keyword["gojo idade"]
     storage.close()
 
 
@@ -287,9 +326,18 @@ def test_technical_splits_problems_and_corrections(tmp_path):
     t = cp.technical()
     assert any(p["rule_id"] == "title" for p in t["problems"])
     corr = next(c for c in t["corrections"] if c["fingerprint"] == "fp-tech")
+    assert corr["label"] == "Correção técnica"
     assert corr["before"] == {"title": "velho"}
     assert corr["after"] == {"title": "novo"}
     preview = cp.action_preview("fp-tech")
     assert preview["rollback"]["type"] == "wp_post_meta"
     assert cp.action_preview("desconhecido") is None
     storage.close()
+
+
+def test_rule_presentation_uses_friendly_title_labels():
+    from hermes_seo_agent.services.rule_catalog import rule_presentation
+
+    assert rule_presentation("title_manual")["label"] == "Ajuste manual de título"
+    assert rule_presentation("title_opportunity")["label"] == "Oportunidade de título"
+    assert rule_presentation("image_no_alt")["label"] == "Imagem sem texto alternativo"

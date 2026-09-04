@@ -10,6 +10,7 @@ Sem escrita: apenas projeções determinísticas sobre o Storage.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from typing import Any
 
@@ -35,6 +36,8 @@ class ControlPlaneService:
         Os problemas vêm dos findings determinísticos; as correções vêm das ações
         safe_fix registradas (com before/after/rollback para preview e reversão).
         """
+        from .rule_catalog import rule_presentation
+
         problems_sql = ("SELECT rule_id, url, severity, detail_json, created_at, cycle_id "
                         "FROM findings WHERE 1=1")
         params: list[Any] = []
@@ -58,7 +61,8 @@ class ControlPlaneService:
                 "rollback_json, executed_at FROM actions WHERE level = 'safe_fix' "
                 "ORDER BY id DESC LIMIT ?", (limit,)).fetchall():
                 corrections.append({
-                    "fingerprint": r[0], "rule_id": r[1], "url": r[2], "level": r[3],
+                    "fingerprint": r[0], "rule_id": r[1],
+                    "label": rule_presentation(r[1])["label"], "url": r[2], "level": r[3],
                     "status": r[4], "before": self._json(r[5]), "after": self._json(r[6]),
                     "rollback": self._json(r[7]), "executed_at": r[8],
                 })
@@ -77,7 +81,9 @@ class ControlPlaneService:
             return None
         if not r:
             return None
-        return {"fingerprint": r[0], "rule_id": r[1], "url": r[2], "status": r[3],
+        from .rule_catalog import rule_presentation
+        return {"fingerprint": r[0], "rule_id": r[1],
+                "label": rule_presentation(r[1])["label"], "url": r[2], "status": r[3],
                 "before": self._json(r[4]), "after": self._json(r[5]),
                 "rollback": self._json(r[6]), "executed_at": r[7]}
 
@@ -231,8 +237,15 @@ class ControlPlaneService:
         }
 
     # -- Páginas (F8) --------------------------------------------------------
-    def pages(self, *, query: str = "", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        """Explorer de páginas: snapshot mais recente por URL + métricas."""
+    def pages(self, *, query: str = "", limit: int = 100, offset: int = 0,
+              sort: str = "captured", health: str | None = None,
+              index: str | None = None) -> dict[str, Any]:
+        """Explorer de páginas: snapshot mais recente por URL + métricas.
+
+        Paginação/filtro/ordenação no SERVIDOR. Ordenação por métricas
+        (clicks/posição/título) é feita sobre a lista enriquecida; 'captured'
+        usa a ordenação natural do snapshot.
+        """
         sql = ("SELECT id, url, title, status_code, captured_at, meta_robots, CANONICAL, "
                "word_count FROM page_snapshots WHERE id IN "
                "(SELECT MAX(id) FROM page_snapshots GROUP BY url)")
@@ -240,12 +253,11 @@ class ControlPlaneService:
         if query:
             sql += " AND url LIKE ?"
             params.append(f"%{query}%")
-        sql += " ORDER BY captured_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
+        sql += " ORDER BY captured_at DESC"
         try:
             rows = self.storage.conn.execute(sql, params).fetchall()
         except Exception:
-            return []
+            return {"items": [], "total": 0}
         out = []
         for r in rows:
             url = r[1]
@@ -259,7 +271,18 @@ class ControlPlaneService:
                 "captured_at": r[4],
                 "word_count": r[7] or 0,
             })
-        return out
+        if health:
+            out = [p for p in out if p["health"] == health]
+        if index:
+            out = [p for p in out if p["index_state"] == index]
+        if sort == "title":
+            out.sort(key=lambda p: p["title"].lower())
+        elif sort == "clicks":
+            out.sort(key=lambda p: (p["metrics"]["clicks"] or 0), reverse=True)
+        elif sort == "position":
+            out.sort(key=lambda p: p["metrics"]["position"] if p["metrics"]["position"] is not None else 9999)
+        total = len(out)
+        return {"items": out[offset:offset + limit], "total": total}
 
     def page_history(self, url: str) -> list[dict[str, Any]]:
         """Timeline narrativa por URL: detecção -> aprovação -> implementação ->
@@ -375,28 +398,57 @@ class ControlPlaneService:
         sobrestima causalidade sem evidência.
         """
         try:
-            rows = self.storage.conn.execute(
-                "SELECT keyword, opportunity_type, url, implemented_action, "
-                "implemented_at, baseline_json, verdict, measured_28d, measured_56d, "
-                "measured_90d FROM opportunity_outcomes "
-                "WHERE human_decision = 'approved' ORDER BY implemented_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            outcomes = [item for item in self.storage.list_opportunity_outcomes(limit=limit)
+                        if item.get("human_decision") == "approved"]
         except Exception:
             return []
+        revalidations = {item["id"]: item for item in self._revalidations(limit=limit)}
         out = []
-        for r in rows:
-            baseline = self._json(r[5]) or {}
-            recorded = bool(r[7] or r[8] or r[9])
+        for outcome in outcomes:
+            baseline = outcome.get("baseline") or {}
+            windows = outcome.get("measured") or {}
+            recorded = any(windows.values())
+            latest_window = next((window for window in ("90d", "56d", "28d", "7d")
+                                  if (outcome.get("results") or {}).get(window)), "")
+            result = (outcome.get("results") or {}).get(latest_window) or {}
+            current = {}
+            if result.get("now_gsc"):
+                current["gsc"] = result["now_gsc"]
+            if result.get("now_ga4"):
+                current["ga4"] = result["now_ga4"]
+            delta = {}
+            if result.get("gsc_deltas"):
+                delta["gsc"] = result["gsc_deltas"]
+            if result.get("ga4_deltas"):
+                delta["ga4"] = result["ga4_deltas"]
+            projections = self.storage.expectations_for(outcome.get("url", ""), limit=1) \
+                if outcome.get("url") else []
             out.append({
-                "keyword": r[0], "opportunity_type": r[1], "url": r[2],
-                "implemented_action": r[3] or "", "implemented_at": r[4],
+                "id": outcome["id"], "keyword": outcome.get("keyword", ""),
+                "opportunity_type": outcome.get("opportunity_type", ""),
+                "url": outcome.get("url", ""),
+                "implemented_action": outcome.get("implemented_action", ""),
+                "implemented_at": outcome.get("implemented_at", ""),
                 "baseline": baseline,
-                "verdict": r[6],
-                "windows": {"28d": bool(r[7]), "56d": bool(r[8]), "90d": bool(r[9])},
-                "measurement_state": self._measurement_state(r[6], recorded),
+                "current": current,
+                "delta": delta,
+                "forecast": projections[0] if projections else {},
+                "latest_result_window": latest_window,
+                "revalidation": revalidations.get(outcome["id"], {}),
+                "verdict": outcome.get("verdict") or None,
+                "windows": windows,
+                "measurement_state": self._measurement_state(outcome.get("verdict"), recorded),
+                "limitations": self._measurement_limitations(outcome.get("verdict"), recorded),
             })
         return out
+
+    @staticmethod
+    def _measurement_limitations(verdict: str | None, recorded: bool) -> str:
+        if verdict:
+            return "Movimento observado; não representa certeza causal (sem grupo de controle)."
+        if recorded:
+            return "Aguardando coleta na janela de medição; delta parcial, não conclusivo."
+        return "Implementada; janela de medição ainda não atingida."
 
     @staticmethod
     def _measurement_state(verdict: str | None, recorded: bool) -> str:
@@ -460,10 +512,8 @@ class ControlPlaneService:
     def today(self, *, limit: int = 10) -> dict[str, Any]:
         items = self.opportunities.feed(limit=200)
         needs_attention = [i for i in items if i["status"] in _REVIEW_STATUS]
-        top = sorted([i for i in items if i["score"] is not None],
-                     key=lambda o: -o["score"])[:limit]
-        if not top:
-            top = items[:limit]
+        google_backed = [i for i in items if (i.get("gsc_metrics") or {}).get("has_queries")]
+        top = sorted(google_backed, key=lambda o: (o["score"] is None, -(o["score"] or 0)))[:limit]
 
         try:
             integrations = [s.to_dict() for s in
@@ -472,6 +522,7 @@ class ControlPlaneService:
             integrations = []
         warnings = [s for s in integrations if s["data_status"] != "available"]
 
+        revalidations = self._revalidations(limit=max(limit, 8), minimum_days=7)
         return {
             "needs_attention": len(needs_attention),
             "critical_findings": self._count_findings(),
@@ -480,6 +531,11 @@ class ControlPlaneService:
             "recent_runs": self.runs.list_runs(limit=5),
             "top_opportunities": top,
             "integration_warnings": warnings,
+            "google_data": self._google_data_summary(items),
+            "search_trend": self._search_trend(),
+            "top_searches": self._top_searches(limit=max(limit, 8)),
+            "revalidations": revalidations,
+            "improvement_summary": self._improvement_summary(revalidations),
         }
 
     # -- Fontes de dados ------------------------------------------------------
@@ -546,7 +602,9 @@ class ControlPlaneService:
     def _organic_summary(self) -> dict[str, Any] | None:
         try:
             row = self.storage.conn.execute(
-                "SELECT SUM(clicks), SUM(impressions), AVG(position), COUNT(*) "
+                "SELECT SUM(clicks), SUM(impressions), "
+                "SUM(position * impressions) / NULLIF(SUM(impressions), 0), "
+                "COUNT(DISTINCT url) "
                 "FROM query_pages WHERE window_start = "
                 "(SELECT MAX(window_start) FROM query_pages)"
             ).fetchone()
@@ -564,3 +622,122 @@ class ControlPlaneService:
             }
         except Exception:
             return None
+
+    def _search_trend(self, *, limit: int = 8) -> list[dict[str, Any]]:
+        """Stored GSC windows only; never manufactures missing intermediate points."""
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT window_start, MAX(window_end), SUM(clicks), SUM(impressions), "
+                "SUM(position * impressions) / NULLIF(SUM(impressions), 0), "
+                "COUNT(DISTINCT url), COUNT(DISTINCT query) FROM query_pages "
+                "GROUP BY window_start ORDER BY window_start DESC LIMIT ?", (limit,),
+            ).fetchall()
+        except Exception:
+            return []
+        return [{"window_start": r[0], "window_end": r[1], "clicks": r[2] or 0,
+                 "impressions": r[3] or 0,
+                 "ctr": ((r[2] or 0) / r[3]) if r[3] else None,
+                 "position": round(r[4], 1) if r[4] is not None else None,
+                 "pages": r[5] or 0, "queries": r[6] or 0} for r in reversed(rows)]
+
+    def _top_searches(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        window = self._latest_gsc_window()
+        if not window[0]:
+            return []
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT query, MAX(intent), SUM(clicks), SUM(impressions), "
+                "SUM(position * impressions) / NULLIF(SUM(impressions), 0), "
+                "COUNT(DISTINCT url) FROM query_pages WHERE window_start = ? "
+                "GROUP BY query ORDER BY SUM(impressions) DESC LIMIT ?",
+                (window[0], limit),
+            ).fetchall()
+        except Exception:
+            return []
+        return [{"query": r[0], "intent": r[1] or "", "clicks": r[2] or 0,
+                 "impressions": r[3] or 0,
+                 "ctr": ((r[2] or 0) / r[3]) if r[3] else None,
+                 "position": round(r[4], 1) if r[4] is not None else None,
+                 "pages": r[5] or 0, "window_start": window[0],
+                 "window_end": window[1]} for r in rows]
+
+    def _google_data_summary(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        window = self._latest_gsc_window()
+        backed = sum(bool((item.get("gsc_metrics") or {}).get("has_queries")) for item in items)
+        try:
+            gsc_rows = self.storage.conn.execute("SELECT COUNT(*) FROM query_pages").fetchone()[0]
+            ga4_row = self.storage.conn.execute(
+                "SELECT COUNT(*), MAX(window_end), MAX(collected_at) FROM ga4_page_metrics"
+            ).fetchone()
+        except Exception:
+            gsc_rows, ga4_row = 0, (0, "", "")
+        return {
+            "data_status": "available" if gsc_rows and window[0] else "missing",
+            "connection_configured": bool(getattr(self.config, "google_credentials", "")),
+            "gsc_window_start": window[0], "gsc_window_end": window[1],
+            "gsc_rows": gsc_rows, "ga4_rows": ga4_row[0] or 0,
+            "ga4_window_end": ga4_row[1] or "", "ga4_collected_at": ga4_row[2] or "",
+            "opportunities_total": len(items), "opportunities_with_google": backed,
+            "opportunities_without_google": len(items) - backed,
+        }
+
+    def _revalidations(self, *, limit: int = 10, minimum_days: int = 7) -> list[dict[str, Any]]:
+        today = dt.date.today()
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT id, keyword, opportunity_type, url, implemented_action, implemented_at, "
+                "baseline_json, verdict, measured_7d, measured_28d, measured_56d, measured_90d "
+                "FROM opportunity_outcomes WHERE human_decision = 'approved' "
+                "AND implemented_at IS NOT NULL AND implemented_at <> '' "
+                "ORDER BY implemented_at DESC LIMIT ?", (limit,),
+            ).fetchall()
+        except Exception:
+            return []
+        output = []
+        for row in rows:
+            try:
+                implemented = dt.datetime.fromisoformat(row[5].replace("Z", "+00:00")).date()
+            except (TypeError, ValueError):
+                continue
+            due = implemented + dt.timedelta(days=minimum_days)
+            latest = self.storage.conn.execute(
+                "SELECT MAX(window_end) FROM query_pages WHERE url = ?", (row[3],)
+            ).fetchone()[0]
+            measured = bool(row[7] or row[8] or row[9] or row[10] or row[11])
+            if measured:
+                state = "measured"
+            elif today < due:
+                state = "waiting_7d"
+            elif not latest or latest < due.isoformat():
+                state = "waiting_google"
+            else:
+                state = "ready"
+            baseline = self._json(row[6]) or {}
+            output.append({
+                "id": row[0], "keyword": row[1] or "", "opportunity_type": row[2] or "",
+                "url": row[3] or "", "implemented_action": row[4] or "",
+                "implemented_at": row[5], "due_at": due.isoformat(),
+                "elapsed_days": max(0, (today - implemented).days), "state": state,
+                "baseline_status": "available" if baseline.get("gsc") else "missing",
+                "latest_google_window_end": latest or "", "verdict": row[7] or "",
+            })
+        return output
+
+    def _improvement_summary(self, revalidations: list[dict[str, Any]]) -> dict[str, Any]:
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT COALESCE(verdict, ''), COUNT(*) FROM opportunity_outcomes "
+                "WHERE human_decision = 'approved' GROUP BY COALESCE(verdict, '')"
+            ).fetchall()
+        except Exception:
+            rows = []
+        counts = {row[0]: row[1] for row in rows}
+        return {
+            "implemented": sum(counts.values()), "measured": sum(v for k, v in counts.items() if k),
+            "improved": counts.get("improved", 0), "neutral": counts.get("neutral", 0),
+            "worsened": counts.get("worsened", 0),
+            "insufficient_data": counts.get("insufficient_data", 0),
+            "waiting_7d": sum(r["state"] == "waiting_7d" for r in revalidations),
+            "waiting_google": sum(r["state"] == "waiting_google" for r in revalidations),
+            "ready": sum(r["state"] == "ready" for r in revalidations),
+        }
