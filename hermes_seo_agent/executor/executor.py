@@ -19,7 +19,7 @@ from ..config import Config
 from ..connectors.wordpress import WordPressClient
 from ..storage.db import Storage
 
-SUPPORTED_FIX_TYPES = ("wp_media_alt", "wp_post_meta")
+SUPPORTED_FIX_TYPES = ("wp_media_alt", "wp_post_meta", "wp_post_content_patch")
 
 
 class Executor:
@@ -144,6 +144,8 @@ class Executor:
             return self._fix_media_alt(int(fix["media_id"]), str(fix["alt_text"]))
         if fix_type == "wp_post_meta":
             return self._fix_post_meta(int(fix["post_id"]), dict(fix["meta"]))
+        if fix_type == "wp_post_content_patch":
+            return self._fix_post_content_patch(fix)
         raise ValueError(f"unsupported fix type: {fix_type}")
 
     def _fix_media_alt(self, media_id: int, alt_text: str) -> tuple[Any, Any, Any]:
@@ -162,6 +164,48 @@ class Executor:
         rollback = {"type": "wp_post_meta", "post_id": post_id,
                     "meta": {k: existing_meta.get(k) for k in meta}}
         self.wp.update_post_meta(post_id, meta)
+        return before, after, rollback
+
+    def _fix_post_content_patch(self, fix: dict[str, Any]) -> tuple[Any, Any, Any]:
+        """B9 — insere um link interno no conteúdo com precondições de segurança.
+
+        - hash do conteúdo deve bater com `expected_content_hash` (senão STALE);
+        - se o link de destino já existe, é no-op (não duplica);
+        - se o trecho de contexto sumiu, STALE;
+        - rollback = conteúdo original (restauração total).
+        """
+        post_id = int(fix["post_id"])
+        expected_hash = fix.get("expected_content_hash", "")
+        target_url = fix.get("target_url", "")
+        context_before = fix.get("context_before", "")
+        insertion = fix.get("insertion", "")
+
+        post = self.wp.get_post(post_id)
+        content_obj = post.get("content") or {}
+        content = content_obj.get("raw", "") or content_obj.get("rendered", "")
+        before = {"content": content}
+
+        if expected_hash:
+            current_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if current_hash != expected_hash:
+                raise ValueError("STALE: conteúdo alterado desde a aprovação")
+
+        if target_url and target_url in content:
+            return before, {"content": content}, {
+                "type": "wp_post_content_patch", "post_id": post_id, "content": content}
+
+        if context_before and context_before not in content:
+            raise ValueError("STALE: trecho de contexto não encontrado")
+
+        if context_before:
+            idx = content.index(context_before) + len(context_before)
+            new_content = content[:idx] + insertion + content[idx:]
+        else:
+            new_content = insertion + content
+
+        self.wp.update_post_content(post_id, new_content)
+        after = {"content": new_content}
+        rollback = {"type": "wp_post_content_patch", "post_id": post_id, "content": content}
         return before, after, rollback
 
 

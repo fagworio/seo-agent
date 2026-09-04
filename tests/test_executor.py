@@ -226,3 +226,65 @@ def test_verify_failure_is_unverified_and_retry_allowed(tmp_path):
         ).fetchone()
         assert status[0] == "unverified"
         assert storage.action_executed(first["unverified"][0]["fingerprint"]) is False
+
+
+def _hash(content: str) -> str:
+    import hashlib
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+class _FakeWPContent:
+    def __init__(self, content: str):
+        self.content = content
+        self.writes = []
+
+    def get_post(self, post_id):
+        return {"id": post_id, "content": {"raw": self.content}}
+
+    def update_post_content(self, post_id, content):
+        self.writes.append(content)
+        self.content = content
+        return {"id": post_id, "content": {"raw": content}}
+
+
+def test_post_content_patch_inserts_link(tmp_path):
+    body = "<p>O jogo é ótimo. Vale a pena.</p>"
+    wp = _FakeWPContent(body)
+    with Storage(str(tmp_path / "p.db")) as storage:
+        ex = Executor(_config(dry_run=False), wp, storage)
+        fix = {"type": "wp_post_content_patch", "post_id": 1,
+               "expected_content_hash": _hash(body),
+               "target_url": "https://x.com/destino/", "anchor": "veja aqui",
+               "context_before": "Vale a pena.",
+               "insertion": " <a href=\"https://x.com/destino/\">veja aqui</a>"}
+        before, after, rollback = ex._fix_post_content_patch(fix)
+    assert "https://x.com/destino/" in after["content"]
+    assert rollback["content"] == body
+    assert len(wp.writes) == 1
+
+
+def test_post_content_patch_stale_on_hash_mismatch(tmp_path):
+    body = "<p>conteúdo atual</p>"
+    wp = _FakeWPContent(body)
+    with Storage(str(tmp_path / "p2.db")) as storage:
+        ex = Executor(_config(dry_run=False), wp, storage)
+        fix = {"type": "wp_post_content_patch", "post_id": 1,
+               "expected_content_hash": "diferente", "context_before": "x",
+               "insertion": "<a>y</a>"}
+        with pytest.raises(ValueError, match="STALE"):
+            ex._fix_post_content_patch(fix)
+    assert wp.writes == []
+
+
+def test_post_content_patch_noop_when_link_exists(tmp_path):
+    body = "<p>link para https://x.com/destino/ já existe</p>"
+    wp = _FakeWPContent(body)
+    with Storage(str(tmp_path / "p3.db")) as storage:
+        ex = Executor(_config(dry_run=False), wp, storage)
+        fix = {"type": "wp_post_content_patch", "post_id": 1,
+               "expected_content_hash": _hash(body),
+               "target_url": "https://x.com/destino/", "context_before": "x",
+               "insertion": "<a>y</a>"}
+        before, after, rollback = ex._fix_post_content_patch(fix)
+    assert after["content"] == body
+    assert wp.writes == []  # no-op, sem escrita

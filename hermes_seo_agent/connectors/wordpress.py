@@ -155,6 +155,26 @@ class WordPressClient:
             raise ConnectorError("WordPress returned an invalid post object")
         return value
 
+    def update_post_content(self, post_id: int, content: str) -> dict[str, Any]:
+        """Substitui o conteúdo do post (B9 — wp_post_content_patch).
+
+        Usado pelo executor para inserir link interno com precondição de hash.
+        Reversível: o executor guarda o conteúdo anterior no rollback.
+        """
+        if self.config.dry_run:
+            raise SafetyError("dry-run blocks WordPress post writes")
+        if not isinstance(content, str) or not content:
+            raise ValueError("content must be a non-empty string")
+        response = self.http.post(
+            f"{self.base_url}/posts/{self._id(post_id)}",
+            json_body={"content": content},
+        )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ConnectorError("WordPress returned an invalid post object")
+        return value
+
     def close(self) -> None:
         self.http.close()
 
