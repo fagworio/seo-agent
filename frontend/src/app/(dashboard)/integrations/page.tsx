@@ -77,11 +77,17 @@ export default function IntegrationsPage() {
               <dl className="space-y-1 text-sm">
                 <Row k="Detalhe" v={s.detail} />
                 <Row k="Última janela" v={s.last_window || "—"} />
+                {s.last_collected_at && (
+                  <Row k="Atualizado" v={relativeLabel(s.last_collected_at)} />
+                )}
                 <Row k="Registros" v={String(s.rows)} />
                 {typeof s.documents === "number" && <Row k="Documentos" v={String(s.documents)} />}
                 {typeof s.global_coverage_pct === "number" && <Row k="Cobertura" v={`${s.global_coverage_pct}%`} />}
                 {typeof s.provider === "string" && <Row k="Provedor" v={s.provider} />}
               </dl>
+              {isStale(s) && (
+                <p className="mt-2 text-xs text-[var(--warning)]">⚠ Dados desatualizados</p>
+              )}
               {s.recovery && (
                 <div className="mt-3 rounded-[7px] border border-[var(--warning)] bg-[var(--surface-raised)] p-3 text-xs text-[var(--foreground)]">
                   <div className="mb-1 font-medium text-[var(--warning)]">Como recuperar</div>
@@ -131,4 +137,26 @@ function statusTone(s: IntegrationSource): "success" | "warning" | "danger" | "i
   if (s.data_status === "invalid") return "danger";
   if (s.data_status === "missing") return "warning";
   return "neutral";
+}
+
+function relativeLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.valueOf())) return iso;
+  const diffMs = Date.now() - d.getTime();
+  const minutes = Math.max(0, Math.round(diffMs / 60000));
+  if (minutes < 60) return `há ${minutes}min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `há ${hours}h`;
+  return `há ${Math.round(hours / 24)} dia(s)`;
+}
+
+function isStale(s: IntegrationSource): boolean {
+  if (!s.last_collected_at) return false;
+  const d = new Date(s.last_collected_at);
+  if (Number.isNaN(d.valueOf())) return false;
+  const hours = (Date.now() - d.getTime()) / 3600000;
+  // WP/Sitemap envelhecem rápido; GSC/GA4 têm janela semanal/diária.
+  if (s.source === "wordpress" || s.source === "sitemap") return hours > 24;
+  if (s.source === "gsc" || s.source === "ga4") return hours > 24 * 7;
+  return hours > 24 * 7;
 }

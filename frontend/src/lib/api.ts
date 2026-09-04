@@ -230,6 +230,7 @@ export interface IntegrationSource {
   configured: boolean;
   detail: string;
   last_window: string;
+  last_collected_at: string;
   rows: number;
   limitations: string;
   // ação de recuperação sugerida (determinística); vazia quando available

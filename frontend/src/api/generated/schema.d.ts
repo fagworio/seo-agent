@@ -1402,6 +1402,11 @@ export interface components {
              */
             last_window: string;
             /**
+             * Last Collected At
+             * @default
+             */
+            last_collected_at: string;
+            /**
              * Rows
              * @default 0
              */

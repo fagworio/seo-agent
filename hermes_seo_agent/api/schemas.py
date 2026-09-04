@@ -226,6 +226,7 @@ class IntegrationSourceModel(BaseModel):
     configured: bool = False
     detail: str = ""
     last_window: str = ""
+    last_collected_at: str = ""
     rows: int = 0
     limitations: str = ""
     recovery: str = ""

@@ -35,6 +35,7 @@ class SourceStatus:
     data_status: str
     detail: str = ""
     last_window: str = ""
+    last_collected_at: str = ""
     rows: int = 0
     limitations: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
@@ -46,6 +47,7 @@ class SourceStatus:
             "data_status": self.data_status,
             "detail": self.detail,
             "last_window": self.last_window,
+            "last_collected_at": self.last_collected_at,
             "rows": self.rows,
             "limitations": self.limitations,
             "recovery": self.recovery(),
@@ -88,9 +90,30 @@ class IntegrationStatusService:
         ]
         if source:
             out = [s for s in out if s.source == source]
+        collected = self._last_collected_map()
+        for s in out:
+            s.last_collected_at = collected.get(s.source, "")
         if live:
             self._live(out)
         return out
+
+    def _last_collected_map(self) -> dict[str, str]:
+        """R13: freshness — timestamp da última coleta persistida por fonte."""
+        def q(sql: str) -> str:
+            try:
+                r = self.storage.conn.execute(sql).fetchone()
+                return (r[0] if r and r[0] else "")
+            except Exception:
+                return ""
+        return {
+            "wordpress": q("SELECT MAX(last_collected_at) FROM wp_post_state"),
+            "sitemap": q("SELECT MAX(crawled_at) FROM editorial_inventory"),
+            "gsc": q("SELECT MAX(window_end) FROM query_pages"),
+            "ga4": q("SELECT MAX(collected_at) FROM ga4_collection_runs"),
+            "corpus": q("SELECT MAX(started_at) FROM corpus_runs"),
+            "crux": "",  # CrUX é consultado ao vivo; sem coleta persistida
+            "external": "",
+        }
 
     # -- corpus (M2: memória editorial — "não encontrei conteúdo" confiável?) --
 

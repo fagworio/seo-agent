@@ -3328,6 +3328,11 @@
             "title": "Last Window",
             "default": ""
           },
+          "last_collected_at": {
+            "type": "string",
+            "title": "Last Collected At",
+            "default": ""
+          },
           "rows": {
             "type": "integer",
             "title": "Rows",

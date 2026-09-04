@@ -1082,6 +1082,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                                       markdown=False, command="report"), config=config)
     steps.append("audit")
 
+    # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
+    #     refresh_data). Não há um segundo motor de coleta.
+    run_silently(_cmd_refresh_data, args=_ns(sources="wordpress,sitemap", json=True),
+                 config=config)
+    steps.append("refresh-wp-sitemap")
+
     # 2) Daily GSC inspect window.
     inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
     if now.hour in inspect_hours:
@@ -4003,7 +4009,7 @@ def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
                                    sources=sources)
         run = run_refresh(storage, run_id, sources=sources,
                           collectors=build_refresh_collectors(config, storage),
-                          reconcile=collect_reconcile(config))
+                          reconcile=lambda: collect_reconcile(config))
         summary = run.get("summary") or {}
         _emit({"status": "ok",
                "summary": {"command": "refresh-data", "run_id": run_id,

@@ -56,6 +56,8 @@ def test_schedule_includes_ga4_and_corpus_on_deep_weekday(
                         lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit",
                         lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data",
+                        lambda *a, **k: None)
 
     rc = _cmd_schedule(
         argparse.Namespace(inspect_hours="6", deep_weekday=1), _config(db))
@@ -94,6 +96,8 @@ def test_schedule_skips_corpus_when_run_active(monkeypatch, capsys, tmp_path):
                         lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit",
                         lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data",
+                        lambda *a, **k: None)
 
     rc = _cmd_schedule(
         argparse.Namespace(inspect_hours="6", deep_weekday=1), _config(db))
@@ -111,6 +115,7 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit", lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_inspect", lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data", lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_demand",
                         lambda args, config: calls.append(("demand", args.store, args.min_impressions)))
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_outcomes",
