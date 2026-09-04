@@ -57,6 +57,17 @@ function Workbox() {
   const canReview = me.data?.user.permissions.includes("opportunity.review") ?? false;
   const selectedUrls = items.filter((i) => bulk.has(i.id) && i.url).map((i) => i.url);
   const toggleBulk = (id: string) => setBulk((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectable = items.filter((i) => !!i.url);
+  const allSelected = canReview && selectable.length > 0 && selectable.every((i) => bulk.has(i.id));
+  const toggleAll = () => {
+    if (!canReview || selectable.length === 0) return;
+    setBulk((prev) => {
+      const n = new Set(prev);
+      if (allSelected) { for (const i of selectable) n.delete(i.id); }
+      else { for (const i of selectable) n.add(i.id); }
+      return n;
+    });
+  };
 
   return <div className="space-y-4">
     <header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-xl font-semibold">Caixa de trabalho</h1><p className="mt-1 text-sm text-[var(--muted)]">Compare evidência, potencial, risco e medição antes de decidir.</p></div><nav aria-label="Filtrar decisões" className="flex flex-wrap gap-2">{filters.map(([key, label]) => <Button key={key} size="sm" variant={source === key ? "primary" : "ghost"} onClick={() => setParam("source", key)}>{label}</Button>)}</nav></header>
@@ -74,7 +85,7 @@ function Workbox() {
     <div className="hidden md:block overflow-x-auto rounded-[9px] border border-[var(--border)]">
       <table className="w-full text-sm">
         <thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]">
-          <tr><th className="w-8 px-3 py-2"><span className="sr-only">Selecionar</span></th><th className="px-3 py-2">Decisão</th><th className="px-3 py-2">Evidência principal</th><th className="px-3 py-2">Classe</th><th className="px-3 py-2">Prioridade</th></tr>
+          <tr><th className="w-8 px-3 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!canReview || selectable.length === 0} aria-label="Selecionar todas" /></th><th className="px-3 py-2">Decisão</th><th className="px-3 py-2">Evidência principal</th><th className="px-3 py-2">Classe</th><th className="px-3 py-2">Prioridade</th></tr>
         </thead>
         <tbody>
           {visible.map((item) => {
@@ -93,6 +104,10 @@ function Workbox() {
       <Pagination page={page} pageSize={pageSize} total={items.length} onPageChange={(next) => { setPage(next); setParam("page", String(next)); }} label="decisões" />
     </div>
 
+    <label className="flex items-center gap-2 text-sm md:hidden">
+      <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!canReview || selectable.length === 0} />
+      <span className="text-xs text-[var(--muted)]">Selecionar todas ({selectable.length} delegáveis)</span>
+    </label>
     <div className="space-y-3 md:hidden">
       {visible.map((item) => {
         const view = presentOpportunity(item);
