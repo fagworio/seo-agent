@@ -407,6 +407,108 @@ class AuthService:
         self.store.revoke_user_sessions(user_id, now=now)
         self._audit(now=now, user_id=user_id, event="PASSWORD_CHANGED")
 
+    # -- U1: Minha conta (self-service) --------------------------------------
+    def get_account(self, user_id: int) -> dict[str, Any] | None:
+        user = self.store.get_user(user_id)
+        if not user:
+            return None
+        return {
+            "id": user["id"], "name": user["name"], "email": user["email"],
+            "is_mfa_enabled": user["is_mfa_enabled"],
+            "must_change_password": user["must_change_password"],
+            "roles": self.store.get_user_roles(user_id),
+            "permissions": sorted(self.permissions_for(user_id)),
+            "created_at": user["created_at"], "last_login_at": user["last_login_at"],
+        }
+
+    def update_profile(self, user_id: int, name: str, *, now: str | None = None) -> None:
+        name = (name or "").strip()
+        if not name:
+            raise AuthError("nome não pode ser vazio")
+        self.store.conn.execute(
+            "UPDATE users SET name = ?, updated_at = ? WHERE id = ?", (name, now or self._now(), user_id))
+        self.store.conn.commit()
+        self._audit(now=now or self._now(), user_id=user_id, event="PROFILE_UPDATED")
+
+    def change_email(self, user_id: int, new_email: str, password: str, *, now: str | None = None) -> None:
+        """Troca de email é operação SENSÍVEL: exige a senha atual (reauth)."""
+        now = now or self._now()
+        user = self.store.get_user(user_id)
+        if user is None:
+            raise AuthError("usuário não encontrado")
+        if not self.hasher.verify(password or "", user["password_hash"]):
+            raise AuthError("senha atual incorreta")
+        new_email = (new_email or "").lower().strip()
+        existing = self.store.get_user_by_email(new_email)
+        if existing and existing["id"] != user_id:
+            raise AuthError("email já em uso por outra conta")
+        self.store.conn.execute(
+            "UPDATE users SET email = ?, updated_at = ? WHERE id = ?", (new_email, now, user_id))
+        self.store.conn.commit()
+        self._audit(now=now, user_id=user_id, event="PROFILE_EMAIL_CHANGED")
+
+    def change_password_auth(self, user_id: int, current: str, new_password: str,
+                             *, mfa_enabled: bool = False, now: str | None = None) -> bool:
+        """Troca de senha autenticada pela própria conta: valida a atual primeiro."""
+        now = now or self._now()
+        user = self.store.get_user(user_id)
+        if user is None or not self.hasher.verify(current or "", user["password_hash"]):
+            return False
+        self.hasher.validate(new_password, mfa_enabled=mfa_enabled)
+        self.store.set_password_hash(user_id, self.hasher.hash(new_password), now)
+        # revoga TODAS as outras sessões; mantém a atual (o cookie continua, mas
+        # a reautenticação é recomendada) — política: revogar as demais.
+        self.store.revoke_user_sessions(user_id, now=now)
+        self._audit(now=now, actor=user["email"], user_id=user_id, event="PASSWORD_CHANGED")
+        return True
+
+    def mfa_setup(self, user_id: int, *, now: str | None = None) -> str:
+        now = now or self._now()
+        factor = self.store.get_mfa_factor(user_id)
+        if factor and factor["enabled"]:
+            raise AuthError("autenticação em duas etapas já está ativada")
+        secret = generate_secret()
+        self.store.save_mfa_factor(user_id, secret, now=now)
+        return secret
+
+    def mfa_confirm(self, user_id: int, code: str, *, now: str | None = None) -> bool:
+        now = now or self._now()
+        factor = self.store.get_mfa_factor(user_id)
+        if factor is None:
+            raise AuthError("setup de MFA não iniciado")
+        if not TOTP(factor["secret"]).verify(code):
+            return False
+        self.store.set_mfa_enabled(user_id, 1)
+        self.store.mark_mfa_used(user_id, now)
+        self._audit(now=now, user_id=user_id, event="MFA_ENABLED")
+        return True
+
+    def mfa_disable(self, user_id: int, *, now: str | None = None) -> None:
+        now = now or self._now()
+        self.store.set_mfa_enabled(user_id, 0)
+        self.store.conn.execute(
+            "UPDATE mfa_factors SET enabled = 0 WHERE user_id = ?", (user_id,))
+        self.store.conn.commit()
+        self._audit(now=now, user_id=user_id, event="MFA_DISABLED")
+
+    def force_password_reset(self, user_id: int, *, now: str | None = None) -> str:
+        """Reset administrativo: token único, must_change_password e revoga sessões."""
+        now = now or self._now()
+        token = generate_session_token()
+        self.store.create_reset_token(user_id, hash_token(token), now, self._after(self._reset_window))
+        self.store.set_password_must_change(user_id, 1)
+        self.store.revoke_user_sessions(user_id, now=now)
+        self._audit(now=now, user_id=user_id, event="PASSWORD_RESET_FORCED")
+        return token
+
+    def is_last_admin(self, user_id: int) -> bool:
+        row = self.store.conn.execute(
+            "SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+            "JOIN users u ON u.id = ur.user_id WHERE r.name = 'admin' AND u.is_active = 1"
+        ).fetchone()
+        admins = row[0] if row else 0
+        return admins <= 1
+
     # -- RBAC ----------------------------------------------------------------
     def _permissions_for_roles(self, roles: list[str]) -> set[str]:
         perms: set[str] = set()

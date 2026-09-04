@@ -77,6 +77,19 @@ class OpportunityModel(BaseModel):
     score: float | None = None
     evidence: str = ""
     recommendation: str = ""
+    action_class: str = "approval_required"
+    risk: str = "review_required"
+    rollback_available: bool = False
+    decision_type: str = "review"
+    related_recommendations: list[str] = []
+    score_breakdown: dict[str, Any] = {}
+    gsc_metrics: dict[str, Any] = {}
+    ga4_metrics: dict[str, Any] = {}
+    measurement_state: str = "not_measurable"
+    projection: dict[str, Any] = {}
+    top_queries: list[dict[str, Any]] = []
+    link_context: dict[str, Any] = {}
+    data_freshness: dict[str, str] = {}
 
 
 class OrganicSummaryModel(BaseModel):
@@ -85,6 +98,70 @@ class OrganicSummaryModel(BaseModel):
     impressions: int = 0
     avg_position: float | None = None
     pages: int = 0
+
+
+class SearchTrendPointModel(BaseModel):
+    window_start: str = ""
+    window_end: str = ""
+    clicks: float = 0
+    impressions: float = 0
+    ctr: float | None = None
+    position: float | None = None
+    pages: int = 0
+    queries: int = 0
+
+
+class SearchQueryModel(BaseModel):
+    query: str
+    intent: str = ""
+    clicks: float = 0
+    impressions: float = 0
+    ctr: float | None = None
+    position: float | None = None
+    pages: int = 0
+    window_start: str = ""
+    window_end: str = ""
+
+
+class GoogleDataSummaryModel(BaseModel):
+    data_status: str = "missing"
+    connection_configured: bool = False
+    gsc_window_start: str = ""
+    gsc_window_end: str = ""
+    gsc_rows: int = 0
+    ga4_rows: int = 0
+    ga4_window_end: str = ""
+    ga4_collected_at: str = ""
+    opportunities_total: int = 0
+    opportunities_with_google: int = 0
+    opportunities_without_google: int = 0
+
+
+class RevalidationModel(BaseModel):
+    id: int
+    keyword: str = ""
+    opportunity_type: str = ""
+    url: str = ""
+    implemented_action: str = ""
+    implemented_at: str = ""
+    due_at: str = ""
+    elapsed_days: int = 0
+    state: str = "waiting_7d"
+    baseline_status: str = "missing"
+    latest_google_window_end: str = ""
+    verdict: str = ""
+
+
+class ImprovementSummaryModel(BaseModel):
+    implemented: int = 0
+    measured: int = 0
+    improved: int = 0
+    neutral: int = 0
+    worsened: int = 0
+    insufficient_data: int = 0
+    waiting_7d: int = 0
+    waiting_google: int = 0
+    ready: int = 0
 
 
 class AgentRunModel(BaseModel):
@@ -146,6 +223,11 @@ class TodayModel(BaseModel):
     recent_runs: list[AgentRunModel] = []
     top_opportunities: list[OpportunityModel] = []
     integration_warnings: list[IntegrationSourceModel] = []
+    google_data: GoogleDataSummaryModel = GoogleDataSummaryModel()
+    search_trend: list[SearchTrendPointModel] = []
+    top_searches: list[SearchQueryModel] = []
+    revalidations: list[RevalidationModel] = []
+    improvement_summary: ImprovementSummaryModel = ImprovementSummaryModel()
 
 
 class PageSummaryModel(BaseModel):
@@ -169,12 +251,20 @@ class ActivityEntryModel(BaseModel):
 
 
 class ExperimentModel(BaseModel):
+    id: int = 0
     keyword: str = ""
     opportunity_type: str = ""
     url: str = ""
     implemented_action: str = ""
     implemented_at: str = ""
+    baseline: dict[str, Any] = {}
+    current: dict[str, Any] = {}
+    delta: dict[str, Any] = {}
+    forecast: dict[str, Any] = {}
+    latest_result_window: str = ""
+    revalidation: dict[str, Any] = {}
     verdict: str | None = None
+    windows: dict[str, bool] = {}
     measurement_state: str = "waiting_data"
 
 
@@ -235,6 +325,7 @@ class TechnicalFindingModel(BaseModel):
 class CorrectionModel(BaseModel):
     fingerprint: str
     rule_id: str = ""
+    label: str = ""
     url: str = ""
     status: str = ""
     before: dict[str, Any] | None = None
@@ -299,6 +390,95 @@ class RunCreateRequest(BaseModel):
     intent: str | None = None
     mode: str | None = None
     target_url: str | None = None
+
+
+# -- U1: Account (self-service) ----------------------------------------------
+class AccountModel(BaseModel):
+    id: int
+    name: str
+    email: str
+    is_mfa_enabled: bool
+    must_change_password: bool
+    roles: list[str] = []
+    permissions: list[str] = []
+    created_at: str = ""
+    last_login_at: str | None = None
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class ChangeEmailRequest(BaseModel):
+    new_email: str = Field(min_length=3)
+    password: str = Field(min_length=1)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
+class MfaConfirmRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    issuer: str = "SEO Agent"
+
+
+# -- U1: Administração (users) ----------------------------------------------
+class UserSummaryModel(BaseModel):
+    id: int
+    email: str
+    name: str = ""
+    is_active: bool = True
+    is_mfa_enabled: bool = False
+    roles: list[str] = []
+    last_login_at: str | None = None
+    created_at: str = ""
+
+
+class UserDetailModel(UserSummaryModel):
+    permissions: list[str] = []
+    must_change_password: bool = False
+
+
+class CreateUserRequest(BaseModel):
+    email: str
+    name: str = ""
+    password: str | None = None
+    roles: list[str] = []
+    require_password_change: bool = True
+    require_mfa: bool = False
+
+
+class UpdateUserRequest(BaseModel):
+    name: str | None = None
+    email: str | None = None
+
+
+class RolesRequest(BaseModel):
+    roles: list[str]
+
+
+class RoleModel(BaseModel):
+    name: str
+    description: str = ""
+    permissions: list[str] = []
+
+
+class PermissionModel(BaseModel):
+    name: str
+
+
+class RolesEnvelope(BaseModel):
+    roles: list[RoleModel]
+
+
+class PermissionsEnvelope(BaseModel):
+    permissions: list[PermissionModel]
 
 
 class AgentsEnvelope(BaseModel):

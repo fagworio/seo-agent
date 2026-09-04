@@ -16,13 +16,17 @@ from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from .deps import Services, authenticated, get_services, register_error_handlers
-from .errors import NotFound
 from .http import session_cookie_name
 from .schemas import (
+    AccountModel,
     ActionsEnvelope,
     ActivityEnvelope,
+    ActivityEntryModel,
     AgentRunModel,
     AgentsEnvelope,
+    ChangeEmailRequest,
+    ChangePasswordRequest,
+    CreateUserRequest,
     EditorialEnvelope,
     ExperimentsEnvelope,
     FindingsEnvelope,
@@ -31,19 +35,33 @@ from .schemas import (
     LoginRequest,
     LoginResponse,
     MeResponse,
+    MfaConfirmRequest,
+    MfaSetupResponse,
     MfaVerifyRequest,
     OkModel,
     PagesEnvelope,
+    PermissionsEnvelope,
     ResetPasswordRequest,
+    RolesEnvelope,
+    RolesRequest,
     RunCreateRequest,
     RunDetailModel,
     RunsEnvelope,
     SessionModel,
+    TechnicalFindingModel,
     TodayEnvelope,
+    UpdateProfileRequest,
+    UpdateUserRequest,
+    UserDetailModel,
     UserModel,
+    UserSummaryModel,
     WorkItemDecisionModel,
     WorkItemsEnvelope,
 )
+
+from ..auth.service import AuthError
+from ..auth.totp import generate_secret
+from .errors import BadRequest, Forbidden, NotFound, ReauthRequired
 
 
 def _set_session_cookie(response: Response, services: Services, token: str) -> None:
@@ -299,6 +317,195 @@ def read_routers() -> list[APIRouter]:
     return out
 
 
+def _require_reauth(services: Services, session) -> None:
+    if not services.auth.verify_recent_strong_auth(session.session_id):
+        raise ReauthRequired()
+
+
+def account_router() -> APIRouter:
+    r = APIRouter(prefix="/account", tags=["account"])
+
+    @r.get("", response_model=AccountModel, operation_id="account_get")
+    def account_get(services: Services = Depends(get_services),
+                    session=Depends(authenticated())) -> dict[str, Any]:
+        return services.auth.get_account(session.user_id) or {}
+
+    @r.patch("", response_model=OkModel, operation_id="account_update_profile")
+    def account_update(body: UpdateProfileRequest, services: Services = Depends(get_services),
+                       session=Depends(authenticated(csrf=True))) -> dict[str, Any]:
+        services.auth.update_profile(session.user_id, body.name)
+        return {"ok": True}
+
+    @r.post("/change-password", response_model=OkModel, operation_id="account_change_password")
+    def account_change_password(body: ChangePasswordRequest,
+                                services: Services = Depends(get_services),
+                                session=Depends(authenticated(csrf=True))) -> dict[str, Any]:
+        ok = services.auth.change_password_auth(
+            session.user_id, body.current_password, body.new_password,
+            mfa_enabled=session.is_mfa_enabled)
+        return {"ok": ok, "message": "" if ok else "Senha atual incorreta."}
+
+    @r.post("/mfa/setup", response_model=MfaSetupResponse, operation_id="account_mfa_setup")
+    def account_mfa_setup(services: Services = Depends(get_services),
+                          session=Depends(authenticated())) -> dict[str, Any]:
+        try:
+            secret = services.auth.mfa_setup(session.user_id)
+        except AuthError as exc:
+            raise BadRequest(str(exc))
+        return {"secret": secret, "issuer": getattr(services.config, "mfa_issuer", "SEO Agent")}
+
+    @r.post("/mfa/confirm", response_model=OkModel, operation_id="account_mfa_confirm")
+    def account_mfa_confirm(body: MfaConfirmRequest, services: Services = Depends(get_services),
+                            session=Depends(authenticated(csrf=True))) -> dict[str, Any]:
+        return {"ok": services.auth.mfa_confirm(session.user_id, body.code)}
+
+    @r.post("/mfa/disable", response_model=OkModel, operation_id="account_mfa_disable")
+    def account_mfa_disable(services: Services = Depends(get_services),
+                            session=Depends(authenticated(csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        services.auth.mfa_disable(session.user_id)
+        return {"ok": True}
+
+    return r
+
+
+def users_router() -> APIRouter:
+    r = APIRouter(prefix="/users", tags=["users"])
+
+    @r.get("", response_model=list[UserSummaryModel], operation_id="users_list")
+    def users_list(services: Services = Depends(get_services),
+                   session=Depends(authenticated("users.read"))) -> list[dict[str, Any]]:
+        out = []
+        for u in services.auth.store.list_users():
+            u["roles"] = services.auth.store.get_user_roles(u["id"])
+            out.append(u)
+        return out
+
+    @r.post("", response_model=UserDetailModel, operation_id="users_create")
+    def users_create(body: CreateUserRequest, services: Services = Depends(get_services),
+                     session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        try:
+            uid = services.auth.create_user(
+                body.email, body.name, body.password or "", body.roles,
+                mfa_secret=generate_secret() if body.require_mfa else None)
+        except AuthError as exc:
+            raise BadRequest(str(exc))
+        services.auth.store.set_password_must_change(
+            uid, 1 if body.require_password_change else 0)
+        u = services.auth.store.get_user(uid)
+        u["roles"] = services.auth.store.get_user_roles(uid)
+        u["permissions"] = sorted(services.auth.permissions_for(uid))
+        return u
+
+    @r.get("/{id}", response_model=UserDetailModel, operation_id="users_detail")
+    def users_detail(id: int, services: Services = Depends(get_services),
+                     session=Depends(authenticated("users.read"))) -> dict[str, Any]:
+        u = services.auth.store.get_user(id)
+        if not u:
+            raise NotFound("Usuário não encontrado.")
+        u["roles"] = services.auth.store.get_user_roles(id)
+        u["permissions"] = sorted(services.auth.permissions_for(id))
+        return u
+
+    @r.patch("/{id}", response_model=OkModel, operation_id="users_update")
+    def users_update(id: int, body: UpdateUserRequest, services: Services = Depends(get_services),
+                     session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        if body.name is not None:
+            services.auth.update_profile(id, body.name)
+        if body.email is not None:
+            services.auth.store.conn.execute(
+                "UPDATE users SET email = ?, updated_at = ? WHERE id = ?",
+                (body.email.lower().strip(), services.auth._now(), id))
+            services.auth.store.conn.commit()
+            services.auth._audit(now=services.auth._now(), user_id=id, event="PROFILE_EMAIL_CHANGED")
+        return {"ok": True}
+
+    @r.post("/{id}/enable", response_model=OkModel, operation_id="users_enable")
+    def users_enable(id: int, services: Services = Depends(get_services),
+                     session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        services.auth.store.enable_user(id)
+        services.auth._audit(now=services.auth._now(), user_id=id, event="USER_ENABLED")
+        return {"ok": True}
+
+    @r.post("/{id}/disable", response_model=OkModel, operation_id="users_disable")
+    def users_disable(id: int, services: Services = Depends(get_services),
+                      session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        if id == session.user_id:
+            raise BadRequest("Não é possível desativar a própria conta.")
+        if services.auth.is_last_admin(id) and "admin" in services.auth.store.get_user_roles(id):
+            raise BadRequest("Não é possível desativar o último administrador.")
+        services.auth.store.disable_user(id)
+        services.auth.store.revoke_user_sessions(id, now=services.auth._now())
+        services.auth._audit(now=services.auth._now(), user_id=id, event="USER_DISABLED")
+        return {"ok": True}
+
+    @r.put("/{id}/roles", response_model=UserDetailModel, operation_id="users_roles")
+    def users_roles(id: int, body: RolesRequest, services: Services = Depends(get_services),
+                    session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        if ("admin" not in body.roles and "admin" in services.auth.store.get_user_roles(id)
+                and services.auth.is_last_admin(id)):
+            raise BadRequest("Não é possível remover a role do último administrador.")
+        services.auth.set_user_roles(id, body.roles)
+        u = services.auth.store.get_user(id)
+        u["roles"] = services.auth.store.get_user_roles(id)
+        u["permissions"] = sorted(services.auth.permissions_for(id))
+        return u
+
+    @r.post("/{id}/force-password-reset", response_model=OkModel, operation_id="users_force_password_reset")
+    def users_force_password_reset(id: int, services: Services = Depends(get_services),
+                                   session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        services.auth.force_password_reset(id)
+        return {"ok": True}
+
+    @r.post("/{id}/reset-mfa", response_model=OkModel, operation_id="users_reset_mfa")
+    def users_reset_mfa(id: int, services: Services = Depends(get_services),
+                        session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        _require_reauth(services, session)
+        services.auth.mfa_disable(id)
+        return {"ok": True}
+
+    @r.get("/{id}/sessions", response_model=list[SessionModel], operation_id="users_sessions")
+    def users_sessions(id: int, services: Services = Depends(get_services),
+                       session=Depends(authenticated("users.read"))) -> list[dict[str, Any]]:
+        return services.auth.list_sessions(id)
+
+    @r.delete("/{id}/sessions", response_model=OkModel, operation_id="users_sessions_revoke")
+    def users_sessions_revoke(id: int, services: Services = Depends(get_services),
+                              session=Depends(authenticated("users.manage", csrf=True))) -> dict[str, Any]:
+        services.auth.store.revoke_user_sessions(id, now=services.auth._now())
+        return {"ok": True}
+
+    @r.get("/{id}/activity", response_model=list[ActivityEntryModel], operation_id="users_activity")
+    def users_activity(id: int, services: Services = Depends(get_services),
+                       session=Depends(authenticated("users.read"))) -> list[dict[str, Any]]:
+        return [e for e in services.auth.store.list_events(limit=200) if e.get("user_id") == id]
+
+    return r
+
+
+def roles_permissions_router() -> APIRouter:
+    r = APIRouter(tags=["users"])
+
+    @r.get("/roles", response_model=RolesEnvelope, operation_id="roles_list")
+    def roles_list(session=Depends(authenticated("users.read"))) -> dict[str, Any]:
+        from ..auth.permissions import ROLE_DESCRIPTIONS, ROLE_PERMISSIONS
+        return {"roles": [{"name": n, "description": ROLE_DESCRIPTIONS.get(n, ""),
+                           "permissions": sorted(p)}
+                          for n, p in sorted(ROLE_PERMISSIONS.items())]}
+
+    @r.get("/permissions", response_model=PermissionsEnvelope, operation_id="permissions_list")
+    def permissions_list(session=Depends(authenticated("users.read"))) -> dict[str, Any]:
+        from ..auth.permissions import all_permissions
+        return {"permissions": [{"name": p} for p in sorted(all_permissions())]}
+
+    return r
+
+
 def create_app(*, storage_path: str, config: Any) -> FastAPI:
     app = FastAPI(
         title="SEO Agent Control Center",
@@ -321,6 +528,9 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
     for r in read_routers():
         app.include_router(r, prefix="/api/v1")
     app.include_router(auth_router(), prefix="/api/v1")
+    app.include_router(account_router(), prefix="/api/v1")
+    app.include_router(users_router(), prefix="/api/v1")
+    app.include_router(roles_permissions_router(), prefix="/api/v1")
     return app
 
 

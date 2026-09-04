@@ -1246,10 +1246,809 @@
           }
         }
       }
+    },
+    "/api/v1/account": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Get",
+        "operationId": "account_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountModel"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Update",
+        "operationId": "account_update_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/account/change-password": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Change Password",
+        "operationId": "account_change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/account/mfa/setup": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Mfa Setup",
+        "operationId": "account_mfa_setup",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaSetupResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/account/mfa/confirm": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Mfa Confirm",
+        "operationId": "account_mfa_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/account/mfa/disable": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Mfa Disable",
+        "operationId": "account_mfa_disable",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users List",
+        "operationId": "users_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserSummaryModel"
+                  },
+                  "type": "array",
+                  "title": "Response Users List"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Create",
+        "operationId": "users_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Detail",
+        "operationId": "users_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Update",
+        "operationId": "users_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/enable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Enable",
+        "operationId": "users_enable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/disable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Disable",
+        "operationId": "users_disable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/roles": {
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Roles",
+        "operationId": "users_roles",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/force-password-reset": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Force Password Reset",
+        "operationId": "users_force_password_reset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/reset-mfa": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Reset Mfa",
+        "operationId": "users_reset_mfa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/sessions": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Sessions",
+        "operationId": "users_sessions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionModel"
+                  },
+                  "title": "Response Users Sessions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Sessions Revoke",
+        "operationId": "users_sessions_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/activity": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Users Activity",
+        "operationId": "users_activity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityEntryModel"
+                  },
+                  "title": "Response Users Activity"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roles": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Roles List",
+        "operationId": "roles_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolesEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permissions": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Permissions List",
+        "operationId": "permissions_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccountModel": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "is_mfa_enabled": {
+            "type": "boolean",
+            "title": "Is Mfa Enabled"
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": []
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions",
+            "default": []
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email",
+          "is_mfa_enabled",
+          "must_change_password"
+        ],
+        "title": "AccountModel"
+      },
       "ActionsEnvelope": {
         "properties": {
           "corrections": {
@@ -1516,6 +2315,26 @@
         ],
         "title": "AgentsEnvelope"
       },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Current Password"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "New Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest"
+      },
       "CorrectionModel": {
         "properties": {
           "fingerprint": {
@@ -1525,6 +2344,11 @@
           "rule_id": {
             "type": "string",
             "title": "Rule Id",
+            "default": ""
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
             "default": ""
           },
           "url": {
@@ -1591,6 +2415,53 @@
         ],
         "title": "CorrectionModel"
       },
+      "CreateUserRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": []
+          },
+          "require_password_change": {
+            "type": "boolean",
+            "title": "Require Password Change",
+            "default": true
+          },
+          "require_mfa": {
+            "type": "boolean",
+            "title": "Require Mfa",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "CreateUserRequest"
+      },
       "EditorialEnvelope": {
         "properties": {
           "editorial": {
@@ -1609,6 +2480,11 @@
       },
       "ExperimentModel": {
         "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "default": 0
+          },
           "keyword": {
             "type": "string",
             "title": "Keyword",
@@ -1634,6 +2510,41 @@
             "title": "Implemented At",
             "default": ""
           },
+          "baseline": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Baseline",
+            "default": {}
+          },
+          "current": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Current",
+            "default": {}
+          },
+          "delta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Delta",
+            "default": {}
+          },
+          "forecast": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Forecast",
+            "default": {}
+          },
+          "latest_result_window": {
+            "type": "string",
+            "title": "Latest Result Window",
+            "default": ""
+          },
+          "revalidation": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Revalidation",
+            "default": {}
+          },
           "verdict": {
             "anyOf": [
               {
@@ -1644,6 +2555,14 @@
               }
             ],
             "title": "Verdict"
+          },
+          "windows": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Windows",
+            "default": {}
           },
           "measurement_state": {
             "type": "string",
@@ -1699,6 +2618,67 @@
           "email"
         ],
         "title": "ForgotPasswordRequest"
+      },
+      "GoogleDataSummaryModel": {
+        "properties": {
+          "data_status": {
+            "type": "string",
+            "title": "Data Status",
+            "default": "missing"
+          },
+          "connection_configured": {
+            "type": "boolean",
+            "title": "Connection Configured",
+            "default": false
+          },
+          "gsc_window_start": {
+            "type": "string",
+            "title": "Gsc Window Start",
+            "default": ""
+          },
+          "gsc_window_end": {
+            "type": "string",
+            "title": "Gsc Window End",
+            "default": ""
+          },
+          "gsc_rows": {
+            "type": "integer",
+            "title": "Gsc Rows",
+            "default": 0
+          },
+          "ga4_rows": {
+            "type": "integer",
+            "title": "Ga4 Rows",
+            "default": 0
+          },
+          "ga4_window_end": {
+            "type": "string",
+            "title": "Ga4 Window End",
+            "default": ""
+          },
+          "ga4_collected_at": {
+            "type": "string",
+            "title": "Ga4 Collected At",
+            "default": ""
+          },
+          "opportunities_total": {
+            "type": "integer",
+            "title": "Opportunities Total",
+            "default": 0
+          },
+          "opportunities_with_google": {
+            "type": "integer",
+            "title": "Opportunities With Google",
+            "default": 0
+          },
+          "opportunities_without_google": {
+            "type": "integer",
+            "title": "Opportunities Without Google",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "GoogleDataSummaryModel"
       },
       "GoogleModel": {
         "properties": {
@@ -1819,6 +2799,57 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "ImprovementSummaryModel": {
+        "properties": {
+          "implemented": {
+            "type": "integer",
+            "title": "Implemented",
+            "default": 0
+          },
+          "measured": {
+            "type": "integer",
+            "title": "Measured",
+            "default": 0
+          },
+          "improved": {
+            "type": "integer",
+            "title": "Improved",
+            "default": 0
+          },
+          "neutral": {
+            "type": "integer",
+            "title": "Neutral",
+            "default": 0
+          },
+          "worsened": {
+            "type": "integer",
+            "title": "Worsened",
+            "default": 0
+          },
+          "insufficient_data": {
+            "type": "integer",
+            "title": "Insufficient Data",
+            "default": 0
+          },
+          "waiting_7d": {
+            "type": "integer",
+            "title": "Waiting 7D",
+            "default": 0
+          },
+          "waiting_google": {
+            "type": "integer",
+            "title": "Waiting Google",
+            "default": 0
+          },
+          "ready": {
+            "type": "integer",
+            "title": "Ready",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ImprovementSummaryModel"
       },
       "IntegrationSourceModel": {
         "properties": {
@@ -1977,6 +3008,39 @@
         ],
         "title": "MeResponse"
       },
+      "MfaConfirmRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 6,
+            "minLength": 6,
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "MfaConfirmRequest"
+      },
+      "MfaSetupResponse": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "title": "Secret"
+          },
+          "issuer": {
+            "type": "string",
+            "title": "Issuer",
+            "default": "SEO Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret"
+        ],
+        "title": "MfaSetupResponse"
+      },
       "MfaVerifyRequest": {
         "properties": {
           "user_id": {
@@ -2080,6 +3144,86 @@
             "type": "string",
             "title": "Recommendation",
             "default": ""
+          },
+          "action_class": {
+            "type": "string",
+            "title": "Action Class",
+            "default": "approval_required"
+          },
+          "risk": {
+            "type": "string",
+            "title": "Risk",
+            "default": "review_required"
+          },
+          "rollback_available": {
+            "type": "boolean",
+            "title": "Rollback Available",
+            "default": false
+          },
+          "decision_type": {
+            "type": "string",
+            "title": "Decision Type",
+            "default": "review"
+          },
+          "related_recommendations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Recommendations",
+            "default": []
+          },
+          "score_breakdown": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Score Breakdown",
+            "default": {}
+          },
+          "gsc_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Gsc Metrics",
+            "default": {}
+          },
+          "ga4_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Ga4 Metrics",
+            "default": {}
+          },
+          "measurement_state": {
+            "type": "string",
+            "title": "Measurement State",
+            "default": "not_measurable"
+          },
+          "projection": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Projection",
+            "default": {}
+          },
+          "top_queries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Top Queries",
+            "default": []
+          },
+          "link_context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Link Context",
+            "default": {}
+          },
+          "data_freshness": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Data Freshness",
+            "default": {}
           }
         },
         "type": "object",
@@ -2227,6 +3371,35 @@
         ],
         "title": "PagesEnvelope"
       },
+      "PermissionModel": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "PermissionModel"
+      },
+      "PermissionsEnvelope": {
+        "properties": {
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionModel"
+            },
+            "type": "array",
+            "title": "Permissions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permissions"
+        ],
+        "title": "PermissionsEnvelope"
+      },
       "PotentialModel": {
         "properties": {
           "data_status": {
@@ -2323,6 +3496,132 @@
           "new_password"
         ],
         "title": "ResetPasswordRequest"
+      },
+      "RevalidationModel": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "keyword": {
+            "type": "string",
+            "title": "Keyword",
+            "default": ""
+          },
+          "opportunity_type": {
+            "type": "string",
+            "title": "Opportunity Type",
+            "default": ""
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "implemented_action": {
+            "type": "string",
+            "title": "Implemented Action",
+            "default": ""
+          },
+          "implemented_at": {
+            "type": "string",
+            "title": "Implemented At",
+            "default": ""
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At",
+            "default": ""
+          },
+          "elapsed_days": {
+            "type": "integer",
+            "title": "Elapsed Days",
+            "default": 0
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "waiting_7d"
+          },
+          "baseline_status": {
+            "type": "string",
+            "title": "Baseline Status",
+            "default": "missing"
+          },
+          "latest_google_window_end": {
+            "type": "string",
+            "title": "Latest Google Window End",
+            "default": ""
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "RevalidationModel"
+      },
+      "RoleModel": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RoleModel"
+      },
+      "RolesEnvelope": {
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/RoleModel"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "roles"
+        ],
+        "title": "RolesEnvelope"
+      },
+      "RolesRequest": {
+        "properties": {
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "roles"
+        ],
+        "title": "RolesRequest"
       },
       "RuleModel": {
         "properties": {
@@ -2675,6 +3974,129 @@
         ],
         "title": "RunsEnvelope"
       },
+      "SearchQueryModel": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "intent": {
+            "type": "string",
+            "title": "Intent",
+            "default": ""
+          },
+          "clicks": {
+            "type": "number",
+            "title": "Clicks",
+            "default": 0
+          },
+          "impressions": {
+            "type": "number",
+            "title": "Impressions",
+            "default": 0
+          },
+          "ctr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctr"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages",
+            "default": 0
+          },
+          "window_start": {
+            "type": "string",
+            "title": "Window Start",
+            "default": ""
+          },
+          "window_end": {
+            "type": "string",
+            "title": "Window End",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchQueryModel"
+      },
+      "SearchTrendPointModel": {
+        "properties": {
+          "window_start": {
+            "type": "string",
+            "title": "Window Start",
+            "default": ""
+          },
+          "window_end": {
+            "type": "string",
+            "title": "Window End",
+            "default": ""
+          },
+          "clicks": {
+            "type": "number",
+            "title": "Clicks",
+            "default": 0
+          },
+          "impressions": {
+            "type": "number",
+            "title": "Impressions",
+            "default": 0
+          },
+          "ctr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctr"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages",
+            "default": 0
+          },
+          "queries": {
+            "type": "integer",
+            "title": "Queries",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "SearchTrendPointModel"
+      },
       "SessionModel": {
         "properties": {
           "id": {
@@ -2842,10 +4264,176 @@
             "type": "array",
             "title": "Integration Warnings",
             "default": []
+          },
+          "google_data": {
+            "$ref": "#/components/schemas/GoogleDataSummaryModel",
+            "default": {
+              "data_status": "missing",
+              "connection_configured": false,
+              "gsc_window_start": "",
+              "gsc_window_end": "",
+              "gsc_rows": 0,
+              "ga4_rows": 0,
+              "ga4_window_end": "",
+              "ga4_collected_at": "",
+              "opportunities_total": 0,
+              "opportunities_with_google": 0,
+              "opportunities_without_google": 0
+            }
+          },
+          "search_trend": {
+            "items": {
+              "$ref": "#/components/schemas/SearchTrendPointModel"
+            },
+            "type": "array",
+            "title": "Search Trend",
+            "default": []
+          },
+          "top_searches": {
+            "items": {
+              "$ref": "#/components/schemas/SearchQueryModel"
+            },
+            "type": "array",
+            "title": "Top Searches",
+            "default": []
+          },
+          "revalidations": {
+            "items": {
+              "$ref": "#/components/schemas/RevalidationModel"
+            },
+            "type": "array",
+            "title": "Revalidations",
+            "default": []
+          },
+          "improvement_summary": {
+            "$ref": "#/components/schemas/ImprovementSummaryModel",
+            "default": {
+              "implemented": 0,
+              "measured": 0,
+              "improved": 0,
+              "neutral": 0,
+              "worsened": 0,
+              "insufficient_data": 0,
+              "waiting_7d": 0,
+              "waiting_google": 0,
+              "ready": 0
+            }
           }
         },
         "type": "object",
         "title": "TodayModel"
+      },
+      "UpdateProfileRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "UpdateProfileRequest"
+      },
+      "UpdateUserRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "title": "UpdateUserRequest"
+      },
+      "UserDetailModel": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "is_mfa_enabled": {
+            "type": "boolean",
+            "title": "Is Mfa Enabled",
+            "default": false
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": []
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions",
+            "default": []
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "UserDetailModel"
       },
       "UserModel": {
         "properties": {
@@ -2890,6 +4478,63 @@
           "email"
         ],
         "title": "UserModel"
+      },
+      "UserSummaryModel": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "is_mfa_enabled": {
+            "type": "boolean",
+            "title": "Is Mfa Enabled",
+            "default": false
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": []
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "UserSummaryModel"
       },
       "ValidationError": {
         "properties": {

@@ -464,10 +464,316 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Account Get */
+        get: operations["account_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Account Update */
+        patch: operations["account_update_profile"];
+        trace?: never;
+    };
+    "/api/v1/account/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Change Password */
+        post: operations["account_change_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/mfa/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Mfa Setup */
+        post: operations["account_mfa_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/mfa/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Mfa Confirm */
+        post: operations["account_mfa_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/mfa/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Mfa Disable */
+        post: operations["account_mfa_disable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Users List */
+        get: operations["users_list"];
+        put?: never;
+        /** Users Create */
+        post: operations["users_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Users Detail */
+        get: operations["users_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Users Update */
+        patch: operations["users_update"];
+        trace?: never;
+    };
+    "/api/v1/users/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Users Enable */
+        post: operations["users_enable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Users Disable */
+        post: operations["users_disable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Users Roles */
+        put: operations["users_roles"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/force-password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Users Force Password Reset */
+        post: operations["users_force_password_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/reset-mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Users Reset Mfa */
+        post: operations["users_reset_mfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Users Sessions */
+        get: operations["users_sessions"];
+        put?: never;
+        post?: never;
+        /** Users Sessions Revoke */
+        delete: operations["users_sessions_revoke"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Users Activity */
+        get: operations["users_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Roles List */
+        get: operations["roles_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Permissions List */
+        get: operations["permissions_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountModel */
+        AccountModel: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Email */
+            email: string;
+            /** Is Mfa Enabled */
+            is_mfa_enabled: boolean;
+            /** Must Change Password */
+            must_change_password: boolean;
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
+            /**
+             * Permissions
+             * @default []
+             */
+            permissions: string[];
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at?: string | null;
+        };
         /** ActionsEnvelope */
         ActionsEnvelope: {
             /** Corrections */
@@ -594,6 +900,13 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["AgentModel"][];
         };
+        /** ChangePasswordRequest */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
         /** CorrectionModel */
         CorrectionModel: {
             /** Fingerprint */
@@ -603,6 +916,11 @@ export interface components {
              * @default
              */
             rule_id: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
             /**
              * Url
              * @default
@@ -628,6 +946,33 @@ export interface components {
             /** Executed At */
             executed_at?: string | null;
         };
+        /** CreateUserRequest */
+        CreateUserRequest: {
+            /** Email */
+            email: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Password */
+            password?: string | null;
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
+            /**
+             * Require Password Change
+             * @default true
+             */
+            require_password_change: boolean;
+            /**
+             * Require Mfa
+             * @default false
+             */
+            require_mfa: boolean;
+        };
         /** EditorialEnvelope */
         EditorialEnvelope: {
             /** Editorial */
@@ -635,6 +980,11 @@ export interface components {
         };
         /** ExperimentModel */
         ExperimentModel: {
+            /**
+             * Id
+             * @default 0
+             */
+            id: number;
             /**
              * Keyword
              * @default
@@ -660,8 +1010,55 @@ export interface components {
              * @default
              */
             implemented_at: string;
+            /**
+             * Baseline
+             * @default {}
+             */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /**
+             * Current
+             * @default {}
+             */
+            current: {
+                [key: string]: unknown;
+            };
+            /**
+             * Delta
+             * @default {}
+             */
+            delta: {
+                [key: string]: unknown;
+            };
+            /**
+             * Forecast
+             * @default {}
+             */
+            forecast: {
+                [key: string]: unknown;
+            };
+            /**
+             * Latest Result Window
+             * @default
+             */
+            latest_result_window: string;
+            /**
+             * Revalidation
+             * @default {}
+             */
+            revalidation: {
+                [key: string]: unknown;
+            };
             /** Verdict */
             verdict?: string | null;
+            /**
+             * Windows
+             * @default {}
+             */
+            windows: {
+                [key: string]: boolean;
+            };
             /**
              * Measurement State
              * @default waiting_data
@@ -682,6 +1079,64 @@ export interface components {
         ForgotPasswordRequest: {
             /** Email */
             email: string;
+        };
+        /** GoogleDataSummaryModel */
+        GoogleDataSummaryModel: {
+            /**
+             * Data Status
+             * @default missing
+             */
+            data_status: string;
+            /**
+             * Connection Configured
+             * @default false
+             */
+            connection_configured: boolean;
+            /**
+             * Gsc Window Start
+             * @default
+             */
+            gsc_window_start: string;
+            /**
+             * Gsc Window End
+             * @default
+             */
+            gsc_window_end: string;
+            /**
+             * Gsc Rows
+             * @default 0
+             */
+            gsc_rows: number;
+            /**
+             * Ga4 Rows
+             * @default 0
+             */
+            ga4_rows: number;
+            /**
+             * Ga4 Window End
+             * @default
+             */
+            ga4_window_end: string;
+            /**
+             * Ga4 Collected At
+             * @default
+             */
+            ga4_collected_at: string;
+            /**
+             * Opportunities Total
+             * @default 0
+             */
+            opportunities_total: number;
+            /**
+             * Opportunities With Google
+             * @default 0
+             */
+            opportunities_with_google: number;
+            /**
+             * Opportunities Without Google
+             * @default 0
+             */
+            opportunities_without_google: number;
         };
         /** GoogleModel */
         GoogleModel: {
@@ -726,6 +1181,54 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** ImprovementSummaryModel */
+        ImprovementSummaryModel: {
+            /**
+             * Implemented
+             * @default 0
+             */
+            implemented: number;
+            /**
+             * Measured
+             * @default 0
+             */
+            measured: number;
+            /**
+             * Improved
+             * @default 0
+             */
+            improved: number;
+            /**
+             * Neutral
+             * @default 0
+             */
+            neutral: number;
+            /**
+             * Worsened
+             * @default 0
+             */
+            worsened: number;
+            /**
+             * Insufficient Data
+             * @default 0
+             */
+            insufficient_data: number;
+            /**
+             * Waiting 7D
+             * @default 0
+             */
+            waiting_7d: number;
+            /**
+             * Waiting Google
+             * @default 0
+             */
+            waiting_google: number;
+            /**
+             * Ready
+             * @default 0
+             */
+            ready: number;
         };
         /** IntegrationSourceModel */
         IntegrationSourceModel: {
@@ -794,6 +1297,21 @@ export interface components {
             /** Csrf Token */
             csrf_token: string;
         };
+        /** MfaConfirmRequest */
+        MfaConfirmRequest: {
+            /** Code */
+            code: string;
+        };
+        /** MfaSetupResponse */
+        MfaSetupResponse: {
+            /** Secret */
+            secret: string;
+            /**
+             * Issuer
+             * @default SEO Agent
+             */
+            issuer: string;
+        };
         /** MfaVerifyRequest */
         MfaVerifyRequest: {
             /** User Id */
@@ -851,6 +1369,85 @@ export interface components {
              * @default
              */
             recommendation: string;
+            /**
+             * Action Class
+             * @default approval_required
+             */
+            action_class: string;
+            /**
+             * Risk
+             * @default review_required
+             */
+            risk: string;
+            /**
+             * Rollback Available
+             * @default false
+             */
+            rollback_available: boolean;
+            /**
+             * Decision Type
+             * @default review
+             */
+            decision_type: string;
+            /**
+             * Related Recommendations
+             * @default []
+             */
+            related_recommendations: string[];
+            /**
+             * Score Breakdown
+             * @default {}
+             */
+            score_breakdown: {
+                [key: string]: unknown;
+            };
+            /**
+             * Gsc Metrics
+             * @default {}
+             */
+            gsc_metrics: {
+                [key: string]: unknown;
+            };
+            /**
+             * Ga4 Metrics
+             * @default {}
+             */
+            ga4_metrics: {
+                [key: string]: unknown;
+            };
+            /**
+             * Measurement State
+             * @default not_measurable
+             */
+            measurement_state: string;
+            /**
+             * Projection
+             * @default {}
+             */
+            projection: {
+                [key: string]: unknown;
+            };
+            /**
+             * Top Queries
+             * @default []
+             */
+            top_queries: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Link Context
+             * @default {}
+             */
+            link_context: {
+                [key: string]: unknown;
+            };
+            /**
+             * Data Freshness
+             * @default {}
+             */
+            data_freshness: {
+                [key: string]: string;
+            };
         };
         /** OrganicSummaryModel */
         OrganicSummaryModel: {
@@ -957,6 +1554,16 @@ export interface components {
             /** Pages */
             pages: components["schemas"]["PageSummaryModel"][];
         };
+        /** PermissionModel */
+        PermissionModel: {
+            /** Name */
+            name: string;
+        };
+        /** PermissionsEnvelope */
+        PermissionsEnvelope: {
+            /** Permissions */
+            permissions: components["schemas"]["PermissionModel"][];
+        };
         /** PotentialModel */
         PotentialModel: {
             /**
@@ -983,6 +1590,91 @@ export interface components {
             token: string;
             /** New Password */
             new_password: string;
+        };
+        /** RevalidationModel */
+        RevalidationModel: {
+            /** Id */
+            id: number;
+            /**
+             * Keyword
+             * @default
+             */
+            keyword: string;
+            /**
+             * Opportunity Type
+             * @default
+             */
+            opportunity_type: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /**
+             * Implemented Action
+             * @default
+             */
+            implemented_action: string;
+            /**
+             * Implemented At
+             * @default
+             */
+            implemented_at: string;
+            /**
+             * Due At
+             * @default
+             */
+            due_at: string;
+            /**
+             * Elapsed Days
+             * @default 0
+             */
+            elapsed_days: number;
+            /**
+             * State
+             * @default waiting_7d
+             */
+            state: string;
+            /**
+             * Baseline Status
+             * @default missing
+             */
+            baseline_status: string;
+            /**
+             * Latest Google Window End
+             * @default
+             */
+            latest_google_window_end: string;
+            /**
+             * Verdict
+             * @default
+             */
+            verdict: string;
+        };
+        /** RoleModel */
+        RoleModel: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Permissions
+             * @default []
+             */
+            permissions: string[];
+        };
+        /** RolesEnvelope */
+        RolesEnvelope: {
+            /** Roles */
+            roles: components["schemas"]["RoleModel"][];
+        };
+        /** RolesRequest */
+        RolesRequest: {
+            /** Roles */
+            roles: string[];
         };
         /** RuleModel */
         RuleModel: {
@@ -1137,6 +1829,82 @@ export interface components {
             /** Runs */
             runs: components["schemas"]["AgentRunModel"][];
         };
+        /** SearchQueryModel */
+        SearchQueryModel: {
+            /** Query */
+            query: string;
+            /**
+             * Intent
+             * @default
+             */
+            intent: string;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /** Ctr */
+            ctr?: number | null;
+            /** Position */
+            position?: number | null;
+            /**
+             * Pages
+             * @default 0
+             */
+            pages: number;
+            /**
+             * Window Start
+             * @default
+             */
+            window_start: string;
+            /**
+             * Window End
+             * @default
+             */
+            window_end: string;
+        };
+        /** SearchTrendPointModel */
+        SearchTrendPointModel: {
+            /**
+             * Window Start
+             * @default
+             */
+            window_start: string;
+            /**
+             * Window End
+             * @default
+             */
+            window_end: string;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /** Ctr */
+            ctr?: number | null;
+            /** Position */
+            position?: number | null;
+            /**
+             * Pages
+             * @default 0
+             */
+            pages: number;
+            /**
+             * Queries
+             * @default 0
+             */
+            queries: number;
+        };
         /** SessionModel */
         SessionModel: {
             /** Id */
@@ -1215,6 +1983,107 @@ export interface components {
              * @default []
              */
             integration_warnings: components["schemas"]["IntegrationSourceModel"][];
+            /**
+             * @default {
+             *       "data_status": "missing",
+             *       "connection_configured": false,
+             *       "gsc_window_start": "",
+             *       "gsc_window_end": "",
+             *       "gsc_rows": 0,
+             *       "ga4_rows": 0,
+             *       "ga4_window_end": "",
+             *       "ga4_collected_at": "",
+             *       "opportunities_total": 0,
+             *       "opportunities_with_google": 0,
+             *       "opportunities_without_google": 0
+             *     }
+             */
+            google_data: components["schemas"]["GoogleDataSummaryModel"];
+            /**
+             * Search Trend
+             * @default []
+             */
+            search_trend: components["schemas"]["SearchTrendPointModel"][];
+            /**
+             * Top Searches
+             * @default []
+             */
+            top_searches: components["schemas"]["SearchQueryModel"][];
+            /**
+             * Revalidations
+             * @default []
+             */
+            revalidations: components["schemas"]["RevalidationModel"][];
+            /**
+             * @default {
+             *       "implemented": 0,
+             *       "measured": 0,
+             *       "improved": 0,
+             *       "neutral": 0,
+             *       "worsened": 0,
+             *       "insufficient_data": 0,
+             *       "waiting_7d": 0,
+             *       "waiting_google": 0,
+             *       "ready": 0
+             *     }
+             */
+            improvement_summary: components["schemas"]["ImprovementSummaryModel"];
+        };
+        /** UpdateProfileRequest */
+        UpdateProfileRequest: {
+            /** Name */
+            name: string;
+        };
+        /** UpdateUserRequest */
+        UpdateUserRequest: {
+            /** Name */
+            name?: string | null;
+            /** Email */
+            email?: string | null;
+        };
+        /** UserDetailModel */
+        UserDetailModel: {
+            /** Id */
+            id: number;
+            /** Email */
+            email: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Mfa Enabled
+             * @default false
+             */
+            is_mfa_enabled: boolean;
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
+            /** Last Login At */
+            last_login_at?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Permissions
+             * @default []
+             */
+            permissions: string[];
+            /**
+             * Must Change Password
+             * @default false
+             */
+            must_change_password: boolean;
         };
         /** UserModel */
         UserModel: {
@@ -1242,6 +2111,40 @@ export interface components {
              * @default false
              */
             is_mfa_enabled: boolean;
+        };
+        /** UserSummaryModel */
+        UserSummaryModel: {
+            /** Id */
+            id: number;
+            /** Email */
+            email: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Mfa Enabled
+             * @default false
+             */
+            is_mfa_enabled: boolean;
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
+            /** Last Login At */
+            last_login_at?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -2119,6 +3022,576 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountModel"];
+                };
+            };
+        };
+    };
+    account_update_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_change_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_mfa_setup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaSetupResponse"];
+                };
+            };
+        };
+    };
+    account_mfa_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_mfa_disable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+        };
+    };
+    users_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummaryModel"][];
+                };
+            };
+        };
+    };
+    users_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_enable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_disable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_roles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_force_password_reset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_reset_mfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionModel"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_sessions_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_activity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityEntryModel"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    roles_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolesEnvelope"];
+                };
+            };
+        };
+    };
+    permissions_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionsEnvelope"];
                 };
             };
         };
