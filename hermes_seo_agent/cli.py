@@ -293,8 +293,8 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="growing|declining|stable")
         if name == "outcomes":
             p.add_argument("action", nargs="?", default="list",
-                           choices=["list", "register", "measure", "recalibrate"],
-                           help="list | register | measure <id> | recalibrate")
+                           choices=["list", "register", "measure", "revalidate-due", "recalibrate"],
+                           help="list | register | measure <id> | revalidate-due | recalibrate")
             p.add_argument("keyword", nargs="?", default="",
                            help="keyword (register)")
             p.add_argument("--id", dest="item_id", type=int, default=None,
@@ -311,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--verdict", default="",
                            help="improved|neutral|worsened|insufficient_data (measure)")
             p.add_argument("--days", dest="measure_days", type=int, default=0,
-                           help="janela de medição: 28|56|90 (measure)")
+                           help="janela de medição: 7|28|56|90 (measure)")
             p.add_argument("--trend", default="",
                            help="growing|declining|stable (usado no register)")
         if name in {"audit", "report", "cycle"}:
@@ -1057,9 +1057,15 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     import contextlib
     import datetime
     import io
+    from .services.agent_runs import AgentRunService
 
     now = datetime.datetime.now()
     steps: list[str] = []
+    with Storage(config.sqlite_path) as run_storage:
+        scheduled_run_id = AgentRunService(run_storage).start_run(
+            "hermes-seo-agent", trigger="schedule", intent="normal_cycle",
+            mode="analyze", started_by="system",
+        )
 
     def run_silently(func, **kw) -> None:
         """Run an internal command swallowing its stdout (single JSON out)."""
@@ -1075,6 +1081,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
     if now.hour in inspect_hours:
         run_silently(_cmd_inspect, args=_ns(budget=0, dry_run=False, json=True), config=config)
+        if config.google_credentials:
+            run_silently(_cmd_demand, args=_ns(store=True, min_impressions=0), config=config)
+            run_silently(_cmd_outcomes, args=_ns(action="revalidate-due", limit=200),
+                         config=config)
+            steps.append("gsc-demand")
+            steps.append("revalidate-7d")
         # Background: mantém a fila de melhorias crescendo diariamente.
         run_silently(_cmd_post_audit, args=_ns(limit=20, min_impressions=50,
                                                write=False, json=True), config=config)
@@ -1118,6 +1130,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         "safe_actions": [],
         "approval_required": [],
     }
+    with Storage(config.sqlite_path) as run_storage:
+        AgentRunService(run_storage).complete(
+            scheduled_run_id, status="success", urls=0, findings=0,
+            opportunities=0, safe_fixes=0, executed=0,
+            summary={"steps": steps, "revalidation_window_days": 7},
+        )
     _emit(result, force_json=True)
     return 0
 
@@ -3599,9 +3617,59 @@ def _cmd_brief(args: argparse.Namespace, config: Any) -> int:
 
 
 def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
-    """M8: outcomes de oportunidades — registrar decisão humana, medir 28/56/90d
+    """M8: outcomes de oportunidades — registrar decisão humana, medir 7/28/56/90d
     e recalibrar pesos por regras simples (determinístico, sem modelo ainda)."""
     with Storage(config.sqlite_path) as storage:
+        if args.action == "revalidate-due":
+            items = storage.list_opportunity_outcomes(limit=getattr(args, "limit", 200) or 200)
+            due, measured, skipped = 0, 0, []
+            today = date.today()
+            gsc = SearchConsoleClient(config) if config.google_credentials else None
+            for outcome in items:
+                if outcome.get("human_decision") != "approved" or outcome["measured"].get("7d"):
+                    continue
+                ref = outcome.get("implemented_at")
+                if not ref:
+                    continue
+                implemented = datetime.datetime.fromisoformat(ref.replace("Z", "+00:00")).date()
+                elapsed = (today - implemented).days
+                if elapsed < 7:
+                    continue
+                due += 1
+                baseline = outcome.get("baseline") or {}
+                if not gsc or not baseline.get("gsc") or not outcome.get("url"):
+                    skipped.append({"id": outcome["id"], "reason": "conexão Google, URL ou baseline indisponível"})
+                    continue
+                try:
+                    from .report.impact import impact_deltas
+                    from .report.impact_ga4 import baseline_gsc, baseline_ga4, combined_verdict, engagement_deltas
+                    end = today
+                    start = end - timedelta(days=7)
+                    now_metrics = gsc.page_metrics(
+                        outcome["url"], start_date=start.isoformat(), end_date=end.isoformat()
+                    ) or None
+                    if not now_metrics:
+                        skipped.append({"id": outcome["id"], "reason": "Search Console ainda sem dados pós-implementação"})
+                        continue
+                    now_ga4 = storage.ga4_metrics_for_url(outcome["url"]) or None
+                    gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
+                    ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
+                    verdict = combined_verdict(gsc_deltas, ga4_deltas)
+                    storage.set_outcome_verdict(
+                        outcome["id"], verdict=verdict, days=7,
+                        result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
+                                "now_gsc": now_metrics, "now_ga4": now_ga4,
+                                "elapsed_days": elapsed, "observation": "preliminary_7d"},
+                    )
+                    measured += 1
+                except Exception as exc:  # noqa: BLE001 — item remains retryable
+                    skipped.append({"id": outcome["id"], "reason": str(exc)})
+            _emit({"status": "ok", "summary": {"command": "outcomes",
+                   "action": "revalidate-due", "due": due, "measured": measured,
+                   "skipped": len(skipped)}, "findings": [], "safe_actions": [],
+                   "approval_required": [], "skipped": skipped}, force_json=True)
+            return 0
+
         if args.action == "recalibrate":
             stats = storage.recalibration_stats()
             result = {
@@ -3737,9 +3805,9 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                              ensure_ascii=False))
             return 2
         days = getattr(args, "measure_days", 0) or 28
-        if days not in (28, 56, 90):
+        if days not in (7, 28, 56, 90):
             print(json.dumps({"status": "error",
-                              "error": "days deve ser 28, 56 ou 90"},
+                              "error": "days deve ser 7, 28, 56 ou 90"},
                              ensure_ascii=False))
             return 2
         items = storage.list_opportunity_outcomes(limit=1000)
@@ -3912,7 +3980,8 @@ def _cmd_serve(args: argparse.Namespace, config: Any) -> int:
     try:
         import uvicorn
         from .api.app import create_app  # API tipada (rotas/schemas/erros consistentes)
-        uvicorn.run(create_app(config.sqlite_path, config), host=args.host, port=args.port)
+        uvicorn.run(create_app(storage_path=config.sqlite_path, config=config),
+                    host=args.host, port=args.port)
     except ImportError:
         # Explicit compatibility fallback for constrained local environments.
         from .api import make_router_factory
