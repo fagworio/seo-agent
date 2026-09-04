@@ -142,6 +142,23 @@ class ImprovementCampaignService:
         return self.get(campaign_id)
 
     # -- leitura -------------------------------------------------------------
+    def resolve_fingerprints(self, urls: list[str]) -> dict[str, Any]:
+        """B2 — mapeia URLs de oportunidades para fingerprints de ações safe_fix.
+
+        A Caixa de trabalho lista oportunidades (URLs), mas a campanha é criada
+        a partir de fingerprints. Para cada URL, resolve a ação safe_fix pendente
+        mais recente (não-executada). Retorna {fingerprints: [...]}.
+        """
+        fingerprints: list[str] = []
+        for url in urls:
+            row = self.conn.execute(
+                "SELECT fingerprint FROM actions WHERE url = ? AND level = 'safe_fix' "
+                "AND status IN ('pending', 'approved') ORDER BY id DESC LIMIT 1",
+                (url,)).fetchone()
+            if row:
+                fingerprints.append(row[0])
+        return {"fingerprints": fingerprints}
+
     def preview(self, fingerprints: list[str], *, max_actions_per_run: int = 10) -> dict[str, Any]:
         """B1 — valida a seleção antes de criar a campanha.
 

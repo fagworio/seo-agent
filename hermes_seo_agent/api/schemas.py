@@ -456,6 +456,14 @@ class CampaignPreviewRequest(BaseModel):
     fingerprints: list[str]
 
 
+class CampaignResolveRequest(BaseModel):
+    urls: list[str]
+
+
+class CampaignResolveResponse(BaseModel):
+    fingerprints: list[str]
+
+
 class CampaignPreviewModel(BaseModel):
     eligible: list[dict[str, Any]] = []
     incompatible: list[dict[str, Any]] = []

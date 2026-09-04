@@ -2513,6 +2513,47 @@
         }
       }
     },
+    "/api/v1/campaigns/resolve": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Campaigns Resolve",
+        "operationId": "campaigns_resolve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResolveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{id}": {
       "get": {
         "tags": [
@@ -3716,6 +3757,38 @@
           "fingerprints"
         ],
         "title": "CampaignPreviewRequest"
+      },
+      "CampaignResolveRequest": {
+        "properties": {
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Urls"
+          }
+        },
+        "type": "object",
+        "required": [
+          "urls"
+        ],
+        "title": "CampaignResolveRequest"
+      },
+      "CampaignResolveResponse": {
+        "properties": {
+          "fingerprints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fingerprints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprints"
+        ],
+        "title": "CampaignResolveResponse"
       },
       "CampaignScheduleRequest": {
         "properties": {

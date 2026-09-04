@@ -29,6 +29,8 @@ from .schemas import (
     CampaignDetailModel,
     CampaignPreviewModel,
     CampaignPreviewRequest,
+    CampaignResolveRequest,
+    CampaignResolveResponse,
     CampaignsEnvelope,
     CampaignScheduleRequest,
     ChangeEmailRequest,
@@ -658,6 +660,12 @@ def campaigns_router() -> APIRouter:
         svc = ImprovementCampaignService(services.storage)
         return svc.preview(body.fingerprints,
                            max_actions_per_run=getattr(services.config, "max_safe_fix_per_cycle", 10))
+
+    @r.post("/resolve", response_model=CampaignResolveResponse, operation_id="campaigns_resolve")
+    def campaigns_resolve(body: CampaignResolveRequest, services: Services = Depends(get_services),
+                          session=Depends(authenticated("opportunity.review", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        return svc.resolve_fingerprints(body.urls)
 
     @r.get("/{id}", response_model=CampaignDetailModel, operation_id="campaigns_detail")
     def campaigns_detail(id: int, services: Services = Depends(get_services),

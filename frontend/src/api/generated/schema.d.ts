@@ -895,6 +895,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/campaigns/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Resolve */
+        post: operations["campaigns_resolve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{id}": {
         parameters: {
             query?: never;
@@ -1435,6 +1452,16 @@ export interface components {
         };
         /** CampaignPreviewRequest */
         CampaignPreviewRequest: {
+            /** Fingerprints */
+            fingerprints: string[];
+        };
+        /** CampaignResolveRequest */
+        CampaignResolveRequest: {
+            /** Urls */
+            urls: string[];
+        };
+        /** CampaignResolveResponse */
+        CampaignResolveResponse: {
             /** Fingerprints */
             fingerprints: string[];
         };
@@ -4620,6 +4647,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CampaignPreviewModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_resolve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignResolveResponse"];
                 };
             };
             /** @description Validation Error */

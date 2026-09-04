@@ -236,3 +236,12 @@ def test_internal_link_campaign_mock(tmp_path):
         "SELECT human_decision FROM opportunity_outcomes WHERE url='https://x.com/a/'").fetchone()
     assert out is not None and out[0] == "approved"
     storage.close()
+
+
+def test_resolve_fingerprints_by_url(tmp_path):
+    storage = Storage(str(tmp_path / "res.db"))
+    _seed_actions(storage)  # fp-title-1 (url a/), fp-title-2 (url b/)
+    svc = ImprovementCampaignService(storage)
+    res = svc.resolve_fingerprints(["https://x.com/a/", "https://x.com/inexistente/"])
+    assert res["fingerprints"] == ["fp-title-1"]
+    storage.close()
