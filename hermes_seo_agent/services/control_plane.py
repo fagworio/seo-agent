@@ -582,9 +582,9 @@ class ControlPlaneService:
         }
 
     # -- Fontes de dados ------------------------------------------------------
-    def integrations(self, *, live: bool = False) -> list[dict[str, Any]]:
+    def integrations(self, *, live: bool = False, source: str | None = None) -> list[dict[str, Any]]:
         return [s.to_dict() for s in
-                IntegrationStatusService(self.config, self.storage).check(live=live)]
+                IntegrationStatusService(self.config, self.storage).check(live=live, source=source)]
 
     # -- Atividade / auditoria ----------------------------------------------
     def activity(self, *, limit: int = 50) -> list[dict[str, Any]]:

@@ -76,7 +76,7 @@ class IntegrationStatusService:
         self.config = config
         self.storage = storage
 
-    def check(self, *, live: bool = False) -> list[SourceStatus]:
+    def check(self, *, live: bool = False, source: str | None = None) -> list[SourceStatus]:
         out = [
             self._wordpress(),
             self._sitemap(),
@@ -86,6 +86,8 @@ class IntegrationStatusService:
             self._crux(),
             self._external(),
         ]
+        if source:
+            out = [s for s in out if s.source == source]
         if live:
             self._live(out)
         return out

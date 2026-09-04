@@ -341,8 +341,8 @@ def read_routers() -> list[APIRouter]:
     @it.get("/integrations", response_model=IntegrationsEnvelope, operation_id="integrations_list")
     def integrations(services: Services = Depends(get_services),
                      session=Depends(authenticated("integration.read")),
-                     live: bool = False) -> dict[str, Any]:
-        return {"integrations": services.control.integrations(live=live)}
+                     live: bool = False, source: str | None = None) -> dict[str, Any]:
+        return {"integrations": services.control.integrations(live=live, source=source)}
     out.append(it)
 
     act = APIRouter(tags=["activity"])
