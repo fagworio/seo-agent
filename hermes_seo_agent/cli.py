@@ -1133,6 +1133,21 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                          config=config)
             steps.append("corpus-rebuild")
 
+    # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
+    #    motor novo de correção). O cron só acorda o runner.
+    with Storage(config.sqlite_path) as camp_storage:
+        from .services.improvement_campaigns import ImprovementCampaignService
+        csvc = ImprovementCampaignService(camp_storage, config=config)
+        due = csvc.list_campaigns(limit=200)
+        for c in due:
+            if c["status"] not in ("approved", "queued"):
+                continue
+            next_at = c.get("next_run_at") or ""
+            if next_at and next_at > now.isoformat():
+                continue
+            csvc.run(c["id"], actor="system")
+            steps.append(f"campaign-{c['id']}")
+
     result = {
         "status": "ok",
         "summary": {"command": "schedule", "steps": steps,
