@@ -210,8 +210,10 @@ def read_routers() -> list[APIRouter]:
             def _d(item_id: str, body: WorkItemDecisionModel,
                    services: Services = Depends(get_services),
                    session=Depends(authenticated("opportunity.review", csrf=True))) -> OkModel:
+                # action HTTP (approve/reject/snooze) -> status canônico (approved…)
+                status = _WORK_ITEM_ACTION_STATUS[action]
                 res = services.control.update_work_item_status(
-                    item_id, action, actor=session.email, reason=body.reason)
+                    item_id, status, actor=session.email, reason=body.reason)
                 if res is None:
                     raise NotFound("Item não encontrado ou transição inválida.")
                 return OkModel(ok=True)
@@ -629,6 +631,11 @@ def settings_router() -> APIRouter:
 _EDITORIAL_ACTION_STATUS = {
     "approve": "approved", "reject": "rejected", "snooze": "snoozed",
     "publish": "published", "measure": "measured",
+}
+
+# work-items HTTP action -> status canônico (update_work_item_status espera o status)
+_WORK_ITEM_ACTION_STATUS = {
+    "approve": "approved", "reject": "rejected", "snooze": "snoozed",
 }
 
 

@@ -1221,6 +1221,10 @@ export interface components {
             execution_mode: string;
             /** Schedule Policy */
             schedule_policy?: string | null;
+            /** Work Item Ids */
+            work_item_ids?: {
+                [key: string]: string;
+            };
         };
         /** CampaignDetailModel */
         CampaignDetailModel: {
@@ -1332,11 +1336,8 @@ export interface components {
             };
             /** Status */
             status: string;
-            /**
-             * Failure Reason
-             * @default
-             */
-            failure_reason: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
             /** Executed Run Id */
             executed_run_id?: number | null;
             /** Executed At */
@@ -1455,15 +1456,58 @@ export interface components {
             /** Fingerprints */
             fingerprints: string[];
         };
+        /** CampaignResolveItem */
+        CampaignResolveItem: {
+            /**
+             * Work Item Id
+             * @default
+             */
+            work_item_id: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+        };
         /** CampaignResolveRequest */
         CampaignResolveRequest: {
+            /** Items */
+            items?: components["schemas"]["CampaignResolveItem"][];
             /** Urls */
-            urls: string[];
+            urls?: string[];
         };
         /** CampaignResolveResponse */
         CampaignResolveResponse: {
-            /** Fingerprints */
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["CampaignResolvedItem"][];
+            /**
+             * Fingerprints
+             * @default []
+             */
             fingerprints: string[];
+        };
+        /** CampaignResolvedItem */
+        CampaignResolvedItem: {
+            /**
+             * Work Item Id
+             * @default
+             */
+            work_item_id: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /** Fingerprint */
+            fingerprint?: string | null;
+            /**
+             * State
+             * @default eligible
+             */
+            state: string;
         };
         /** CampaignScheduleRequest */
         CampaignScheduleRequest: {
@@ -2062,6 +2106,20 @@ export interface components {
             data_freshness: {
                 [key: string]: string;
             };
+            /**
+             * Lifecycle
+             * @default new
+             */
+            lifecycle: string;
+            /**
+             * Lifecycle Updated At
+             * @default
+             */
+            lifecycle_updated_at: string;
+            /** Lifecycle Detail */
+            lifecycle_detail?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** OrganicSummaryModel */
         OrganicSummaryModel: {

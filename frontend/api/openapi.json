@@ -3254,6 +3254,13 @@
               }
             ],
             "title": "Schedule Policy"
+          },
+          "work_item_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Work Item Ids"
           }
         },
         "type": "object",
@@ -3481,9 +3488,15 @@
             "title": "Status"
           },
           "failure_reason": {
-            "type": "string",
-            "title": "Failure Reason",
-            "default": ""
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
           },
           "executed_run_id": {
             "anyOf": [
@@ -3758,8 +3771,31 @@
         ],
         "title": "CampaignPreviewRequest"
       },
+      "CampaignResolveItem": {
+        "properties": {
+          "work_item_id": {
+            "type": "string",
+            "title": "Work Item Id",
+            "default": ""
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "CampaignResolveItem"
+      },
       "CampaignResolveRequest": {
         "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignResolveItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
           "urls": {
             "items": {
               "type": "string"
@@ -3769,26 +3805,61 @@
           }
         },
         "type": "object",
-        "required": [
-          "urls"
-        ],
         "title": "CampaignResolveRequest"
       },
       "CampaignResolveResponse": {
         "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignResolvedItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "default": []
+          },
           "fingerprints": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Fingerprints"
+            "title": "Fingerprints",
+            "default": []
           }
         },
         "type": "object",
-        "required": [
-          "fingerprints"
-        ],
         "title": "CampaignResolveResponse"
+      },
+      "CampaignResolvedItem": {
+        "properties": {
+          "work_item_id": {
+            "type": "string",
+            "title": "Work Item Id",
+            "default": ""
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "eligible"
+          }
+        },
+        "type": "object",
+        "title": "CampaignResolvedItem"
       },
       "CampaignScheduleRequest": {
         "properties": {
@@ -4799,6 +4870,28 @@
             "type": "object",
             "title": "Data Freshness",
             "default": {}
+          },
+          "lifecycle": {
+            "type": "string",
+            "title": "Lifecycle",
+            "default": "new"
+          },
+          "lifecycle_updated_at": {
+            "type": "string",
+            "title": "Lifecycle Updated At",
+            "default": ""
+          },
+          "lifecycle_detail": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Detail"
           }
         },
         "type": "object",

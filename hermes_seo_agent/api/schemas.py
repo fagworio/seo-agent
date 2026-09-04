@@ -104,6 +104,10 @@ class OpportunityModel(BaseModel):
     top_queries: list[dict[str, Any]] = []
     link_context: dict[str, Any] = {}
     data_freshness: dict[str, str] = {}
+    # lifecycle canônico (Caixa = fila de decisão)
+    lifecycle: str = "new"
+    lifecycle_updated_at: str = ""
+    lifecycle_detail: dict[str, Any] | None = None
 
 
 class OrganicSummaryModel(BaseModel):
@@ -412,7 +416,7 @@ class CampaignItemModel(BaseModel):
     after: dict[str, Any] = {}
     fix: dict[str, Any] = {}
     status: str
-    failure_reason: str = ""
+    failure_reason: str | None = None
     executed_run_id: int | None = None
     executed_at: str | None = None
     verified_at: str | None = None
