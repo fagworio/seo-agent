@@ -183,6 +183,11 @@ def test_reconcile_moves_content_brief_with_executed_action(tmp_path):
     counts = storage.reconcile_work_items()
     lc = storage.get_work_item_lifecycle("content_brief:1")
     assert lc is not None and lc["status"] == "implemented"
+    # item 7: a reconciliação garante o outcome para aparecer em Melhorias
+    out = storage.conn.execute(
+        "SELECT 1 FROM opportunity_outcomes WHERE url = 'https://x.com/sera-que-wolverine-irmaos/' "
+        "AND human_decision = 'approved'").fetchone()
+    assert out is not None
     cp = ControlPlaneService(storage, _config())
     assert all(i["id"] != "content_brief:1" for i in cp.work_items(source="content_brief"))
     storage.close()

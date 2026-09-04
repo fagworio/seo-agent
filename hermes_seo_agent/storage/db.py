@@ -921,13 +921,38 @@ class Storage:
             counts[status] = counts.get(status, 0) + 1
             seen.add(wid)
 
+        def _ensure_outcome(wid: str, action_url: str, url: str) -> None:
+            """Item 7 — garante que a ação executada gere um opportunity_outcome
+            (para o item aparecer em Melhorias/Aguardando validação, não sumir)."""
+            if dry_run:
+                return
+            a = self.conn.execute(
+                "SELECT rule_id, before_json, after_json, url FROM actions "
+                "WHERE url = ? AND level = 'safe_fix' AND status = 'executed' AND url IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1", (action_url,)).fetchone()
+            if a is None:
+                return
+            exists = self.conn.execute(
+                "SELECT 1 FROM opportunity_outcomes WHERE url = ? "
+                "AND human_decision = 'approved' LIMIT 1", (a[3],)).fetchone()
+            if exists:
+                return
+            before = json.loads(a[1]) if a[1] else {}
+            after = json.loads(a[2]) if a[2] else {}
+            vals = list(after.values())
+            self.record_implemented_outcome(
+                url=a[3], action_type=a[0],
+                implemented_action=str(vals[0]) if vals else a[0],
+                before=before, after=after, implemented_at=_now(),
+                work_item_id=wid if wid and not wid.startswith("content_brief:") else wid)
+
         # (a) caminho preciso por work_item_id (ações novas)
-        for status in ("executed",):
-            for wid, url in self.conn.execute(
-                "SELECT a.work_item_id, a.url FROM actions a "
-                "WHERE a.level = 'safe_fix' AND a.status = ? AND a.work_item_id IS NOT NULL",
-                (status,)).fetchall():
-                _set(wid, "implemented", url)
+        for wid, url in self.conn.execute(
+            "SELECT a.work_item_id, a.url FROM actions a "
+            "WHERE a.level = 'safe_fix' AND a.status = 'executed' AND a.work_item_id IS NOT NULL"
+        ).fetchall():
+            _set(wid, "implemented", url)
+            _ensure_outcome(wid, url, url)
         for wid, url in self.conn.execute(
             "SELECT a.work_item_id, a.url FROM actions a "
             "WHERE a.level = 'safe_fix' AND a.status IN ('rejected','reverted','cancelled') "
@@ -959,6 +984,7 @@ class Storage:
                 (url,)).fetchone()
             if executed:
                 _set(wid, "implemented", url)
+                _ensure_outcome(wid, url, url)
             elif rejected:
                 _set(wid, "rejected", url)
 
@@ -981,6 +1007,32 @@ class Storage:
             best = max(((len(w & tw), u) for u, tw in title_urls), default=(0, ""))
             if best[0] >= 3:
                 _set(wid, "implemented", best[1])
+                _ensure_outcome(wid, best[1], url)
+
+        # (d) backfill: toda ação executed sem opportunity_outcome ganha um
+        #     outcome, para o item aparecer em Melhorias/Aguardando validação
+        #     (não sumir da Caixa nem das Melhorias).
+        for a in self.conn.execute(
+            "SELECT work_item_id, rule_id, before_json, after_json, url FROM actions "
+            "WHERE level = 'safe_fix' AND status = 'executed' AND url IS NOT NULL"
+        ).fetchall():
+            a_wid, rule_id, before_j, after_j, a_url = a
+            exists = self.conn.execute(
+                "SELECT 1 FROM opportunity_outcomes WHERE url = ? "
+                "AND human_decision = 'approved' LIMIT 1", (a_url,)).fetchone()
+            if exists:
+                continue
+            if dry_run:
+                counts["implemented"] = counts.get("implemented", 0)
+                continue
+            before = json.loads(before_j) if before_j else {}
+            after = json.loads(after_j) if after_j else {}
+            vals = list(after.values())
+            self.record_implemented_outcome(
+                url=a_url, action_type=rule_id,
+                implemented_action=str(vals[0]) if vals else rule_id,
+                before=before, after=after, implemented_at=_now(),
+                work_item_id=a_wid if a_wid else None)
         self.conn.commit()
         return counts
 
