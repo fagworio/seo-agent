@@ -336,6 +336,15 @@ def account_router() -> APIRouter:
         services.auth.update_profile(session.user_id, body.name)
         return {"ok": True}
 
+    @r.post("/change-email", response_model=OkModel, operation_id="account_change_email")
+    def account_change_email(body: ChangeEmailRequest, services: Services = Depends(get_services),
+                             session=Depends(authenticated(csrf=True))) -> dict[str, Any]:
+        try:
+            services.auth.change_email(session.user_id, body.new_email, body.password)
+        except AuthError as exc:
+            raise BadRequest(str(exc))
+        return {"ok": True}
+
     @r.post("/change-password", response_model=OkModel, operation_id="account_change_password")
     def account_change_password(body: ChangePasswordRequest,
                                 services: Services = Depends(get_services),

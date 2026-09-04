@@ -127,6 +127,29 @@ def test_admin_users_permissions_and_guards(tmp_path):
     assert any(e["event"] == "USER_CREATED" for e in act)
 
 
+def test_change_email_requires_current_password(tmp_path):
+    db = tmp_path / "u1f.db"
+    _prepare(db)
+    client = TestClient(create_app(storage_path=str(db), config=_cfg()))
+    csrf = _login(client, "op@x.com", PWD, db)
+    # senha atual errada -> 400
+    r = client.post("/api/v1/account/change-email",
+                    json={"new_email": "novo@x.com", "password": "errada"},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400 and "senha" in r.json()["error"]["message"].lower()
+    # correta -> ok
+    r = client.post("/api/v1/account/change-email",
+                    json={"new_email": "novo@x.com", "password": PWD},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200
+    assert client.get("/api/v1/account").json()["email"] == "novo@x.com"
+    # email já em uso -> 400
+    r = client.post("/api/v1/account/change-email",
+                    json={"new_email": "admin@x.com", "password": PWD},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400
+
+
 def test_admin_cannot_disable_self_or_last_admin(tmp_path):
     db = tmp_path / "u1e.db"
     _prepare(db)

@@ -1,5 +1,7 @@
 /** Camada de API tipada (fronteira única). Nunca chame fetch em componentes. */
 
+import type { components } from "../api/generated/schema";
+
 export interface ApiErrorBody {
   error: { code: string; message: string; request_id: string };
 }
@@ -47,6 +49,8 @@ async function request<T>(
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown, csrf?: string) => request<T>("POST", path, body, csrf),
+  patch: <T>(path: string, body?: unknown, csrf?: string) => request<T>("PATCH", path, body, csrf),
+  put: <T>(path: string, body?: unknown, csrf?: string) => request<T>("PUT", path, body, csrf),
   del: <T>(path: string, csrf?: string) => request<T>("DELETE", path, undefined, csrf),
 };
 
@@ -99,7 +103,69 @@ export interface TodayResponse {
     recent_runs: AgentRun[];
     top_opportunities: Opportunity[];
     integration_warnings: IntegrationSource[];
+    google_data: GoogleDataSummary;
+    search_trend: SearchTrendPoint[];
+    top_searches: SearchQuerySummary[];
+    revalidations: Revalidation[];
+    improvement_summary: ImprovementSummary;
   };
+}
+
+export interface SearchTrendPoint {
+  window_start: string;
+  window_end: string;
+  clicks: number;
+  impressions: number;
+  ctr: number | null;
+  position: number | null;
+  pages: number;
+  queries: number;
+}
+
+export interface SearchQuerySummary extends SearchTrendPoint {
+  query: string;
+  intent: string;
+}
+
+export interface GoogleDataSummary {
+  data_status: string;
+  connection_configured: boolean;
+  gsc_window_start: string;
+  gsc_window_end: string;
+  gsc_rows: number;
+  ga4_rows: number;
+  ga4_window_end: string;
+  ga4_collected_at: string;
+  opportunities_total: number;
+  opportunities_with_google: number;
+  opportunities_without_google: number;
+}
+
+export interface Revalidation {
+  id: number;
+  keyword: string;
+  opportunity_type: string;
+  url: string;
+  implemented_action: string;
+  implemented_at: string;
+  due_at: string;
+  elapsed_days: number;
+  state: "waiting_7d" | "waiting_google" | "ready" | "measured" | string;
+  baseline_status: string;
+  latest_google_window_end: string;
+  verdict: string;
+}
+
+export interface ImprovementSummary {
+  implemented: number;
+  measured: number;
+  improved: number;
+  neutral: number;
+  worsened: number;
+  insufficient_data: number;
+  waiting_7d: number;
+  waiting_google: number;
+  ready: number;
 }
 
 export interface Opportunity {
@@ -117,6 +183,23 @@ export interface Opportunity {
   action_class?: "observe" | "safe_fix" | "approval_required" | string;
   risk?: string;
   rollback_available?: boolean;
+  decision_type?: "title_meta" | "internal_link" | "content" | "review" | string;
+  related_recommendations?: string[];
+  score_breakdown?: Record<string, unknown>;
+  gsc_metrics?: Record<string, unknown>;
+  ga4_metrics?: Record<string, unknown>;
+  measurement_state?: string;
+  projection?: Record<string, unknown>;
+  top_queries?: Array<{ query: string; intent?: string; clicks: number; impressions: number; ctr: number | null; position: number | null }>;
+  link_context?: {
+    source_url?: string; target_url?: string; anchor?: string;
+    source_title?: string; target_title?: string; suggested_anchor?: string;
+    shared_terms?: string[]; source_excerpt?: string; insertion_instruction?: string;
+    anchor_origin?: string; relevance?: "strong" | "moderate" | "weak" | string;
+    confidence?: string; target_inbound_links?: number; source_outbound_links?: number;
+    google_benefits?: string[]; site_benefits?: string[]; verification_steps?: string[];
+  };
+  data_freshness?: Record<string, string>;
 }
 
 export interface AgentRun {
@@ -264,6 +347,7 @@ export interface TechnicalFinding {
 export interface Correction {
   fingerprint: string;
   rule_id: string;
+  label: string;
   url: string;
   status: string;
   before: Record<string, unknown> | null;
@@ -282,12 +366,18 @@ export interface ActivityEntry {
 }
 
 export interface Experiment {
+  id: number;
   keyword: string;
   opportunity_type: string;
   url: string;
   implemented_action: string;
   implemented_at: string;
   baseline: Record<string, unknown>;
+  current: Record<string, unknown>;
+  delta: Record<string, unknown>;
+  forecast: Record<string, unknown>;
+  latest_result_window: string;
+  revalidation: Partial<Revalidation>;
   verdict: string | null;
   windows: Record<string, boolean>;
   measurement_state: string;
@@ -299,3 +389,10 @@ export interface Experiment {
 // Pydantic do backend são ampliados; enquanto isso, `components` já expõe o
 // contrato OpenAPI para uso direto.
 export type { components, paths } from "../api/generated/schema";
+
+// -- U1: Account & User management (do OpenAPI gerado) ----------------------
+export type Account = components["schemas"]["AccountModel"];
+export type UserSummary = components["schemas"]["UserSummaryModel"];
+export type UserDetail = components["schemas"]["UserDetailModel"];
+export type Role = components["schemas"]["RoleModel"];
+export type SessionInfo = components["schemas"]["SessionModel"];

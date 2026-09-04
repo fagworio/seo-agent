@@ -482,6 +482,23 @@ export interface paths {
         patch: operations["account_update_profile"];
         trace?: never;
     };
+    "/api/v1/account/change-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Change Email */
+        post: operations["account_change_email"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/account/change-password": {
         parameters: {
             query?: never;
@@ -899,6 +916,13 @@ export interface components {
         AgentsEnvelope: {
             /** Agents */
             agents: components["schemas"]["AgentModel"][];
+        };
+        /** ChangeEmailRequest */
+        ChangeEmailRequest: {
+            /** New Email */
+            new_email: string;
+            /** Password */
+            password: string;
         };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
@@ -3056,6 +3080,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_change_email: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeEmailRequest"];
             };
         };
         responses: {

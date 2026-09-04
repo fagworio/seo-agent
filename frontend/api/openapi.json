@@ -1307,6 +1307,47 @@
         }
       }
     },
+    "/api/v1/account/change-email": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Account Change Email",
+        "operationId": "account_change_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/account/change-password": {
       "post": {
         "tags": [
@@ -2314,6 +2355,26 @@
           "agents"
         ],
         "title": "AgentsEnvelope"
+      },
+      "ChangeEmailRequest": {
+        "properties": {
+          "new_email": {
+            "type": "string",
+            "minLength": 3,
+            "title": "New Email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "new_email",
+          "password"
+        ],
+        "title": "ChangeEmailRequest"
       },
       "ChangePasswordRequest": {
         "properties": {
