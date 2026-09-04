@@ -94,7 +94,7 @@ class Executor:
                         cycle_id=cycle_id, rule_id=rule_id, url=url,
                         level="safe_fix", fingerprint=fingerprint,
                         before=before, after=after, rollback=rollback,
-                        status="unverified",
+                        status="unverified", fix=fix,
                     )
                     self.storage.log_audit(
                         actor="executor",
@@ -118,6 +118,7 @@ class Executor:
                 before=before,
                 after=after,
                 rollback=rollback,
+                fix=fix,
             )
             self.storage.log_audit(
                 actor="executor",

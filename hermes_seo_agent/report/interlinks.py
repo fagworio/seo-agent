@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -137,3 +138,29 @@ def _in_link_counts(existing_out: dict[str, set[str]]) -> dict[str, int]:
         for target in targets:
             counts[target] = counts.get(target, 0) + 1
     return counts
+
+
+def build_interlink_fix(*, source_url: str, target_url: str,
+                        source_context: dict[str, Any], anchor: str, excerpt: str,
+                        post_id: int | None) -> dict[str, Any] | None:
+    """B10 — gera o fix spec `wp_post_content_patch` para uma sugestão.
+
+    Determinístico e seguro: carrega o hash do conteúdo atual (precondição de
+    stale), o trecho de contexto e a inserção (âncora + link). Só gera quando há
+    post_id + âncora + corpo; caso contrário retorna None (não executável).
+    """
+    body = source_context.get("body_text", "") or ""
+    if not body or not post_id or not anchor:
+        return None
+    expected_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    insertion = f' <a href="{target_url}">{anchor}</a>'
+    context_before = (excerpt or "")[:120]
+    return {
+        "type": "wp_post_content_patch",
+        "post_id": post_id,
+        "expected_content_hash": expected_hash,
+        "target_url": target_url,
+        "anchor": anchor,
+        "context_before": context_before,
+        "insertion": insertion,
+    }

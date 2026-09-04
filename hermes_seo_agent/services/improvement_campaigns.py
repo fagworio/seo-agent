@@ -94,7 +94,7 @@ class ImprovementCampaignService:
         items = []
         for fp in fingerprints:
             row = self.conn.execute(
-                "SELECT rule_id, url, before_json, after_json, rollback_json, status "
+                "SELECT rule_id, url, before_json, after_json, rollback_json, fix_json, status "
                 "FROM actions WHERE fingerprint = ?", (fp,)
             ).fetchone()
             if row is None:
@@ -104,7 +104,9 @@ class ImprovementCampaignService:
             before = json.loads(row[2]) if row[2] else {}
             after = json.loads(row[3]) if row[3] else {}
             rollback = json.loads(row[4]) if row[4] else {}
-            fix = forward_fix(after, rollback)
+            # Se a ação persistiu o fix forward completo (ex.: wp_post_content_patch),
+            # usa-o; senão reconstrói a partir de rollback+after.
+            fix = json.loads(row[5]) if row[5] else forward_fix(after, rollback)
             if fix is None:
                 return None  # sem fix forward suportado
             items.append({
@@ -151,16 +153,17 @@ class ImprovementCampaignService:
         missing: list[str] = []
         for fp in fingerprints:
             row = self.conn.execute(
-                "SELECT rule_id, url, before_json, after_json, rollback_json, status "
+                "SELECT rule_id, url, before_json, after_json, rollback_json, fix_json, status "
                 "FROM actions WHERE fingerprint = ?", (fp,)).fetchone()
             if row is None:
                 missing.append(fp)
                 continue
-            rule_id, url, before_j, after_j, rollback_j, status = row
+            rule_id, url, before_j, after_j, rollback_j = row[0], row[1], row[2], row[3], row[4]
+            fix_j, status = row[5], row[6]
             before = json.loads(before_j) if before_j else {}
             after = json.loads(after_j) if after_j else {}
             rollback = json.loads(rollback_j) if rollback_j else {}
-            fix = forward_fix(after, rollback)
+            fix = json.loads(fix_j) if fix_j else forward_fix(after, rollback)
             if fix is None:
                 incompatible.append({"fingerprint": fp, "reason": "sem fix suportado"})
                 continue
@@ -188,6 +191,8 @@ class ImprovementCampaignService:
     def _risk(rule_id: str) -> str:
         if rule_id in ("title_manual", "title_opportunity", "image_no_alt"):
             return "low"
+        if rule_id in ("internal_link", "interlink"):
+            return "review_required"   # B10: links internos exigem revisão humana
         return "review_required"
 
     def list_campaigns(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:

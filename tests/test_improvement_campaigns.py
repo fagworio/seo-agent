@@ -186,3 +186,53 @@ def test_run_campaign_links_outcome_for_revalidation(tmp_path):
         "SELECT human_decision, url FROM opportunity_outcomes WHERE url='https://x.com/a/'").fetchone()
     assert row is not None and row[0] == "approved"
     storage.close()
+
+
+def test_internal_link_campaign_mock(tmp_path):
+    """B10 — mock do fluxo de campanha de links internos (WP fake)."""
+    from hermes_seo_agent.config import Config
+    from hermes_seo_agent.executor.executor import Executor, _fingerprint
+    from hermes_seo_agent.report.interlinks import build_interlink_fix
+
+    body = "<p>O novo trailer divide opiniões. Veja o elenco completo.</p>"
+    fix = build_interlink_fix(source_url="https://x.com/a/", target_url="https://x.com/b/",
+                              source_context={"body_text": body, "title": "Filme X"},
+                              anchor="elenco completo", excerpt="Veja o elenco completo.",
+                              post_id=7)
+    assert fix is not None and fix["type"] == "wp_post_content_patch"
+
+    storage = Storage(str(tmp_path / "il.db"))
+    fp = _fingerprint("internal_link", "https://x.com/a/", "link interno", fix)
+    storage.record_action(cycle_id="c1", rule_id="internal_link", url="https://x.com/a/",
+                          level="safe_fix", fingerprint=fp,
+                          before={"content": body}, after={"content": body}, rollback=fix,
+                          status="pending", fix=fix)
+
+    svc = ImprovementCampaignService(storage)
+    camp = svc.create("Links internos", "internal_link", [fp], created_by="admin@x.com",
+                      max_actions_per_run=5)
+    assert camp is not None and camp["items"][0]["fix"]["type"] == "wp_post_content_patch"
+    cid = camp["id"]
+    svc.approve(cid, approved_by="admin@x.com")
+
+    class FakeWP:
+        def __init__(self): self.content = body; self.writes = []
+        def get_post(self, pid): return {"id": pid, "content": {"raw": self.content}}
+        def update_post_content(self, pid, content): self.writes.append(content); self.content = content
+
+    wp = FakeWP()
+    config = Config(wordpress_url="http://localhost", app_user="u", app_password="p",
+                    dry_run=False, sqlite_path=str(tmp_path / "il.db"))
+
+    def fake_apply(actions):
+        return Executor(config, wp, storage).apply_safe_actions(actions, cycle_id="c1", max_actions=5)
+
+    run = svc.run(cid, actor="admin@x.com", apply=fake_apply)
+    assert run["status"] == "completed"
+    assert run["executed_items"] == 1
+    assert "https://x.com/b/" in wp.content       # link inserido
+    assert len(wp.writes) == 1
+    out = storage.conn.execute(
+        "SELECT human_decision FROM opportunity_outcomes WHERE url='https://x.com/a/'").fetchone()
+    assert out is not None and out[0] == "approved"
+    storage.close()

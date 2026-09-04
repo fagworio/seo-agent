@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS actions (
     before_json TEXT,
     after_json TEXT,
     rollback_json TEXT,
+    fix_json TEXT,
     executed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS inspection_queue (
@@ -577,6 +578,9 @@ class Storage:
         except Exception:
             pass
         additions = {
+            "actions": [
+                ("fix_json", "TEXT"),
+            ],
             "editorial_backlog": [
                 ("responsible", "TEXT"), ("deadline", "TEXT"),
                 ("rejection_reason", "TEXT"),
@@ -717,6 +721,7 @@ class Storage:
         after: Any,
         rollback: Any,
         status: str = "executed",
+        fix: Any = None,
     ) -> None:
         """Register an executed (or UNVERIFIED) action.
 
@@ -728,17 +733,19 @@ class Storage:
         """
         self.conn.execute(
             "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, "
-            "before_json, after_json, rollback_json, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "before_json, after_json, rollback_json, fix_json, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(fingerprint) DO UPDATE SET "
             "cycle_id = excluded.cycle_id, status = excluded.status, "
             "before_json = excluded.before_json, after_json = excluded.after_json, "
-            "rollback_json = excluded.rollback_json, executed_at = excluded.executed_at",
+            "rollback_json = excluded.rollback_json, fix_json = excluded.fix_json, "
+            "executed_at = excluded.executed_at",
             (
                 cycle_id, rule_id, url, level, status, fingerprint,
                 json.dumps(before, ensure_ascii=False, default=str),
                 json.dumps(after, ensure_ascii=False, default=str),
                 json.dumps(rollback, ensure_ascii=False, default=str),
+                json.dumps(fix, ensure_ascii=False, default=str) if fix else None,
                 _now(),
             ),
         )
