@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Experiment, Revalidation } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
@@ -43,12 +43,19 @@ function Improvements() {
 
 function ImprovementDrawer({ item, close }: { item: Experiment; close: () => void }) {
   const before = group(item.baseline, "gsc"); const after = group(item.current, "gsc"); const delta = group(item.delta, "gsc"); const revalidation = item.revalidation;
+  const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
+  const canRevalidate = me.data?.user.permissions.includes("agent.run") ?? false;
+  const revalidate = useMutation({
+    mutationFn: () => api.post<{ status: string; verdict?: string | null; reason?: string }>(`/revalidations/${item.id}/revalidate`, {}, me.data?.csrf_token),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["improvements"] }),
+  });
   return <Drawer title="Detalhes da melhoria" onClose={close}><div className="flex justify-between gap-3"><div><StatusBadge item={item} /><h2 className="mt-2 text-lg font-semibold">{item.keyword || friendlyType(item.opportunity_type)}</h2><p className="mt-1 text-sm text-[var(--muted)]">{item.implemented_action}</p></div><Button size="sm" variant="ghost" onClick={close}>Fechar</Button></div>
     <section className="mt-5"><h3 className="font-semibold">Implementação</h3><dl className="mt-2 space-y-1 text-sm"><Row label="Data" value={dateLabel(item.implemented_at)} /><Row label="Página" value={item.url || "Não informada"} /><Row label="Tipo" value={friendlyType(item.opportunity_type)} /></dl></section>
     <MetricSection title="Antes — baseline Google" values={before} />
     <section className="mt-5"><h3 className="font-semibold">Previsão</h3>{Object.keys(item.forecast).length ? <div className="mt-2 grid grid-cols-2 gap-2"><Metric label="CTR esperado" value={formatPercent(item.forecast.expected_ctr)} /><Metric label="Oportunidade de cliques" value={formatNumber(item.forecast.gap_clicks)} /><Metric label="Conservador" value={formatNumber(item.forecast.conservative_clicks)} /><Metric label="Cenário realista" value={formatNumber(item.forecast.realistic_clicks)} /></div> : <Missing text="Nenhuma projeção foi registrada para esta melhoria." />}<p className="mt-2 text-xs text-[var(--muted)]">Previsão é cenário, não resultado garantido.</p></section>
     <MetricSection title={`Resultado observado${item.latest_result_window ? ` — ${item.latest_result_window}` : ""}`} values={after} delta={delta} />
-    <section className="mt-5"><h3 className="font-semibold">Revalidação</h3><div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-sm"><Row label="Estado" value={revalidationLabel(revalidation.state)} /><Row label="Revisar a partir de" value={dateLabel(revalidation.due_at)} /><Row label="Baseline" value={revalidation.baseline_status === "available" ? "Disponível" : "Ausente"} /><Row label="Última janela Google" value={dateLabel(revalidation.latest_google_window_end)} /></div><p className="mt-2 text-xs text-[var(--muted)]">A revalidação automática só grava resultado quando existe baseline e uma resposta válida do Google.</p></section>
+    <section className="mt-5"><h3 className="font-semibold">Revalidação</h3><div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-sm"><Row label="Estado" value={revalidationLabel(revalidation.state)} /><Row label="Revisar a partir de" value={dateLabel(revalidation.due_at)} /><Row label="Baseline" value={revalidation.baseline_status === "available" ? "Disponível" : "Ausente"} /><Row label="Última janela Google" value={dateLabel(revalidation.latest_google_window_end)} /></div><p className="mt-2 text-xs text-[var(--muted)]">A revalidação só grava resultado quando existe baseline e uma resposta válida do Google.</p>{revalidation.state === "ready" && <div className="mt-3 flex flex-col items-end gap-2"><Button size="sm" onClick={() => revalidate.mutate()} disabled={!canRevalidate || revalidate.isPending}>{revalidate.isPending ? "Revalidando…" : "Revalidar agora"}</Button>{!canRevalidate && <p className="text-xs text-[var(--muted)]">Requer a permissão agent.run.</p>}{revalidate.isError && <p className="text-xs text-[var(--danger)]">{(revalidate.error as Error).message}</p>}{revalidate.isSuccess && <p className="text-xs text-[var(--success)]">Revalidação registrada.</p>}</div>}{revalidation.state && revalidation.state !== "ready" && revalidation.state !== "measured" && <p className="mt-2 text-xs text-[var(--muted)]">⚠ Revalidação disponível quando houver dados posteriores à alteração.</p>}</section>
     <div className="mt-5 flex gap-2"><Link href="/experiments"><Button variant="secondary">Ver experimentos</Button></Link><Link href={`/pages/${encodeURIComponent(item.url)}`}><Button variant="secondary">Ver histórico da página</Button></Link></div>
   </Drawer>;
 }
