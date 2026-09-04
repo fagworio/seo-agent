@@ -487,6 +487,12 @@ CREATE TABLE IF NOT EXISTS agent_run_events (
     detail_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_run ON agent_run_events(run_id);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT
+);
 """
 
 
@@ -613,6 +619,23 @@ class Storage:
                 json.dumps(before, ensure_ascii=False, default=str),
                 json.dumps(after, ensure_ascii=False, default=str),
             ),
+        )
+        self.conn.commit()
+
+    # -- app settings (chave/valor) ------------------------------------------
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        row = self.conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row and row[0] is not None else default
+
+    def set_setting(self, key: str, value: str, *, now: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (key, value, now or _now()),
         )
         self.conn.commit()
 

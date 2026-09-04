@@ -27,6 +27,20 @@ def _cfg():
         auth_max_attempts=5,
         auth_attempt_window_seconds=900,
         mfa_issuer="SEO Agent",
+        # estes testes exercitam o caminho de MFA => gate ativo via config;
+        # o default REAL é OFF (testes de default-off usam _cfg_off abaixo).
+        mfa_login_required=True,
+    )
+
+
+def _cfg_off():
+    return SimpleNamespace(
+        session_idle_seconds=8 * 3600,
+        session_absolute_seconds=7 * 24 * 3600,
+        auth_max_attempts=5,
+        auth_attempt_window_seconds=900,
+        mfa_issuer="SEO Agent",
+        mfa_login_required=False,
     )
 
 
@@ -38,6 +52,13 @@ def _make(db):
     clock = FakeClock()
     storage = Storage(str(db))
     svc = _svc(storage, clock)
+    return storage, svc, clock
+
+
+def _make_off(db):
+    clock = FakeClock()
+    storage = Storage(str(db))
+    svc = AuthService(storage, config=_cfg_off(), hasher=PasswordHasher(n=2 ** 12), clock=clock)
     return storage, svc, clock
 
 
@@ -175,4 +196,52 @@ def test_change_password_revokes_sessions(tmp_path):
     uid = svc.store.get_user_by_email("v@x.com")["id"]
     svc.change_password(uid, "nova-senha-bem-longa-123")
     assert svc.validate_session(token) is None
+    storage.close()
+
+
+def test_mfa_gate_off_by_default_allows_password_login(tmp_path):
+    """Default (gate OFF): login padrão mesmo com MFA cadastrado na conta."""
+    storage, svc, _ = _make_off(tmp_path / "off.db")
+    svc.create_user("op@x.com", "O", "senha-bem-longa-12345", ["operator"],
+                    mfa_secret="5DGXU53YEWVAENWS53HV53APWPGGHMAW")
+    res = svc.login("op@x.com", "senha-bem-longa-12345")
+    assert res.ok is True
+    assert res.requires_mfa is False          # NÃO pede o 2º fator
+    assert res.session_token is not None      # login padrão direto
+    storage.close()
+
+
+def test_mfa_gate_can_be_toggled_and_persisted(tmp_path):
+    """set_mfa_login_required alterna o gate em app_settings e audita."""
+    storage, svc, _ = _make_off(tmp_path / "tog.db")
+    # gate off por padrão
+    assert svc.mfa_login_required() is False
+    # ligar
+    svc.set_mfa_login_required(True, actor="admin@x.com")
+    assert svc.mfa_login_required() is True
+    # persistiu (nova instância lê o mesmo store)
+    storage2 = Storage(str(tmp_path / "tog.db"))
+    svc2 = AuthService(storage2, config=_cfg_off(), hasher=PasswordHasher(n=2 ** 12))
+    assert svc2.mfa_login_required() is True
+    # audit registrado
+    log = storage2.conn.execute(
+        "SELECT action_type, entity FROM audit_log WHERE action_type='SETTINGS_MFA_LOGIN'"
+    ).fetchone()
+    assert log is not None and log[1] == "mfa_login_required"
+    # desligar
+    svc2.set_mfa_login_required(False, actor="admin@x.com")
+    assert svc2.mfa_login_required() is False
+    storage.close()
+    storage2.close()
+
+
+def test_mfa_gate_on_requires_factor(tmp_path):
+    """Com o gate LIGADO, conta com MFA cadastrado exige o 2º fator no login."""
+    storage, svc, _ = _make(tmp_path / "on.db")   # _make usa _cfg() => gate ON
+    svc.create_user("op@x.com", "O", "senha-bem-longa-12345", ["operator"],
+                    mfa_secret="5DGXU53YEWVAENWS53HV53APWPGGHMAW")
+    res = svc.login("op@x.com", "senha-bem-longa-12345")
+    assert res.ok is True
+    assert res.requires_mfa is True
+    assert res.session_token is None
     storage.close()

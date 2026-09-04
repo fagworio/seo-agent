@@ -2145,6 +2145,68 @@
           }
         }
       }
+    },
+    "/api/v1/settings/auth": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Settings Auth",
+        "operationId": "settings_auth",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSettingsModel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/auth/mfa-login": {
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Settings Auth Mfa Login",
+        "operationId": "settings_auth_mfa_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSettingsModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2479,6 +2541,17 @@
           "agents"
         ],
         "title": "AgentsEnvelope"
+      },
+      "AuthSettingsModel": {
+        "properties": {
+          "mfa_login_required": {
+            "type": "boolean",
+            "title": "Mfa Login Required",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AuthSettingsModel"
       },
       "ChangeEmailRequest": {
         "properties": {
@@ -3218,6 +3291,19 @@
           "code"
         ],
         "title": "MfaConfirmRequest"
+      },
+      "MfaLoginRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "MfaLoginRequest"
       },
       "MfaSetupResponse": {
         "properties": {

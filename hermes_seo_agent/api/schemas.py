@@ -62,6 +62,14 @@ class RollbackPreviewModel(BaseModel):
     strategy: str
 
 
+class AuthSettingsModel(BaseModel):
+    mfa_login_required: bool = False
+
+
+class MfaLoginRequest(BaseModel):
+    enabled: bool
+
+
 class SessionModel(BaseModel):
     id: int
     created_at: str

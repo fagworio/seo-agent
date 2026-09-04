@@ -24,6 +24,7 @@ from .schemas import (
     ActivityEntryModel,
     AgentRunModel,
     AgentsEnvelope,
+    AuthSettingsModel,
     ChangeEmailRequest,
     ChangePasswordRequest,
     CreateUserRequest,
@@ -36,6 +37,7 @@ from .schemas import (
     LoginResponse,
     MeResponse,
     MfaConfirmRequest,
+    MfaLoginRequest,
     MfaSetupResponse,
     MfaVerifyRequest,
     OkModel,
@@ -543,6 +545,27 @@ def roles_permissions_router() -> APIRouter:
     return r
 
 
+def settings_router() -> APIRouter:
+    r = APIRouter(tags=["settings"])
+
+    @r.get("/settings/auth", response_model=AuthSettingsModel, operation_id="settings_auth")
+    def settings_auth(services: Services = Depends(get_services),
+                      session=Depends(authenticated("settings.read"))) -> dict[str, Any]:
+        # Política global de autenticação (chave MFA no login, padrão OFF).
+        return {"mfa_login_required": services.auth.mfa_login_required()}
+
+    @r.put("/settings/auth/mfa-login", response_model=AuthSettingsModel,
+           operation_id="settings_auth_mfa_login")
+    def settings_auth_mfa_login(body: MfaLoginRequest, services: Services = Depends(get_services),
+                                session=Depends(authenticated("settings.manage", csrf=True))) -> dict[str, Any]:
+        # Alteração sensível: reautenticação recente obrigatória.
+        _require_reauth(services, session)
+        services.auth.set_mfa_login_required(body.enabled, actor=session.email)
+        return {"mfa_login_required": body.enabled}
+
+    return r
+
+
 def _is_docs_path(path: str) -> bool:
     """Rotas de documentação HTML (Swagger UI / ReDoc) da API.
 
@@ -607,6 +630,7 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
     app.include_router(account_router(), prefix="/api/v1")
     app.include_router(users_router(), prefix="/api/v1")
     app.include_router(roles_permissions_router(), prefix="/api/v1")
+    app.include_router(settings_router(), prefix="/api/v1")
     return app
 
 

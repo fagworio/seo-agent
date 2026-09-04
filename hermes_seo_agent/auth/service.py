@@ -209,8 +209,10 @@ class AuthService:
             self._audit(now=now, actor=email, event="LOGIN_FAILURE")
             return LoginResult(ok=False, reason="invalid")
 
-        # senha correta: se MFA habilitado, pedir 2º fator (não criar sessão ainda)
-        if user["is_mfa_enabled"] and self.store.get_mfa_factor(user["id"]) is not None:
+        # senha correta: exigir 2º fator SÓ se a chave global estiver ligada
+        # (mfa_login_required, padrão OFF) e a conta cadastrou MFA.
+        if (self.mfa_login_required() and user["is_mfa_enabled"]
+                and self.store.get_mfa_factor(user["id"]) is not None):
             self.store.record_login_attempt(email, ip_h, "success_password", now)
             return LoginResult(
                 ok=True, reason=None, requires_mfa=True,
@@ -235,6 +237,11 @@ class AuthService:
     ) -> LoginResult:
         """Completa o login com o 2º fator e cria a sessão (rotacionada)."""
         now = now or self._now()
+        # Defensivo: se a chave global foi desligada, um desafio em andamento
+        # não pode ser concluído (evita sessão forte sem a política ativa).
+        if not self.mfa_login_required():
+            self._audit(now=now, actor=str(user_id), event="MFA_FAILURE")
+            return LoginResult(ok=False, reason="invalid")
         user = self.store.get_user(user_id)
         if user is None or not user["is_active"]:
             self._audit(now=now, actor=str(user_id), event="MFA_FAILURE")
@@ -490,6 +497,26 @@ class AuthService:
             "UPDATE mfa_factors SET enabled = 0 WHERE user_id = ?", (user_id,))
         self.store.conn.commit()
         self._audit(now=now, user_id=user_id, event="MFA_DISABLED")
+
+    # -- política global de MFA no login (chave/valor, padrão OFF) -----------
+
+    def mfa_login_required(self) -> bool:
+        """Exigir 2º fator no login (chave global, PADRÃO OFF).
+
+        Lê a chave persistida em app_settings; se ausente, usa o config
+        (MFA_LOGIN_REQUIRED, default False). Desligado => login padrão mesmo
+        para contas com MFA cadastrado.
+        """
+        raw = self.store.storage.get_setting("mfa_login_required", "")
+        if raw:
+            return raw in ("1", "true", "yes", "on")
+        return bool(getattr(getattr(self, "config", None), "mfa_login_required", False))
+
+    def set_mfa_login_required(self, required: bool, *, actor: str = "") -> None:
+        self.store.storage.set_setting("mfa_login_required", "1" if required else "0")
+        self.store.storage.log_audit(
+            actor or "system", "SETTINGS_MFA_LOGIN", "mfa_login_required",
+            {"mfa_login_required": not required}, {"mfa_login_required": required})
 
     def force_password_reset(self, user_id: int, *, now: str | None = None) -> str:
         """Reset administrativo: token único, must_change_password e revoga sessões."""

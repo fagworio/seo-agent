@@ -78,6 +78,7 @@ class Config:
     reauth_window_seconds: int = 900            # reautenticação p/ ações críticas
     reset_token_seconds: int = 3600             # TTL do token de reset de senha
     mfa_issuer: str = "SEO Agent"
+    mfa_login_required: bool = False            # exigir 2º fator no login (padrão OFF)
 
     def __repr__(self) -> str:
         return (
@@ -239,4 +240,5 @@ def load_config() -> Config:
         reauth_window_seconds=_int("REAUTH_WINDOW_SECONDS", 900, 30, 24 * 3600),
         reset_token_seconds=_int("RESET_TOKEN_SECONDS", 3600, 60, 24 * 3600),
         mfa_issuer=_env("MFA_ISSUER", "SEO Agent"),
+        mfa_login_required=_bool("MFA_LOGIN_REQUIRED", False),
     )

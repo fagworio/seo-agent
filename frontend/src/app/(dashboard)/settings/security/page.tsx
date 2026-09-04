@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, Account, SessionInfo } from "@/lib/api";
+import { api, Account, AuthSettings, SessionInfo } from "@/lib/api";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
 import { Input } from "@/design-system/input";
@@ -15,8 +15,10 @@ function useCsrf() {
 export default function SecurityPage() {
   const qc = useQueryClient();
   const csrf = useCsrf();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
   const { data: account } = useQuery({ queryKey: ["account"], queryFn: () => api.get<Account>("/account") });
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => api.get<{ sessions: SessionInfo[] }>("/auth/sessions") });
+  const authSettings = useQuery({ queryKey: ["settings-auth"], queryFn: () => api.get<AuthSettings>("/settings/auth") });
 
   const [curPw, setCurPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -39,6 +41,10 @@ export default function SecurityPage() {
     mutationFn: () => api.post<{ ok: boolean }>("/account/mfa/disable", {}, csrf),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["account", "me"] }),
   });
+  const toggleMfaGate = useMutation({
+    mutationFn: (enabled: boolean) => api.put<AuthSettings>("/settings/auth/mfa-login", { enabled }, csrf),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings-auth"] }),
+  });
   const revoke = useMutation({
     mutationFn: (id: number) => api.del<{ ok: boolean }>(`/auth/sessions/${id}`, csrf),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
@@ -50,6 +56,8 @@ export default function SecurityPage() {
 
   const passwordsMatch = newPw.length > 0 && newPw === confirmPw;
   const mfaSecret = mfaSetup.data?.secret;
+  const canManageSettings = me.data?.user.permissions.includes("settings.manage") ?? false;
+  const mfaGateOn = authSettings.data?.mfa_login_required ?? false;
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -81,6 +89,31 @@ export default function SecurityPage() {
         ) : (
           <div className="flex justify-end"><Button onClick={() => mfaSetup.mutate()} disabled={mfaSetup.isPending}>Configurar</Button></div>
         )}
+      </Card>
+
+      <Card title="Política de MFA no login">
+        <div className="space-y-2 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Badge tone={mfaGateOn ? "success" : "neutral"}>{mfaGateOn ? "● Ativada" : "○ Desativada (padrão)"}</Badge>
+              <span className="text-[var(--muted)]">Exigir 2º fator no login</span>
+            </div>
+            {canManageSettings ? (
+              <Button variant={mfaGateOn ? "secondary" : "primary"} size="sm"
+                onClick={() => toggleMfaGate.mutate(!mfaGateOn)}
+                disabled={toggleMfaGate.isPending || authSettings.isLoading}>
+                {mfaGateOn ? "Desabilitar (login padrão)" : "Habilitar para produção"}
+              </Button>
+            ) : (
+              <span className="text-[11px] text-[var(--muted)]">Somente administradores alteram esta política.</span>
+            )}
+          </div>
+          <p className="text-xs text-[var(--muted)]">
+            Desabilitada por padrão: o acesso usa senha apenas, mesmo para contas com MFA cadastrado.
+            Ao habilitar (produção), contas com MFA passam a exigir o código do aplicativo no login. Alteração exige reautenticação recente e fica registrada em Auditoria.
+          </p>
+          {toggleMfaGate.error && <p className="text-sm text-[var(--danger)]">{(toggleMfaGate.error as Error).message}</p>}
+        </div>
       </Card>
 
       <Card title="Sessões ativas">

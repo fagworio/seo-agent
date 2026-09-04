@@ -775,6 +775,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settings Auth */
+        get: operations["settings_auth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/auth/mfa-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Settings Auth Mfa Login */
+        put: operations["settings_auth_mfa_login"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -934,6 +968,14 @@ export interface components {
         AgentsEnvelope: {
             /** Agents */
             agents: components["schemas"]["AgentModel"][];
+        };
+        /** AuthSettingsModel */
+        AuthSettingsModel: {
+            /**
+             * Mfa Login Required
+             * @default false
+             */
+            mfa_login_required: boolean;
         };
         /** ChangeEmailRequest */
         ChangeEmailRequest: {
@@ -1355,6 +1397,11 @@ export interface components {
         MfaConfirmRequest: {
             /** Code */
             code: string;
+        };
+        /** MfaLoginRequest */
+        MfaLoginRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** MfaSetupResponse */
         MfaSetupResponse: {
@@ -3761,6 +3808,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PermissionsEnvelope"];
+                };
+            };
+        };
+    };
+    settings_auth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSettingsModel"];
+                };
+            };
+        };
+    };
+    settings_auth_mfa_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSettingsModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

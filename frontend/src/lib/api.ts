@@ -399,3 +399,4 @@ export type UserSummary = components["schemas"]["UserSummaryModel"];
 export type UserDetail = components["schemas"]["UserDetailModel"];
 export type Role = components["schemas"]["RoleModel"];
 export type SessionInfo = components["schemas"]["SessionModel"];
+export type AuthSettings = components["schemas"]["AuthSettingsModel"];

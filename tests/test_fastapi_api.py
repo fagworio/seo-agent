@@ -174,3 +174,50 @@ def test_fastapi_action_rollback(tmp_path):
     vcsrf = client.get("/api/v1/auth/me").json()["csrf_token"]
     r = client.post("/api/v1/actions/fp-rb/rollback", headers={"X-CSRF-Token": vcsrf})
     assert r.status_code == 403 and r.json()["error"]["code"] == "PERMISSION_DENIED"
+
+
+def test_fastapi_settings_mfa_login_toggle(tmp_path):
+    from hermes_seo_agent.auth.passwords import PasswordHasher
+    from hermes_seo_agent.auth.service import AuthService
+
+    db = tmp_path / "set.db"
+    storage = Storage(str(db))
+    svc = AuthService(storage, config=_cfg(), hasher=PasswordHasher(n=2 ** 12))
+    # admin (settings.manage) sem MFA + operador COM MFA + operador sem MFA
+    svc.create_user("admin@x.com", "Admin", PWD, ["admin"])
+    svc.create_user("opmfa@x.com", "O", PWD, ["operator"],
+                    mfa_secret="5DGXU53YEWVAENWS53HV53APWPGGHMAW")
+    svc.create_user("op@x.com", "Op", PWD, ["operator"])
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+
+    # admin lê o gate: default OFF
+    admin = TestClient(app)
+    admin.post("/api/v1/auth/login", json={"email": "admin@x.com", "password": PWD})
+    csrf = admin.get("/api/v1/auth/me").json()["csrf_token"]
+    assert admin.get("/api/v1/settings/auth").json()["mfa_login_required"] is False
+
+    # mutação sem CSRF -> 403
+    r = admin.put("/api/v1/settings/auth/mfa-login", json={"enabled": True})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "CSRF_INVALID"
+    # com CSRF -> liga
+    r = admin.put("/api/v1/settings/auth/mfa-login", json={"enabled": True},
+                  headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["mfa_login_required"] is True
+
+    # operador COM MFA, com gate ligado, passa a exigir o 2º fator
+    opmfa = TestClient(app)
+    r = opmfa.post("/api/v1/auth/login", json={"email": "opmfa@x.com", "password": PWD})
+    assert r.status_code == 200 and r.json()["requires_mfa"] is True
+
+    # operador SEM MFA não tem settings.manage -> 403 no PUT
+    op = TestClient(app)
+    op.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    ocsrf = op.get("/api/v1/auth/me").json()["csrf_token"]
+    r = op.put("/api/v1/settings/auth/mfa-login", json={"enabled": False},
+               headers={"X-CSRF-Token": ocsrf})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "PERMISSION_DENIED"
+
+    # leitura reflete o estado persistido
+    assert admin.get("/api/v1/settings/auth").json()["mfa_login_required"] is True
