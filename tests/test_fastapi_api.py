@@ -355,12 +355,38 @@ def test_run_refresh_data_sources_scope(tmp_path):
                                           "sources": ["gsc", "ga4"]},
                     headers={"X-CSRF-Token": csrf})
     assert r.status_code == 200 and r.json()["sources"] == ["gsc", "ga4"]
-    # todas
-    r = client.post("/api/v1/runs", json={"intent": "refresh_data"},
-                    headers={"X-CSRF-Token": csrf})
-    assert r.status_code == 200
-    assert r.json()["sources"] == ["wordpress", "sitemap", "gsc", "ga4", "crux", "corpus"]
     # fonte inválida -> 400
     r = client.post("/api/v1/runs", json={"intent": "refresh_data", "sources": ["x"]},
                     headers={"X-CSRF-Token": csrf})
     assert r.status_code == 400
+
+    # "todas as fontes" (sem sources) — DB separado para não colidir com o dedupe (R16)
+    db2 = tmp_path / "rf2.db"
+    _prepare(db2)
+    app2 = create_app(storage_path=str(db2), config=_cfg())
+    client2 = TestClient(app2)
+    client2.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf2 = client2.get("/api/v1/auth/me").json()["csrf_token"]
+    r = client2.post("/api/v1/runs", json={"intent": "refresh_data"},
+                     headers={"X-CSRF-Token": csrf2})
+    assert r.status_code == 200
+    assert r.json()["sources"] == ["wordpress", "sitemap", "gsc", "ga4", "crux", "corpus"]
+
+
+def test_refresh_data_dedupe_returns_active_run(tmp_path):
+    """R16: um segundo refresh_data enquanto há um ativo devolve o run existente."""
+    db = tmp_path / "dedupe.db"
+    _prepare(db)
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+
+    r1 = client.post("/api/v1/runs", json={"intent": "refresh_data", "sources": ["gsc"]},
+                     headers={"X-CSRF-Token": csrf})
+    assert r1.status_code == 200 and r1.json()["status"] == "queued"
+    first_id = r1.json()["id"]
+    r2 = client.post("/api/v1/runs", json={"intent": "refresh_data", "sources": ["ga4"]},
+                     headers={"X-CSRF-Token": csrf})
+    assert r2.status_code == 200
+    assert r2.json()["id"] == first_id          # devolve o run ativo, não duplica

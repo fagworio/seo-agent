@@ -109,3 +109,17 @@ def test_wp_post_state_roundtrip(tmp_path):
     storage.save_wp_post_state(posts, now="2026-01-02T00:00:00Z")
     assert storage.wp_post_state() == {7: "2026-01-01T00:00:00Z"}
     storage.close()
+
+
+def test_run_refresh_records_audit_log(tmp_path):
+    """R14: a atualização entra no audit_log (REFRESH_DATA_COMPLETED)."""
+    storage, svc = _make(tmp_path / "f.db")
+    run_id = svc.start_run("hermes-seo-agent", intent="refresh_data", mode="analyze",
+                           sources=["wordpress"])
+    collectors = {"wordpress": lambda: StageResult("wordpress", records_read=5)}
+    run_refresh(storage, run_id, sources=["wordpress"], collectors=collectors)
+    row = storage.conn.execute(
+        "SELECT action_type, entity FROM audit_log WHERE action_type='REFRESH_DATA_COMPLETED'"
+    ).fetchone()
+    assert row is not None and row[1] == f"run:{run_id}"
+    storage.close()

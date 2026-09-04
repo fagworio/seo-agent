@@ -172,6 +172,13 @@ class AgentRunService:
     def running_runs(self) -> list[dict[str, Any]]:
         return self.store.list_runs(limit=50)
 
+    def active_run(self, *, intent: str | None = None) -> dict[str, Any] | None:
+        """R16: a execução ativa (queued|running) mais recente, opcionalmente de um intent."""
+        for run in self.store.list_runs(limit=100):
+            if run["status"] in ACTIVE_STATES and (intent is None or run["intent"] == intent):
+                return run
+        return None
+
     def list_agents(self) -> list[dict[str, Any]]:
         return self.store.list_agents()
 

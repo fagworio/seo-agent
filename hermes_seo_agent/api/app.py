@@ -331,6 +331,11 @@ def read_routers() -> list[APIRouter]:
                     session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
         sources = _normalize_refresh_sources(body.intent, body.sources)
         if body.intent == "refresh_data":
+            # R16: evitar execução duplicada — se já existe um refresh_data ativo,
+            # devolve o run existente para a UI acompanhar o progresso.
+            existing = services.runs.active_run(intent="refresh_data")
+            if existing is not None:
+                return services.runs.get_run(existing["id"]) or existing
             # Atualização de dados é uma solicitação ENFILEIRADA (R9-R12): o worker
             # (refresh-data/schedule) reivindica e executa; a UI faz polling.
             run_id = services.runs.queue_run("hermes-seo-agent", intent="refresh_data",

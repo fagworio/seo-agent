@@ -107,6 +107,9 @@ def run_refresh(
         summary={"sources": stages, "results": results},
         urls=sum(r.get("records_read", 0) for r in results.values()),
     )
+    # R14: a atualização entra na trilha de auditoria (audit_log → /activity e /settings/audit).
+    storage.log_audit("system", "REFRESH_DATA_COMPLETED", f"run:{run_id}",
+                      {"sources": stages}, {"status": status, "results": results})
     return svc.get_run(run_id)
 
 
