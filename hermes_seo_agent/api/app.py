@@ -543,6 +543,17 @@ def roles_permissions_router() -> APIRouter:
     return r
 
 
+def _is_docs_path(path: str) -> bool:
+    """Rotas de documentação HTML (Swagger UI / ReDoc) da API.
+
+    A CSP estrita (`script-src 'self'`) bloquearia o JS/CSS que o FastAPI carrega
+    de cdn.jsdelivr.net e o script inline de bootstrap; essas páginas recebem uma
+    CSP relaxada só para si. O restante da API (JSON) permanece estrito.
+    """
+    return (path in ("/api/docs", "/api/docs/oauth2-redirect", "/redoc")
+            or path.startswith(("/api/docs/", "/redoc/")))
+
+
 def create_app(*, storage_path: str, config: Any) -> FastAPI:
     app = FastAPI(
         title="SEO Agent Control Center",
@@ -571,10 +582,23 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = (
+        # JSON da API: CSP estrita (scripts 'self'). A documentação (Swagger/ReDoc)
+        # é a única página HTML da API e carrega JS/CSS de cdn.jsdelivr.net + um
+        # script inline de bootstrap — ali a CSP é relaxada só para essa rota,
+        # mantendo frame-ancestors/base-uri defensivos. O dashboard (Next.js) é
+        # servido separadamente e não herda estes headers.
+        csp = (
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         )
+        if _is_docs_path(request.url.path):
+            csp = (
+                "default-src 'self'; img-src 'self' data:; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "frame-ancestors 'none'; base-uri 'self'"
+            )
+        response.headers["Content-Security-Policy"] = csp
         return response
 
     for r in read_routers():

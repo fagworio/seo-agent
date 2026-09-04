@@ -286,10 +286,13 @@ class ControlPlaneService:
             sql += " AND url LIKE ?"
             params.append(f"%{query}%")
         sql += " ORDER BY captured_at DESC"
-        try:
-            rows = self.storage.conn.execute(sql, params).fetchall()
-        except Exception:
-            return {"items": [], "total": 0}
+        # Sem try/except: uma falha de SQL/migração NÃO deve virar
+        # "nenhuma página capturada" (as duas leituras cobrem a observabilidade).
+        rows = self.storage.conn.execute(sql, params).fetchall()
+        # Uma única leitura do feed de oportunidades (evita o padrão N+1 de
+        # carregar o feed por cada URL) — feed é determinístico, então o mapa
+        # é idêntico ao que um loop por linha produziria.
+        labels = self._primary_opportunity_labels()
         out = []
         for r in rows:
             url = r[1]
@@ -299,7 +302,7 @@ class ControlPlaneService:
                 "health": self._page_health(r[3], r[5]),
                 "index_state": self._index_state(url, r[5]),
                 "metrics": self._page_metrics(url),
-                "primary_opportunity": self._primary_opportunity(url),
+                "primary_opportunity": labels.get(url, ""),
                 "captured_at": r[4],
                 "word_count": r[7] or 0,
             })
@@ -403,14 +406,22 @@ class ControlPlaneService:
         except Exception:
             return {"position": None, "impressions": 0, "clicks": 0, "ctr": None}
 
-    def _primary_opportunity(self, url: str) -> str:
+    def _primary_opportunity_labels(self) -> dict[str, str]:
+        """Mapa url->label da oportunidade mais bem ranqueada (UMA leitura do feed).
+
+        O feed é determinístico (ordenado por score), então carregá-lo uma vez e
+        indexar por URL é equivalente ao antigo laço que o relia por página — sem
+        o custo N+1. Mantém a primeira ocorrência por URL (maior score).
+        """
+        labels: dict[str, str] = {}
         try:
             for it in self.opportunities.feed(limit=50):
-                if it.get("url") == url:
-                    return it.get("title") or it.get("source", "")
+                url = it.get("url")
+                if url and url not in labels:
+                    labels[url] = it.get("title") or it.get("source", "")
         except Exception:
             pass
-        return ""
+        return labels
 
     @staticmethod
     def _json(value: str | None) -> Any:

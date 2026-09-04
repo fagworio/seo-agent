@@ -17,14 +17,14 @@ export default function PagesPage() {
   const offset = (page - 1) * PAGE_SIZE;
   const { data, error, isLoading } = useQuery({
     queryKey: ["pages", q, sort, page],
-    queryFn: () => api.get<{ pages: PageSummary[]; total: number }>(
+    queryFn: () => api.get<{ pages?: PageSummary[]; total?: number }>(
       `/pages?limit=${PAGE_SIZE}&offset=${offset}&sort=${sort}&q=${encodeURIComponent(q)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
   if (error) return <div className="text-sm text-[var(--danger)]">{(error as ApiError).message}</div>;
-  const pages = data!.pages;
-  const total = data!.total;
+  const pages = data?.pages ?? [];
+  const total = data?.total ?? 0;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">

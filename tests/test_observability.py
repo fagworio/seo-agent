@@ -1,4 +1,4 @@
-"""Observabilidade/confiabilidade: security headers, backup/restore e migração SQLite."""
+"""Observabilidade/confiabilidade: security headers, viabilidade de backup SQLite e cobertura de migração."""
 import sqlite3
 from types import SimpleNamespace
 
@@ -31,7 +31,29 @@ def test_security_headers_on_response(tmp_path):
     assert "x-request-id" in r.headers
 
 
-def test_backup_restore_sqlite(tmp_path):
+def test_security_headers_api_strict_but_docs_relaxed(tmp_path):
+    """A JSON da API mantém CSP estrita; só o Swagger/ReDoc é relaxado."""
+    app = create_app(storage_path=str(tmp_path / "h2.db"), config=_cfg())
+    client = TestClient(app)
+    api = client.get("/api/v1/auth/me")
+    csp_api = api.headers.get("content-security-policy", "")
+    assert "script-src 'self'" in csp_api
+    assert "cdn.jsdelivr" not in csp_api
+    docs = client.get("/api/docs")
+    assert docs.status_code == 200
+    csp_docs = docs.headers.get("content-security-policy", "")
+    assert "https://cdn.jsdelivr.net" in csp_docs      # Swagger carrega daqui
+    assert "'unsafe-inline'" in csp_docs               # bootstrap inline do Swagger
+    assert "frame-ancestors 'none'" in csp_docs        # defensivo preservado
+
+
+def test_backup_restore_sqlite_feasibility(tmp_path):
+    """Teste de VIABILIDADE da API de backup do SQLite (não é um serviço de backup).
+
+    Comprova apenas que um arquivo SQLite pode ser copiado online e reaberto.
+    Não há política de retenção, validação de integridade, restauração operacional
+    nem auditoria — isso seria uma feature separada.
+    """
     db = tmp_path / "a.db"
     with Storage(str(db)) as s:
         s.conn.execute("INSERT INTO users (email, name, created_at, updated_at) "

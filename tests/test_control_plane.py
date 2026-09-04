@@ -221,6 +221,35 @@ def test_pages_and_history(tmp_path):
     storage.close()
 
 
+def test_pages_propagates_db_errors_not_empty(tmp_path):
+    """Uma falha de SQL/migração NÃO vira 'nenhuma página capturada'."""
+    import pytest
+    storage, cp = _seed(tmp_path / "perr.db")
+    storage.conn.execute("DROP TABLE page_snapshots")
+    storage.conn.commit()
+    with pytest.raises(Exception):
+        cp.pages()
+    storage.close()
+
+
+def test_pages_lookup_of_primary_opportunity_is_preserved(tmp_path):
+    """O mapa de rótulos (uma leitura única do feed) cobre a mesma URL do seed."""
+    storage, cp = _seed(tmp_path / "opp.db")
+    storage.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, source, status_code, title, "
+        "meta_robots, canonical, word_count) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?)",
+        ("https://x.com/a/", "2026-01-01T00:00:00+00:00", "audit", 200, "A",
+         "", "https://x.com/a/", 900))
+    storage.conn.commit()
+    pages = cp.pages()["items"]
+    page = next(p for p in pages if p["url"] == "https://x.com/a/")
+    # o checklist do seed tem url https://x.com/a/ -> rótulo presente (mesmo
+    # comportamento do antigo laço, sem reler o feed por página)
+    assert page["primary_opportunity"]
+    storage.close()
+
+
 def test_experiments_measurement_state(tmp_path):
     import json as _json
     storage, cp = _seed(tmp_path / "exp.db")
@@ -251,6 +280,11 @@ def test_experiments_measurement_state(tmp_path):
     assert by_keyword["gojo idade"]["baseline"]["gsc"]["position"] == 6.7
     assert "current" in by_keyword["gojo idade"]
     assert "delta" in by_keyword["gojo idade"]
+    # limitação contextual (não genérica) em ambos os estados
+    assert by_keyword["gojo idade"]["limitations"] == \
+        "Implementada; janela de medição ainda não atingida."
+    assert by_keyword["one piece"]["limitations"] == \
+        "Movimento observado; não representa certeza causal (sem grupo de controle)."
     storage.close()
 
 
