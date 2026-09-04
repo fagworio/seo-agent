@@ -221,3 +221,66 @@ def test_fastapi_settings_mfa_login_toggle(tmp_path):
 
     # leitura reflete o estado persistido
     assert admin.get("/api/v1/settings/auth").json()["mfa_login_required"] is True
+
+
+def test_findings_response_model_accepts_float_potential(tmp_path):
+    """Regressão: seo_expectations usa colunas REAL (floats). O response_model de
+    /findings deve aceitar floats (antes dava 500 por int_from_float)."""
+    import datetime as _dt
+
+    db = tmp_path / "find.db"
+    _prepare(db)
+    storage = Storage(str(db))
+    storage.conn.execute(
+        "INSERT INTO findings (cycle_id, rule_id, url, severity, detail_json, created_at) "
+        "VALUES ('c1', 'title_manual', 'https://x.com/a/', 'medium', '{}', "
+        "'2026-01-01T00:00:00+00:00')")
+    storage.conn.execute(
+        "INSERT INTO seo_expectations (url, computed_at, position, impressions, clicks, ctr, "
+        "expected_ctr, expected_clicks, gap_clicks, conservative_clicks, realistic_clicks, "
+        "optimistic_clicks) VALUES "
+        "('https://www.unicorniohater.com.br/a/', '2026-01-01T00:00:00+00:00', 1.5, 100, 3, "
+        "0.03, 0.05, 0.3, 0.3, 0.1, 0.2, 0.3)")
+    storage.conn.commit()
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    r = client.get("/api/v1/findings?limit=200&sort=potential")
+    assert r.status_code == 200, r.text
+    findings = r.json()["findings"]
+    assert findings
+    pot = findings[0]["potential"]
+    for k in ("conservative", "realistic", "optimistic", "expected_clicks", "gap_clicks"):
+        assert pot[k] is not None, f"{k} deveria vir do seo_expectations"
+
+
+def test_activity_ref_is_string(tmp_path):
+    """Regressão: /activity expõe ref como string (antes mandava int p/ run/event)."""
+    import datetime as _dt
+
+    class FakeClock:
+        def __call__(self) -> _dt.datetime:
+            return _dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc)
+
+    from hermes_seo_agent.services.agent_runs import AgentRunService
+
+    db = tmp_path / "act.db"
+    _prepare(db)
+    storage = Storage(str(db))
+    runs = AgentRunService(storage, clock=FakeClock())
+    rid = runs.start_run("hermes-seo-agent", trigger="manual", intent="technical",
+                         mode="analyze", started_by="op@x.com")
+    runs.complete(rid, status="success", urls=10, findings=1, opportunities=0,
+                  safe_fixes=0, executed=0)
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    r = client.get("/api/v1/activity?limit=200")
+    assert r.status_code == 200, r.text
+    runs_entries = [e for e in r.json()["activity"] if e["type"] == "agent_run"]
+    assert runs_entries, "esperava ao menos um agent_run no activity"
+    assert all(isinstance(e["ref"], str) for e in runs_entries)

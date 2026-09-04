@@ -596,7 +596,7 @@ class ControlPlaneService:
                 "type": "agent_run",
                 "event": f"AGENT_RUN_{r['status'].upper()}",
                 "summary": f"{r.get('agent', '')} {r['status']} ({r.get('intent') or '-'})",
-                "ref": r["id"],
+                "ref": str(r["id"]),
             })
         try:
             from ..auth.service import AuthService
@@ -605,7 +605,7 @@ class ControlPlaneService:
                 entries.append({
                     "ts": e["ts"], "actor": e["actor"] or "system",
                     "type": "auth", "event": e["event"],
-                    "summary": e["event"], "ref": e["id"],
+                    "summary": e["event"], "ref": str(e["id"]),
                 })
         except Exception:
             pass

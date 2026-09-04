@@ -306,19 +306,19 @@ class GoogleModel(BaseModel):
     ctr: float | None = None
     position: float | None = None
     expected_ctr: float | None = None
-    expected_clicks: int | None = None
-    gap_clicks: int | None = None
+    expected_clicks: float | None = None
+    gap_clicks: float | None = None
     top_queries: list[dict[str, Any]] = []
 
 
 class PotentialModel(BaseModel):
     data_status: str = "missing"
-    conservative: int | None = None
-    realistic: int | None = None
-    optimistic: int | None = None
+    conservative: float | None = None
+    realistic: float | None = None
+    optimistic: float | None = None
     ctr_expected: float | None = None
-    expected_clicks: int | None = None
-    gap_clicks: int | None = None
+    expected_clicks: float | None = None
+    gap_clicks: float | None = None
 
 
 class PageIdentityModel(BaseModel):
