@@ -114,7 +114,7 @@ def run_refresh(
 
 def build_refresh_collectors(config: Config, storage: Storage) -> dict[str, Collector]:
     return {
-        "wordpress": lambda: _collect_wordpress(config),
+        "wordpress": lambda: _collect_wordpress(config, storage),
         "sitemap": lambda: _collect_sitemap(config),
         "gsc": lambda: _collect_gsc(config),
         "ga4": lambda: _collect_ga4(config),
@@ -123,16 +123,49 @@ def build_refresh_collectors(config: Config, storage: Storage) -> dict[str, Coll
     }
 
 
-def _collect_wordpress(config: Config) -> StageResult:
+def diff_wp_posts(current: list[dict[str, Any]], previous: dict[int, str]) -> dict[str, int]:
+    """R4 — classificação incremental de posts vs estado anterior.
+
+    previous: {post_id: modified_at}. Um post é:
+      - new: post_id ausente no estado anterior;
+      - changed: modified_at > anterior;
+      - unchanged: sem mudança de modified;
+      - removed: post_id no estado anterior mas ausente da coleta atual.
+    """
+    seen: set[int] = set()
+    new = changed = unchanged = 0
+    for p in current:
+        pid = p.get("id")
+        if pid is None:
+            continue
+        seen.add(int(pid))
+        prev = previous.get(int(pid))
+        if prev is None:
+            new += 1
+        elif (p.get("modified") or "") > prev:
+            changed += 1
+        else:
+            unchanged += 1
+    removed = sum(1 for pid in previous if pid not in seen)
+    return {"known": len(previous), "new": new, "changed": changed,
+            "unchanged": unchanged, "removed": removed}
+
+
+def _collect_wordpress(config: Config, storage: Storage) -> StageResult:
     if not getattr(config, "wordpress_url", ""):
         return StageResult("wordpress", status="skipped", error="WORDPRESS_URL vazio")
     from ..connectors.wordpress import WordPressClient
     with WordPressClient(config) as wp:
         posts = wp.list_posts(status="publish")
+    previous = storage.wp_post_state()
+    diff = diff_wp_posts(posts, previous)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    storage.save_wp_post_state(posts, now=now)
     modified = [p.get("modified") or "" for p in posts]
     modified = [m for m in modified if m]
     return StageResult("wordpress", records_read=len(posts),
-                       data_window=max(modified) if modified else "")
+                       records_created=diff["new"], records_updated=diff["changed"],
+                       data_window=max(modified) if modified else "", extra=diff)
 
 
 def _collect_sitemap(config: Config) -> StageResult:

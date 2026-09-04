@@ -87,3 +87,25 @@ def test_run_refresh_with_reconcile_stage(tmp_path):
     assert steps["reconcile"]["detail"]["missing_from_sitemap"] == 2
     assert steps["reconcile"]["detail"]["orphan_in_sitemap"] == 1
     storage.close()
+
+
+def test_diff_wp_posts_incremental():
+    from hermes_seo_agent.services.data_refresh import diff_wp_posts
+    current = [
+        {"id": 1, "modified": "2026-01-02"},   # unchanged
+        {"id": 2, "modified": "2026-01-03"},   # changed
+        {"id": 3, "modified": "2026-01-01"},   # new
+    ]
+    previous = {1: "2026-01-02", 2: "2026-01-01", 4: "2026-01-01"}  # 4 removido
+    d = diff_wp_posts(current, previous)
+    assert d == {"known": 3, "new": 1, "changed": 1, "unchanged": 1, "removed": 1}
+
+
+def test_wp_post_state_roundtrip(tmp_path):
+    from hermes_seo_agent.storage.db import Storage
+    storage = Storage(str(tmp_path / "wp.db"))
+    assert storage.wp_post_state() == {}
+    posts = [{"id": 7, "link": "https://x.com/a/", "modified": "2026-01-01T00:00:00Z"}]
+    storage.save_wp_post_state(posts, now="2026-01-02T00:00:00Z")
+    assert storage.wp_post_state() == {7: "2026-01-01T00:00:00Z"}
+    storage.close()

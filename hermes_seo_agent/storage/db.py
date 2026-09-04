@@ -155,6 +155,15 @@ CREATE TABLE IF NOT EXISTS editorial_inventory (
     crawled_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_editorial_inventory_crawled ON editorial_inventory(crawled_at);
+
+-- R4: estado por post do WordPress (incremental). modified_at é o modified do WP;
+-- comparado na próxima coleta para detectar "novo/alteração/sem alteração/removido".
+CREATE TABLE IF NOT EXISTS wp_post_state (
+    post_id INTEGER PRIMARY KEY,
+    url TEXT,
+    modified_at TEXT,
+    last_collected_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS query_pages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT NOT NULL,
@@ -1092,6 +1101,30 @@ class Storage:
             saved += 1
         self.conn.commit()
         return saved
+
+    # -- R4: estado incremental por post do WordPress -------------------------
+
+    def wp_post_state(self) -> dict[int, str]:
+        """Retorna {post_id: modified_at} persistidos da última coleta."""
+        return {r[0]: r[1] for r in self.conn.execute(
+            "SELECT post_id, modified_at FROM wp_post_state").fetchall()}
+
+    def save_wp_post_state(self, posts: list[dict[str, Any]], *, now: str) -> int:
+        """Persiste {post_id, url, modified_at} e marca last_collected_at = now."""
+        n = 0
+        for p in posts:
+            pid = p.get("id")
+            if pid is None:
+                continue
+            self.conn.execute(
+                "INSERT INTO wp_post_state (post_id, url, modified_at, last_collected_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(post_id) DO UPDATE SET url=excluded.url, "
+                "modified_at=excluded.modified_at, last_collected_at=excluded.last_collected_at",
+                (int(pid), p.get("link") or "", p.get("modified") or "", now))
+            n += 1
+        self.conn.commit()
+        return n
 
     def editorial_contexts(self, urls: list[str] | None = None) -> dict[str, dict[str, Any]]:
         sql = "SELECT url, title, h1, h2s_json, body_text, canonical, is_noindex, status_code FROM editorial_inventory"
