@@ -16,6 +16,10 @@ from ..storage.agent_store import AgentStore
 TERMINAL_STATES = {"success", "partial", "failed", "cancelled"}
 ACTIVE_STATES = {"queued", "running"}
 
+# Fontes coletáveis por um run refresh_data (ADR-0010). "external" é opcional/M4
+# e fica de fora do escopo padrão do refresh.
+REFRESH_SOURCES = ("wordpress", "sitemap", "gsc", "ga4", "crux", "corpus")
+
 
 class AgentRunError(Exception):
     pass
@@ -45,6 +49,7 @@ class AgentRunService:
         started_by: str | None = None,
         description: str = "",
         target_url: str | None = None,
+        sources: list[str] | None = None,
     ) -> int:
         if trigger not in {"schedule", "manual", "system"}:
             raise AgentRunError(f"trigger inválida: {trigger}")
@@ -54,7 +59,7 @@ class AgentRunService:
         run_id = self.store.create_run(
             agent_id=agent_id, status="running", trigger=trigger,
             intent=intent, mode=mode, started_by=started_by, now=self._now(),
-            target_url=target_url,
+            target_url=target_url, sources=sources,
         )
         self.store.add_event(run_id, now=self._now(), event="RUN_STARTED",
                              level="info", message=f"execução iniciada ({trigger})")
@@ -68,6 +73,7 @@ class AgentRunService:
         mode: str | None = None,
         started_by: str | None = None,
         description: str = "",
+        sources: list[str] | None = None,
     ) -> int:
         """Persist a human request for a worker to execute.
 
@@ -80,6 +86,7 @@ class AgentRunService:
         run_id = self.store.create_run(
             agent_id=agent_id, status="queued", trigger="manual",
             intent=intent, mode=mode, started_by=started_by, now=self._now(),
+            sources=sources,
         )
         self.store.add_event(run_id, now=self._now(), event="RUN_QUEUED",
                              level="info", message="execução solicitada; aguardando worker")

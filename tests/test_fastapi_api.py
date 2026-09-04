@@ -339,3 +339,28 @@ def test_editorial_transition_migrated(tmp_path):
     # ação inválida -> 400
     r = client.post("/api/v1/editorial/backlog:1/inexistente", json={}, headers={"X-CSRF-Token": csrf})
     assert r.status_code == 400
+
+
+def test_run_refresh_data_sources_scope(tmp_path):
+    """R2: POST /runs com intent refresh_data aceita escopo de fontes (ADR-0010)."""
+    db = tmp_path / "rf.db"
+    _prepare(db)
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+
+    # parcial
+    r = client.post("/api/v1/runs", json={"intent": "refresh_data", "mode": "analyze",
+                                          "sources": ["gsc", "ga4"]},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200 and r.json()["sources"] == ["gsc", "ga4"]
+    # todas
+    r = client.post("/api/v1/runs", json={"intent": "refresh_data"},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200
+    assert r.json()["sources"] == ["wordpress", "sitemap", "gsc", "ga4", "crux", "corpus"]
+    # fonte inválida -> 400
+    r = client.post("/api/v1/runs", json={"intent": "refresh_data", "sources": ["x"]},
+                    headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400

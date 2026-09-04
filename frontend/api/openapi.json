@@ -2593,6 +2593,20 @@
               }
             ],
             "title": "Target Url"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
           }
         },
         "type": "object",
@@ -4098,6 +4112,20 @@
               }
             ],
             "title": "Target Url"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
           }
         },
         "type": "object",
@@ -4247,6 +4275,20 @@
               }
             ],
             "title": "Target Url"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
           },
           "steps": {
             "items": {

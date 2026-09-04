@@ -465,7 +465,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     executed_changes_count INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at TEXT,
-    target_url TEXT
+    target_url TEXT,
+    sources_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status ON agent_runs(agent_id, status, id);
 CREATE TABLE IF NOT EXISTS agent_run_steps (
@@ -564,6 +565,7 @@ class Storage:
             ],
             "agent_runs": [
                 ("target_url", "TEXT"),
+                ("sources_json", "TEXT"),
             ],
         }
         editorial_extra = [

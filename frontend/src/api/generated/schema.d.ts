@@ -980,6 +980,8 @@ export interface components {
             error?: string | null;
             /** Target Url */
             target_url?: string | null;
+            /** Sources */
+            sources?: string[] | null;
         };
         /** AgentsEnvelope */
         AgentsEnvelope: {
@@ -1859,6 +1861,8 @@ export interface components {
             mode?: string | null;
             /** Target Url */
             target_url?: string | null;
+            /** Sources */
+            sources?: string[] | null;
         };
         /** RunDetailModel */
         RunDetailModel: {
@@ -1920,6 +1924,8 @@ export interface components {
             error?: string | null;
             /** Target Url */
             target_url?: string | null;
+            /** Sources */
+            sources?: string[] | null;
             /**
              * Steps
              * @default []

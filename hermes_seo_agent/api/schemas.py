@@ -197,6 +197,7 @@ class AgentRunModel(BaseModel):
     summary: dict[str, Any] | None = None
     error: str | None = None
     target_url: str | None = None
+    sources: list[str] | None = None
 
 
 class RunStepModel(BaseModel):
@@ -414,6 +415,7 @@ class RunCreateRequest(BaseModel):
     intent: str | None = None
     mode: str | None = None
     target_url: str | None = None
+    sources: list[str] | None = None
 
 
 # -- U1: Account (self-service) ----------------------------------------------

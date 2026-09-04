@@ -54,12 +54,14 @@ class AgentStore:
         started_by: str | None,
         now: str,
         target_url: str | None = None,
+        sources: list[str] | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO agent_runs (agent_id, status, trigger, intent, mode, "
-            "started_by, started_at, created_at, target_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (agent_id, status, trigger, intent, mode, started_by, now, now, target_url),
+            "started_by, started_at, created_at, target_url, sources_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_id, status, trigger, intent, mode, started_by, now, now, target_url,
+             json.dumps(sources, ensure_ascii=False) if sources else None),
         )
         self.conn.commit()
         return int(cur.lastrowid)
@@ -70,7 +72,7 @@ class AgentStore:
             "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
             "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
             "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
-            "r.target_url "
+            "r.target_url, r.sources_json "
             "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE r.id = ?",
             (run_id,),
         ).fetchone()
@@ -82,7 +84,7 @@ class AgentStore:
                "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
                "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
                "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
-               "r.target_url "
+               "r.target_url, r.sources_json "
                "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE 1=1")
         params: list[Any] = []
         if agent:
@@ -274,6 +276,7 @@ class AgentStore:
             "opportunities_count": row[15], "safe_fixes_count": row[16],
             "executed_changes_count": row[17], "error": row[18], "created_at": row[19],
             "target_url": row[20] if len(row) > 20 else None,
+            "sources": json.loads(row[21]) if len(row) > 21 and row[21] else None,
         }
 
     @staticmethod

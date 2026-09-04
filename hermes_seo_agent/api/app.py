@@ -65,6 +65,7 @@ from .schemas import (
 
 from ..auth.service import AuthError
 from ..auth.totp import generate_secret
+from ..services.agent_runs import REFRESH_SOURCES
 from .errors import BadRequest, Forbidden, NotFound, PreconditionFailed, ReauthRequired
 
 
@@ -326,9 +327,11 @@ def read_routers() -> list[APIRouter]:
     @runs.post("", response_model=AgentRunModel, operation_id="runs_create")
     def runs_create(body: RunCreateRequest, services: Services = Depends(get_services),
                     session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        sources = _normalize_refresh_sources(body.intent, body.sources)
         run_id = services.runs.start_run("hermes-seo-agent", trigger="manual",
                                          intent=body.intent, mode=body.mode,
-                                         started_by=session.email, target_url=body.target_url)
+                                         started_by=session.email, target_url=body.target_url,
+                                         sources=sources)
         return services.runs.get_run(run_id) or {}
 
     @runs.post("/{id}/cancel", response_model=AgentRunModel, operation_id="runs_cancel")
@@ -587,6 +590,22 @@ _EDITORIAL_ACTION_STATUS = {
     "approve": "approved", "reject": "rejected", "snooze": "snoozed",
     "publish": "published", "measure": "measured",
 }
+
+
+def _normalize_refresh_sources(intent: str | None, sources: list[str] | None) -> list[str] | None:
+    """Escopo de fontes para um run refresh_data.
+
+    - Outros intents ignoram `sources` (retorna None).
+    - refresh_data sem sources => todas as fontes; com sources => valida cada uma.
+    """
+    if intent != "refresh_data":
+        return None
+    if not sources:
+        return list(REFRESH_SOURCES)
+    for s in sources:
+        if s not in REFRESH_SOURCES:
+            raise BadRequest(f"fonte inválida para refresh: {s!r} (válidas: {', '.join(REFRESH_SOURCES)})")
+    return list(dict.fromkeys(sources))
 
 
 def _is_docs_path(path: str) -> bool:
