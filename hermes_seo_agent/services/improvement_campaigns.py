@@ -1,0 +1,238 @@
+"""B0 — ImprovementCampaignService: campanha de melhorias (trabalho que dura
+várias execuções de AgentRun).
+
+Uma campanha agrupa correções aprovadas e homogêneas (ex.: só títulos) e as
+entrega ao Hermes em lotes de até max_actions_per_run, reaproveitando o executor
+`apply_safe_actions` (fingerprint/idempotência/before/after/rollback/dry-run).
+Nada aqui escreve no site — a escrita é do executor (B5), sob as mesmas guardas.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+from typing import Any
+
+from ..storage.db import Storage
+
+# Estados da campanha (B0).
+DRAFT = "draft"
+REVIEW_REQUIRED = "review_required"
+APPROVED = "approved"
+QUEUED = "queued"
+RUNNING = "running"
+PARTIAL = "partial"
+COMPLETED = "completed"
+MEASURING = "measuring"
+MEASURED = "measured"
+PAUSED = "paused"
+CANCELLED = "cancelled"
+FAILED = "failed"
+
+CAMPAIGN_STATES = (
+    DRAFT, REVIEW_REQUIRED, APPROVED, QUEUED, RUNNING, PARTIAL, COMPLETED,
+    MEASURING, MEASURED, PAUSED, CANCELLED, FAILED,
+)
+
+# Status por item.
+ITEM_PENDING = "pending"
+ITEM_EXECUTED = "executed"
+ITEM_FAILED = "failed"
+ITEM_STALE = "stale"
+ITEM_SKIPPED = "skipped"
+
+
+def forward_fix(after: dict[str, Any], rollback: dict[str, Any]) -> dict[str, Any] | None:
+    """Reconstrói o fix FORWARD a partir de rollback + after.
+
+    O actions persiste before/after/rollback, mas o executor precisa do fix
+    forward. Para os tipos suportados, ele é determinístico:
+      wp_post_meta : meta = {chave: after[chave]}, post_id do rollback.
+      wp_media_alt : alt_text = after[alt_text], media_id do rollback.
+    """
+    t = rollback.get("type")
+    if t == "wp_post_meta":
+        meta = {k: after.get(k) for k in (rollback.get("meta") or {})}
+        if not meta:
+            return None
+        return {"type": "wp_post_meta", "post_id": rollback.get("post_id"), "meta": meta}
+    if t == "wp_media_alt":
+        return {"type": "wp_media_alt", "media_id": rollback.get("media_id"),
+                "alt_text": after.get("alt_text", "")}
+    return None
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+class ImprovementCampaignService:
+    def __init__(self, storage: Storage):
+        self.storage = storage
+        self.conn = storage.conn
+
+    # -- criação -------------------------------------------------------------
+    def create(
+        self,
+        name: str,
+        action_type: str,
+        fingerprints: list[str],
+        *,
+        created_by: str = "",
+        max_actions_per_run: int = 10,
+        execution_mode: str = "delegated",
+        schedule_policy: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Cria uma campanha a partir de ações safe_fix aprovadas (por fingerprint).
+
+        - Homogênea: todas as ações devem ter o MESMO rule_id == action_type.
+        - Itens copiam before/after e reconstroem o fix forward (para o runner).
+        """
+        if not fingerprints:
+            return None
+        items = []
+        for fp in fingerprints:
+            row = self.conn.execute(
+                "SELECT rule_id, url, before_json, after_json, rollback_json, status "
+                "FROM actions WHERE fingerprint = ?", (fp,)
+            ).fetchone()
+            if row is None:
+                return None  # fingerprint desconhecida
+            if row[0] != action_type:
+                return None  # lote não-homogêneo
+            before = json.loads(row[2]) if row[2] else {}
+            after = json.loads(row[3]) if row[3] else {}
+            rollback = json.loads(row[4]) if row[4] else {}
+            fix = forward_fix(after, rollback)
+            if fix is None:
+                return None  # sem fix forward suportado
+            items.append({
+                "action_fingerprint": fp, "url": row[1], "action_type": action_type,
+                "before": before, "after": after, "fix": fix,
+            })
+        if not items:
+            return None
+
+        now = _now()
+        cur = self.conn.execute(
+            "INSERT INTO improvement_campaigns (name, action_type, status, created_by, "
+            "execution_mode, schedule_policy, max_actions_per_run, total_items, "
+            "pending_items, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, action_type, DRAFT, created_by, execution_mode, schedule_policy,
+             max_actions_per_run, len(items), len(items), now),
+        )
+        campaign_id = int(cur.lastrowid)
+        for it in items:
+            self.conn.execute(
+                "INSERT INTO improvement_campaign_items (campaign_id, action_fingerprint, "
+                "url, action_type, before_json, after_json, fix_json, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (campaign_id, it["action_fingerprint"], it["url"], it["action_type"],
+                 json.dumps(it["before"], ensure_ascii=False, default=str),
+                 json.dumps(it["after"], ensure_ascii=False, default=str),
+                 json.dumps(it["fix"], ensure_ascii=False, default=str),
+                 ITEM_PENDING),
+            )
+        self.conn.commit()
+        self.storage.log_audit(created_by or "system", "CAMPAIGN_CREATED", f"campaign:{campaign_id}",
+                               {}, {"name": name, "action_type": action_type, "total": len(items)})
+        return self.get(campaign_id)
+
+    # -- leitura -------------------------------------------------------------
+    def list_campaigns(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        sql = "SELECT id, name, action_type, status, created_by, approved_by, execution_mode, " \
+              "schedule_policy, max_actions_per_run, total_items, pending_items, executed_items, " \
+              "failed_items, stale_items, created_at, approved_at, started_at, finished_at, " \
+              "last_run_id, next_run_at FROM improvement_campaigns WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        return [self._campaign_row(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def get(self, campaign_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT id, name, action_type, status, created_by, approved_by, execution_mode, "
+            "schedule_policy, max_actions_per_run, total_items, pending_items, executed_items, "
+            "failed_items, stale_items, created_at, approved_at, started_at, finished_at, "
+            "last_run_id, next_run_at FROM improvement_campaigns WHERE id = ?", (campaign_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        out = self._campaign_row(row)
+        out["items"] = self._list_items(campaign_id)
+        return out
+
+    def _list_items(self, campaign_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, work_item_id, action_fingerprint, url, action_type, before_json, "
+            "after_json, fix_json, status, failure_reason, executed_run_id, executed_at, "
+            "verified_at FROM improvement_campaign_items WHERE campaign_id = ? ORDER BY id",
+            (campaign_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "id": r[0], "work_item_id": r[1], "action_fingerprint": r[2], "url": r[3],
+                "action_type": r[4],
+                "before": json.loads(r[5]) if r[5] else {},
+                "after": json.loads(r[6]) if r[6] else {},
+                "fix": json.loads(r[7]) if r[7] else {},
+                "status": r[8], "failure_reason": r[9], "executed_run_id": r[10],
+                "executed_at": r[11], "verified_at": r[12],
+            })
+        return out
+
+    # -- ciclo de vida -------------------------------------------------------
+    def _set_status(self, campaign_id: int, status: str, **fields: Any) -> bool:
+        sets = ["status = ?"]
+        params: list[Any] = [status]
+        for k, v in fields.items():
+            if v is not None:
+                sets.append(f"{k} = ?")
+                params.append(v)
+        params.append(campaign_id)
+        cur = self.conn.execute(
+            f"UPDATE improvement_campaigns SET {', '.join(sets)} WHERE id = ?", params)
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def approve(self, campaign_id: int, *, approved_by: str = "") -> bool:
+        if not self._set_status(campaign_id, APPROVED, approved_by=approved_by,
+                                approved_at=_now()):
+            return False
+        self.storage.log_audit(approved_by or "system", "CAMPAIGN_APPROVED",
+                               f"campaign:{campaign_id}", {"status": DRAFT}, {"status": APPROVED})
+        return True
+
+    def pause(self, campaign_id: int, *, actor: str = "") -> bool:
+        return self._set_status(campaign_id, PAUSED)
+
+    def resume(self, campaign_id: int, *, actor: str = "") -> bool:
+        return self._set_status(campaign_id, APPROVED, next_run_at=_now())
+
+    def cancel(self, campaign_id: int, *, actor: str = "") -> bool:
+        ok = self._set_status(campaign_id, CANCELLED, finished_at=_now())
+        if ok:
+            self.storage.log_audit(actor or "system", "CAMPAIGN_CANCELLED",
+                                   f"campaign:{campaign_id}", {}, {"status": CANCELLED})
+        return ok
+
+    def schedule(self, campaign_id: int, *, policy: str, next_run_at: str | None = None) -> bool:
+        return self._set_status(campaign_id, QUEUED, schedule_policy=policy,
+                                next_run_at=next_run_at or _now())
+
+    # -- helpers -------------------------------------------------------------
+    @staticmethod
+    def _campaign_row(r: tuple) -> dict[str, Any]:
+        return {
+            "id": r[0], "name": r[1], "action_type": r[2], "status": r[3],
+            "created_by": r[4], "approved_by": r[5], "execution_mode": r[6],
+            "schedule_policy": r[7], "max_actions_per_run": r[8],
+            "total_items": r[9], "pending_items": r[10], "executed_items": r[11],
+            "failed_items": r[12], "stale_items": r[13], "created_at": r[14],
+            "approved_at": r[15], "started_at": r[16], "finished_at": r[17],
+            "last_run_id": r[18], "next_run_at": r[19],
+        }

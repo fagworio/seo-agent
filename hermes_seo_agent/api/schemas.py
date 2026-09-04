@@ -390,6 +390,68 @@ class RevalidationResultModel(BaseModel):
     elapsed_days: int | None = None
 
 
+# -- B0: Campanha de Melhorias ----------------------------------------------
+class CampaignCreateRequest(BaseModel):
+    name: str
+    action_type: str
+    fingerprints: list[str]
+    max_actions_per_run: int = 10
+    execution_mode: str = "delegated"
+    schedule_policy: str | None = None
+
+
+class CampaignItemModel(BaseModel):
+    id: int
+    work_item_id: str | None = None
+    action_fingerprint: str
+    url: str = ""
+    action_type: str
+    before: dict[str, Any] = {}
+    after: dict[str, Any] = {}
+    fix: dict[str, Any] = {}
+    status: str
+    failure_reason: str = ""
+    executed_run_id: int | None = None
+    executed_at: str | None = None
+    verified_at: str | None = None
+
+
+class CampaignModel(BaseModel):
+    id: int
+    name: str
+    action_type: str
+    status: str
+    created_by: str | None = None
+    approved_by: str | None = None
+    execution_mode: str = "delegated"
+    schedule_policy: str | None = None
+    max_actions_per_run: int = 10
+    total_items: int = 0
+    pending_items: int = 0
+    executed_items: int = 0
+    failed_items: int = 0
+    stale_items: int = 0
+    created_at: str = ""
+    approved_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    last_run_id: int | None = None
+    next_run_at: str | None = None
+
+
+class CampaignDetailModel(CampaignModel):
+    items: list[CampaignItemModel] = []
+
+
+class CampaignsEnvelope(BaseModel):
+    campaigns: list[CampaignModel]
+
+
+class CampaignScheduleRequest(BaseModel):
+    policy: str
+    next_run_at: str | None = None
+
+
 # -- envelopes (mesma forma que o frontend já consome) ----------------------
 class AgentModel(BaseModel):
     id: int

@@ -25,6 +25,10 @@ from .schemas import (
     AgentRunModel,
     AgentsEnvelope,
     AuthSettingsModel,
+    CampaignCreateRequest,
+    CampaignDetailModel,
+    CampaignsEnvelope,
+    CampaignScheduleRequest,
     ChangeEmailRequest,
     ChangePasswordRequest,
     CreateUserRequest,
@@ -68,6 +72,7 @@ from .schemas import (
 from ..auth.service import AuthError
 from ..auth.totp import generate_secret
 from ..services.agent_runs import REFRESH_SOURCES
+from ..services.improvement_campaigns import ImprovementCampaignService
 from .errors import BadRequest, Forbidden, NotFound, PreconditionFailed, ReauthRequired
 
 
@@ -623,6 +628,77 @@ _EDITORIAL_ACTION_STATUS = {
 }
 
 
+def campaigns_router() -> APIRouter:
+    r = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+    @r.get("", response_model=CampaignsEnvelope, operation_id="campaigns_list")
+    def campaigns_list(services: Services = Depends(get_services),
+                       session=Depends(authenticated("opportunity.read")),
+                       status: str | None = None,
+                       limit: int = Query(100, ge=1, le=200)) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        return {"campaigns": svc.list_campaigns(status=status, limit=limit)}
+
+    @r.post("", response_model=CampaignDetailModel, operation_id="campaigns_create")
+    def campaigns_create(body: CampaignCreateRequest, services: Services = Depends(get_services),
+                         session=Depends(authenticated("opportunity.review", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        res = svc.create(body.name, body.action_type, body.fingerprints,
+                         created_by=session.email, max_actions_per_run=body.max_actions_per_run,
+                         execution_mode=body.execution_mode, schedule_policy=body.schedule_policy)
+        if res is None:
+            raise PreconditionFailed("Seleção inválida: campanha exige ações homogêneas com fix suportado.")
+        return res
+
+    @r.get("/{id}", response_model=CampaignDetailModel, operation_id="campaigns_detail")
+    def campaigns_detail(id: int, services: Services = Depends(get_services),
+                         session=Depends(authenticated("opportunity.read"))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        res = svc.get(id)
+        if res is None:
+            raise NotFound("Campanha não encontrada.")
+        return res
+
+    @r.post("/{id}/approve", response_model=CampaignDetailModel, operation_id="campaigns_approve")
+    def campaigns_approve(id: int, services: Services = Depends(get_services),
+                          session=Depends(authenticated("technical.safe_fix", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        if not svc.approve(id, approved_by=session.email):
+            raise PreconditionFailed("Não foi possível aprovar a campanha.")
+        return svc.get(id) or {}
+
+    @r.post("/{id}/pause", response_model=CampaignDetailModel, operation_id="campaigns_pause")
+    def campaigns_pause(id: int, services: Services = Depends(get_services),
+                        session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        svc.pause(id, actor=session.email)
+        return svc.get(id) or {}
+
+    @r.post("/{id}/resume", response_model=CampaignDetailModel, operation_id="campaigns_resume")
+    def campaigns_resume(id: int, services: Services = Depends(get_services),
+                         session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        svc.resume(id, actor=session.email)
+        return svc.get(id) or {}
+
+    @r.post("/{id}/cancel", response_model=CampaignDetailModel, operation_id="campaigns_cancel")
+    def campaigns_cancel(id: int, services: Services = Depends(get_services),
+                         session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        svc.cancel(id, actor=session.email)
+        return svc.get(id) or {}
+
+    @r.post("/{id}/schedule", response_model=CampaignDetailModel, operation_id="campaigns_schedule")
+    def campaigns_schedule(id: int, body: CampaignScheduleRequest,
+                           services: Services = Depends(get_services),
+                           session=Depends(authenticated("agent.run", csrf=True))) -> dict[str, Any]:
+        svc = ImprovementCampaignService(services.storage)
+        svc.schedule(id, policy=body.policy, next_run_at=body.next_run_at)
+        return svc.get(id) or {}
+
+    return r
+
+
 def _normalize_refresh_sources(intent: str | None, sources: list[str] | None) -> list[str] | None:
     """Escopo de fontes para um run refresh_data.
 
@@ -704,6 +780,7 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
     app.include_router(users_router(), prefix="/api/v1")
     app.include_router(roles_permissions_router(), prefix="/api/v1")
     app.include_router(settings_router(), prefix="/api/v1")
+    app.include_router(campaigns_router(), prefix="/api/v1")
     return app
 
 

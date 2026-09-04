@@ -860,6 +860,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/campaigns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Campaigns List */
+        get: operations["campaigns_list"];
+        put?: never;
+        /** Campaigns Create */
+        post: operations["campaigns_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Campaigns Detail */
+        get: operations["campaigns_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Approve */
+        post: operations["campaigns_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Pause */
+        post: operations["campaigns_pause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Resume */
+        post: operations["campaigns_resume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Cancel */
+        post: operations["campaigns_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Campaigns Schedule */
+        post: operations["campaigns_schedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1029,6 +1149,228 @@ export interface components {
              * @default false
              */
             mfa_login_required: boolean;
+        };
+        /** CampaignCreateRequest */
+        CampaignCreateRequest: {
+            /** Name */
+            name: string;
+            /** Action Type */
+            action_type: string;
+            /** Fingerprints */
+            fingerprints: string[];
+            /**
+             * Max Actions Per Run
+             * @default 10
+             */
+            max_actions_per_run: number;
+            /**
+             * Execution Mode
+             * @default delegated
+             */
+            execution_mode: string;
+            /** Schedule Policy */
+            schedule_policy?: string | null;
+        };
+        /** CampaignDetailModel */
+        CampaignDetailModel: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Action Type */
+            action_type: string;
+            /** Status */
+            status: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Approved By */
+            approved_by?: string | null;
+            /**
+             * Execution Mode
+             * @default delegated
+             */
+            execution_mode: string;
+            /** Schedule Policy */
+            schedule_policy?: string | null;
+            /**
+             * Max Actions Per Run
+             * @default 10
+             */
+            max_actions_per_run: number;
+            /**
+             * Total Items
+             * @default 0
+             */
+            total_items: number;
+            /**
+             * Pending Items
+             * @default 0
+             */
+            pending_items: number;
+            /**
+             * Executed Items
+             * @default 0
+             */
+            executed_items: number;
+            /**
+             * Failed Items
+             * @default 0
+             */
+            failed_items: number;
+            /**
+             * Stale Items
+             * @default 0
+             */
+            stale_items: number;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Last Run Id */
+            last_run_id?: number | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["CampaignItemModel"][];
+        };
+        /** CampaignItemModel */
+        CampaignItemModel: {
+            /** Id */
+            id: number;
+            /** Work Item Id */
+            work_item_id?: string | null;
+            /** Action Fingerprint */
+            action_fingerprint: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /** Action Type */
+            action_type: string;
+            /**
+             * Before
+             * @default {}
+             */
+            before: {
+                [key: string]: unknown;
+            };
+            /**
+             * After
+             * @default {}
+             */
+            after: {
+                [key: string]: unknown;
+            };
+            /**
+             * Fix
+             * @default {}
+             */
+            fix: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+            /**
+             * Failure Reason
+             * @default
+             */
+            failure_reason: string;
+            /** Executed Run Id */
+            executed_run_id?: number | null;
+            /** Executed At */
+            executed_at?: string | null;
+            /** Verified At */
+            verified_at?: string | null;
+        };
+        /** CampaignModel */
+        CampaignModel: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Action Type */
+            action_type: string;
+            /** Status */
+            status: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Approved By */
+            approved_by?: string | null;
+            /**
+             * Execution Mode
+             * @default delegated
+             */
+            execution_mode: string;
+            /** Schedule Policy */
+            schedule_policy?: string | null;
+            /**
+             * Max Actions Per Run
+             * @default 10
+             */
+            max_actions_per_run: number;
+            /**
+             * Total Items
+             * @default 0
+             */
+            total_items: number;
+            /**
+             * Pending Items
+             * @default 0
+             */
+            pending_items: number;
+            /**
+             * Executed Items
+             * @default 0
+             */
+            executed_items: number;
+            /**
+             * Failed Items
+             * @default 0
+             */
+            failed_items: number;
+            /**
+             * Stale Items
+             * @default 0
+             */
+            stale_items: number;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Last Run Id */
+            last_run_id?: number | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+        };
+        /** CampaignScheduleRequest */
+        CampaignScheduleRequest: {
+            /** Policy */
+            policy: string;
+            /** Next Run At */
+            next_run_at?: string | null;
+        };
+        /** CampaignsEnvelope */
+        CampaignsEnvelope: {
+            /** Campaigns */
+            campaigns: components["schemas"]["CampaignModel"][];
         };
         /** ChangeEmailRequest */
         ChangeEmailRequest: {
@@ -4102,6 +4444,261 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthSettingsModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_list: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignsEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_pause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    campaigns_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignDetailModel"];
                 };
             };
             /** @description Validation Error */

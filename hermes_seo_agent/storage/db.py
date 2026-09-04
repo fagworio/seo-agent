@@ -505,6 +505,49 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT,
     updated_at TEXT
 );
+
+-- B0: Campanha de Melhorias — trabalho que pode durar várias execuções (AgentRuns).
+CREATE TABLE IF NOT EXISTS improvement_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_by TEXT,
+    approved_by TEXT,
+    execution_mode TEXT NOT NULL DEFAULT 'delegated',  -- now | delegated
+    schedule_policy TEXT,                              -- next_cycle | daily | custom
+    max_actions_per_run INTEGER NOT NULL DEFAULT 10,
+    total_items INTEGER NOT NULL DEFAULT 0,
+    pending_items INTEGER NOT NULL DEFAULT 0,
+    executed_items INTEGER NOT NULL DEFAULT 0,
+    failed_items INTEGER NOT NULL DEFAULT 0,
+    stale_items INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    approved_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    last_run_id INTEGER,
+    next_run_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON improvement_campaigns(status);
+
+CREATE TABLE IF NOT EXISTS improvement_campaign_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES improvement_campaigns(id),
+    work_item_id TEXT,
+    action_fingerprint TEXT NOT NULL,
+    url TEXT,
+    action_type TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    fix_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|executed|failed|stale|skipped
+    failure_reason TEXT,
+    executed_run_id INTEGER,
+    executed_at TEXT,
+    verified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_items_campaign ON improvement_campaign_items(campaign_id, status);
 """
 
 
