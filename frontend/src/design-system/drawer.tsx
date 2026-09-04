@@ -7,10 +7,12 @@ export function Drawer({
   title,
   children,
   onClose,
+  size = "default",
 }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  size?: "default" | "wide";
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -49,7 +51,7 @@ export function Drawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="h-full w-full max-w-lg overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(22,31,45,.12)]"
+        className={`h-full w-full ${size === "wide" ? "max-w-2xl" : "max-w-lg"} overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(22,31,45,.12)]`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         {children}

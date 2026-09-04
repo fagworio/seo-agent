@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from ..tools.link_graph import is_editorial_target
 
-_STOP = {"o", "a", "os", "as", "de", "da", "do", "das", "dos", "e", "em", "no", "na", "para", "com", "um", "uma", "que", "por", "sobre", "como", "qual", "quais", "quanto", "quando", "onde", "quem"}
+_STOP = {"o", "a", "os", "as", "de", "da", "do", "das", "dos", "e", "em", "no", "na", "para", "com", "um", "uma", "que", "por", "sobre", "como", "qual", "quais", "quanto", "quando", "onde", "quem", "chega", "chegar", "estreia", "novo", "nova", "hoje", "tudo", "momento", "unicorniohater", "redação", "leitura"}
 
 
 def _tokens(value: str) -> set[str]:
@@ -31,8 +31,63 @@ def _excerpt(text: str, terms: set[str]) -> str:
 def _anchor(context: dict[str, Any], terms: set[str]) -> str:
     title = context.get("title", "") or context.get("h1", "")
     if title:
-        return " ".join(title.split()[:10])
+        title = re.sub(r"\s+[—|-]\s+UnicornioHater$", "", title, flags=re.I).strip()
+        if ":" in title:
+            prefix, rest = title.split(":", 1)
+            return f"{prefix.strip()}: {' '.join(rest.split()[:2])}".strip()
+        return " ".join(title.split()[:6])
     return " ".join(sorted(terms)[:5])
+
+
+def explain_interlink(*, source_url: str, target_url: str,
+                      source_context: dict[str, Any], target_context: dict[str, Any],
+                      stored_anchor: str = "") -> dict[str, Any]:
+    """Explain an interlink with corpus evidence, without inventing traffic uplift."""
+    source_terms = _context_tokens(source_url, source_context)
+    target_terms = _context_tokens(target_url, target_context)
+    shared = sorted(source_terms & target_terms)
+    excerpt = _excerpt(source_context.get("body_text", ""), set(shared)) if shared else ""
+    anchor = stored_anchor.strip() or _anchor(target_context, set(shared))
+    if len(shared) >= 3 and excerpt:
+        relevance, confidence = "strong", "high"
+    elif len(shared) >= 2:
+        relevance, confidence = "moderate", "medium"
+    else:
+        relevance, confidence = "weak", "low"
+    if relevance == "weak":
+        insertion = "Não inserir automaticamente: o corpus atual não confirmou um trecho tematicamente compatível. Reanalise ou rejeite a sugestão."
+    elif excerpt:
+        insertion = f"Inserir no trecho identificado, vinculando a menção mais natural a “{anchor}”."
+    elif shared:
+        insertion = f"Localizar na página de origem um parágrafo que trate de {', '.join(shared[:3])}; inserir apenas se o destino aprofundar esse ponto."
+    else:
+        insertion = "Não inserir automaticamente: o corpus atual não confirmou um trecho tematicamente compatível. Reanalise ou rejeite a sugestão."
+    return {
+        "source_title": source_context.get("title", "") or source_context.get("h1", ""),
+        "target_title": target_context.get("title", "") or target_context.get("h1", ""),
+        "shared_terms": shared[:8],
+        "source_excerpt": excerpt,
+        "suggested_anchor": anchor,
+        "anchor_origin": "stored" if stored_anchor.strip() else "generated_from_target",
+        "relevance": relevance,
+        "confidence": confidence,
+        "insertion_instruction": insertion,
+        "google_benefits": [
+            "cria um caminho rastreável entre conteúdos relacionados",
+            "reforça a relação temática e o contexto da página de destino",
+            "distribui autoridade interna para o destino",
+        ],
+        "site_benefits": [
+            "oferece aprofundamento sem interromper a leitura",
+            "facilita a descoberta de conteúdo relacionado",
+            "pode aumentar navegação e engajamento; o efeito deve ser medido",
+        ],
+        "verification_steps": [
+            "confirmar no recrawl que o link origem → destino existe",
+            "validar que a âncora descreve corretamente o destino",
+            "acompanhar cliques, impressões e engajamento do destino após a janela de medição",
+        ],
+    }
 
 
 def suggest_interlinks(*, sources: list[str], targets: list[str], existing_out: dict[str, set[str]],

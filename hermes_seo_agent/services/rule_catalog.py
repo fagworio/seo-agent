@@ -22,6 +22,10 @@ class Layer:
 
 # rule_id -> (label amigável, camada de correção, diagnóstico humano)
 _PRESENTATION: dict[str, tuple[str, str, str]] = {
+    "title_manual": ("Ajuste manual de título", Layer.WORDPRESS,
+                     "O título foi preparado para revisão humana antes de ser publicado."),
+    "title_opportunity": ("Oportunidade de título", Layer.WORDPRESS,
+                          "Há uma oportunidade de melhorar o título com base no desempenho de busca."),
     "title_too_long": ("Título longo", Layer.WORDPRESS,
                        "O título ultrapassa o limite recomendado de caracteres e pode ser truncado nos resultados de busca."),
     "title_missing": ("Título ausente", Layer.WORDPRESS,
@@ -36,7 +40,7 @@ _PRESENTATION: dict[str, tuple[str, str, str]] = {
                            "O rel canonical não aponta para a URL canônica esperada."),
     "canonical_missing": ("Canonical ausente", Layer.WORDPRESS,
                           "A página não possui rel canonical definido."),
-    "wp_static_mismatch": ("Conteúdo não sincronizado com o site publicado", Layer.HEADLESS,
+    "wp_static_mismatch": ("Conteúdo não sincronizado", Layer.HEADLESS,
                            "O post existe no WordPress, mas a URL correspondente não está no site headless publicado."),
     "broken_internal_link": ("Link interno quebrado", Layer.WORDPRESS,
                              "Há um link interno apontando para uma URL com erro (404/inacessível)."),
@@ -82,7 +86,7 @@ _PRESENTATION: dict[str, tuple[str, str, str]] = {
 def rule_presentation(rule_id: str) -> dict[str, str]:
     """Retorna label + camada + descrição amigáveis, com fallback seguro."""
     label, layer, diagnosis = _PRESENTATION.get(
-        rule_id, (rule_id.replace("_", " ").capitalize(), Layer.WORDPRESS,
+        rule_id, ("Correção técnica", Layer.WORDPRESS,
                   "Problema técnico identificado pela análise automática."))
     rule: Rule | None = get_rule(rule_id)
     return {

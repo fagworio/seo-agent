@@ -1,6 +1,7 @@
 """Tests for the watchdog schedule — weekly GA4 + corpus maintenance."""
 
 import argparse
+import dataclasses
 import datetime
 import json
 
@@ -100,3 +101,31 @@ def test_schedule_skips_corpus_when_run_active(monkeypatch, capsys, tmp_path):
     assert rc == 0
     assert "corpus-rebuild" not in out["summary"]["steps"]
     assert corpus_calls == []  # não disparou rebuild concorrente
+
+
+def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "daily-google.db"
+    _now_patch(monkeypatch, hour=6)
+    config = dataclasses.replace(_config(db), google_credentials="configured")
+    calls = []
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_inspect", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_demand",
+                        lambda args, config: calls.append(("demand", args.store, args.min_impressions)))
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_outcomes",
+                        lambda args, config: calls.append(("outcomes", args.action)))
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_opportunities", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_ga4", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_corpus", lambda *a, **k: None)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert ("demand", True, 0) in calls
+    assert ("outcomes", "revalidate-due") in calls
+    assert "gsc-demand" in result["summary"]["steps"]
+    with Storage(str(db)) as storage:
+        run = storage.conn.execute(
+            "SELECT status, intent, summary_json FROM agent_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert run[0] == "success" and run[1] == "normal_cycle"

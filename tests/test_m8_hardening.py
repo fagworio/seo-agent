@@ -26,7 +26,7 @@ def test_register_with_baseline_and_scores(tmp_path):
         assert item["baseline"]["gsc"]["clicks"] == 5
         assert item["candidate_score"] == 0.4
         assert item["action_score"] == 0.6
-        assert item["measured"] == {"28d": False, "56d": False, "90d": False}
+        assert item["measured"] == {"7d": False, "28d": False, "56d": False, "90d": False}
 
 
 def test_set_outcome_verdict_marks_window_and_blocks_remeasure(tmp_path):
@@ -140,3 +140,33 @@ def test_measure_blocks_after_already_measured(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert rc == 2
     assert "já medido" in out["error"]
+
+
+def test_revalidate_due_measures_7d_only_with_google_and_baseline(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "due.db"
+    with Storage(str(db)) as storage:
+        storage.save_opportunity_outcome(
+            keyword="gojo", opportunity_type="title_meta", decision="refresh",
+            human_decision="approved", url="https://x.com/gojo/",
+            baseline={"gsc": {"impressions": 100, "clicks": 5, "ctr": .05,
+                              "position": 5.0}, "ga4": None},
+            implemented_at="2020-01-01T00:00:00+00:00",
+        )
+
+    class _FakeGSC:
+        def __init__(self, config):
+            pass
+
+        def page_metrics(self, url, **kwargs):
+            return {"impressions": 140, "clicks": 9, "ctr": .064, "position": 4.2}
+
+    monkeypatch.setattr("hermes_seo_agent.cli.SearchConsoleClient", _FakeGSC)
+    config = Config(wordpress_url="http://localhost", google_credentials="fake",
+                    sqlite_path=str(db))
+    assert _cmd_outcomes(argparse.Namespace(action="revalidate-due", limit=20), config) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["summary"]["measured"] == 1
+    with Storage(str(db)) as storage:
+        outcome = storage.list_opportunity_outcomes()[0]
+        assert outcome["measured"]["7d"] is True
+        assert outcome["results"]["7d"]["observation"] == "preliminary_7d"

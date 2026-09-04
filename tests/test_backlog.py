@@ -1,7 +1,7 @@
 """Tests for E3/E4: backlog generation + interlink suggestions."""
 
 from hermes_seo_agent.report.backlog import generate_pautas
-from hermes_seo_agent.report.interlinks import suggest_interlinks
+from hermes_seo_agent.report.interlinks import explain_interlink, suggest_interlinks
 
 
 def test_generate_pautas_cannibalization():
@@ -98,3 +98,28 @@ def test_suggest_interlinks_includes_context_and_skips_noindex_target():
         contexts={source: {"title": "Idade do Gojo"}, target: {"title": "Idade do Gojo", "is_noindex": True}},
     )
     assert suggestions == []
+
+
+def test_explain_interlink_returns_anchor_placement_and_benefits():
+    detail = explain_interlink(
+        source_url="https://x.com/gojo-idade/", target_url="https://x.com/gojo-guia/",
+        source_context={"title": "Idade do Gojo", "h1": "Idade do Gojo",
+                        "body_text": "A idade do Gojo é importante para entender sua história."},
+        target_context={"title": "Guia da idade do Gojo", "h1": "Guia da idade do Gojo"},
+    )
+    assert detail["suggested_anchor"] == "Guia da idade do Gojo"
+    assert {"idade", "gojo"}.issubset(detail["shared_terms"])
+    assert detail["source_excerpt"].startswith("A idade do Gojo")
+    assert detail["relevance"] in {"moderate", "strong"}
+    assert detail["google_benefits"] and detail["site_benefits"]
+
+
+def test_explain_interlink_flags_unrelated_content_as_weak():
+    detail = explain_interlink(
+        source_url="https://x.com/genigods/", target_url="https://x.com/fire-emblem/",
+        source_context={"title": "Genigods Nezha chega ao Xbox", "body_text": "Nezha será lançado."},
+        target_context={"title": "Fire Emblem no Nintendo Music"},
+    )
+    assert detail["shared_terms"] == []
+    assert detail["relevance"] == "weak"
+    assert "Não inserir automaticamente" in detail["insertion_instruction"]

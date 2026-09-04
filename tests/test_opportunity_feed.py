@@ -1,5 +1,7 @@
 """Tests for P1 — OpportunityFeedService + OpportunityDTO read model."""
 
+from types import SimpleNamespace
+
 from hermes_seo_agent.services.opportunity import OpportunityDTO, OpportunityFeedService
 from hermes_seo_agent.storage.db import Storage
 
@@ -56,6 +58,11 @@ def test_feed_union_all_sources_sorted_by_score(tmp_path):
 def test_feed_dto_contract_shape(tmp_path):
     with Storage(tmp_path / "feed2.db") as storage:
         _seed(storage)
+        storage.save_editorial_inventory([
+            SimpleNamespace(url="https://x.com/a/", title="Título atual da página",
+                            h1=["H1 atual"], h2s=[], body_text="", canonical="",
+                            meta_robots="", status_code=200),
+        ], crawled_at="2026-02-28T00:00:00+00:00")
         service = OpportunityFeedService(storage)
         items = service.feed(source="checklist", limit=10)
     assert len(items) == 1
@@ -67,6 +74,8 @@ def test_feed_dto_contract_shape(tmp_path):
         assert key in dto, f"campo ausente: {key}"
     assert dto["id"] == "checklist:1"
     assert dto["source"] == "checklist"
+    assert dto["title"] == "Título atual da página"
+    assert dto["recommendation"] == "reescrever título"
     # GA4 enriquecido no DTO (não depende de Markdown/shell)
     assert dto["ga4_metrics"]["sessions"] == 100.0
     assert dto["ga4_metrics"]["measurement_status"] == "available"
@@ -97,3 +106,33 @@ def test_opportunity_dto_to_dict_roundtrip():
     d = dto.to_dict()
     assert d["id"] == "checklist:1"
     assert d["ga4_metrics"]["sessions"] == 5
+
+
+def test_feed_exposes_decision_evidence_projection_and_link_context(tmp_path):
+    with Storage(tmp_path / "decision-evidence.db") as storage:
+        _seed(storage)
+        storage.save_query_pages(
+            [{"query": "guia c", "url": "https://x.com/c/", "clicks": 5,
+              "impressions": 100, "ctr": 0.05, "position": 8.0,
+              "intent": "informational"}],
+            window_start="2026-02-01", window_end="2026-02-28",
+        )
+        storage.save_expectation(
+            url="https://x.com/c/", computed_at="2026-03-01T00:00:00+00:00",
+            source="test", changed_at="",
+            expectation={"position": 8.0, "impressions": 100, "clicks": 5,
+                         "ctr": 0.05, "expected_ctr": 0.08,
+                         "expected_clicks": 8, "gap_clicks": 3,
+                         "conservative_clicks": 6, "realistic_clicks": 8,
+                         "optimistic_clicks": 10},
+        )
+        item = OpportunityFeedService(storage).feed(source="interlink", limit=1)[0]
+
+    assert item["decision_type"] == "internal_link"
+    assert item["gsc_metrics"]["has_queries"] is True
+    assert item["top_queries"][0]["query"] == "guia c"
+    assert item["projection"]["realistic_clicks"] == 8
+    assert item["link_context"]["source_url"] == "https://x.com/a/"
+    assert item["link_context"]["target_url"] == "https://x.com/c/"
+    assert "suggested_anchor" in item["link_context"]
+    assert "verification_steps" in item["link_context"]

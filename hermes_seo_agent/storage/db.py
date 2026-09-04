@@ -306,10 +306,12 @@ CREATE TABLE IF NOT EXISTS opportunity_outcomes (
     url TEXT,
     baseline_json TEXT,                -- GSC+GA4 no momento da aprovação/implementação
     implemented_at TEXT,
+    measured_7d INTEGER NOT NULL DEFAULT 0,
     measured_28d INTEGER NOT NULL DEFAULT 0,
     measured_56d INTEGER NOT NULL DEFAULT 0,
     measured_90d INTEGER NOT NULL DEFAULT 0,
     result_28d_json TEXT,
+    result_7d_json TEXT,
     result_56d_json TEXT,
     result_90d_json TEXT,
     verdict TEXT,                      -- improved | neutral | worsened | insufficient_data
@@ -541,9 +543,11 @@ class Storage:
             ],
             "opportunity_outcomes": [
                 ("baseline_json", "TEXT"),
+                ("measured_7d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_28d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_56d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_90d", "INTEGER NOT NULL DEFAULT 0"),
+                ("result_7d_json", "TEXT"),
             ],
             "corpus_runs": [
                 ("sitemap_total", "INTEGER NOT NULL DEFAULT 0"),
@@ -2046,15 +2050,15 @@ class Storage:
     def set_outcome_verdict(self, outcome_id: int, *, verdict: str,
                             days: int | None = None,
                             result: dict[str, Any] | None = None) -> None:
-        """Registra o resultado de uma janela (28/56/90) e o verdict.
+        """Registra o resultado de uma janela (7/28/56/90) e o verdict.
 
         ``days`` marca qual janela foi medida (flag measured_{days}d) e grava
         o resultado no campo correspondente. Um outcome já medido em uma janela
         NÃO é re-medido (enforcement de agendamento).
         """
         import json as _json
-        if days not in (28, 56, 90):
-            raise ValueError("days deve ser 28, 56 ou 90")
+        if days not in (7, 28, 56, 90):
+            raise ValueError("days deve ser 7, 28, 56 ou 90")
         col = f"result_{days}d_json"
         flag = f"measured_{days}d"
         row = self.conn.execute(
@@ -2076,8 +2080,8 @@ class Storage:
         sql = ("SELECT id, keyword, opportunity_type, decision, evidence_json, "
                "candidate_score, action_score, human_decision, rejection_reason, "
                "implemented_action, url, baseline_json, implemented_at, verdict, "
-               "measured_28d, measured_56d, measured_90d, "
-               "result_28d_json, result_56d_json, result_90d_json, created_at "
+               "measured_7d, measured_28d, measured_56d, measured_90d, "
+               "result_7d_json, result_28d_json, result_56d_json, result_90d_json, created_at "
                "FROM opportunity_outcomes")
         params: list[Any] = []
         if verdict:
@@ -2097,14 +2101,15 @@ class Storage:
                 "implemented_action": r[9] or "", "url": r[10] or "",
                 "baseline": _json.loads(r[11]) if r[11] else None,
                 "implemented_at": r[12] or "", "verdict": r[13] or "",
-                "measured": {"28d": bool(r[14]), "56d": bool(r[15]),
-                             "90d": bool(r[16])},
+                "measured": {"7d": bool(r[14]), "28d": bool(r[15]), "56d": bool(r[16]),
+                             "90d": bool(r[17])},
                 "results": {
-                    "28d": _json.loads(r[17]) if r[17] else None,
-                    "56d": _json.loads(r[18]) if r[18] else None,
-                    "90d": _json.loads(r[19]) if r[19] else None,
+                    "7d": _json.loads(r[18]) if r[18] else None,
+                    "28d": _json.loads(r[19]) if r[19] else None,
+                    "56d": _json.loads(r[20]) if r[20] else None,
+                    "90d": _json.loads(r[21]) if r[21] else None,
                 },
-                "created_at": r[20] or "",
+                "created_at": r[22] or "",
             }
             for r in rows
         ]
