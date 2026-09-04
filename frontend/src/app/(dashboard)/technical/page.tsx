@@ -10,6 +10,7 @@ import { Card } from "@/design-system/card";
 import { Input } from "@/design-system/input";
 import { Drawer as AccessibleDrawer } from "@/design-system/drawer";
 import { Pagination, pageSlice } from "@/components/pagination";
+import { DelegateCampaignModal } from "@/components/delegate-campaign-modal";
 
 type SortKey = "potential" | "impressions" | "severity" | "recent";
 const PAGE_SIZE = 20;
@@ -28,6 +29,8 @@ export default function TechnicalPage() {
   const [view, setView] = useState<"problems" | "corrections">("problems");
   const [selCorrection, setSelCorrection] = useState<Correction | null>(null);
   const [findingPage, setFindingPage] = useState(1);
+  const [bulk, setBulk] = useState<Set<string>>(new Set());
+  const [delegateOpen, setDelegateOpen] = useState(false);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
 
@@ -201,6 +204,17 @@ export default function TechnicalPage() {
           rollbackError={rollbackFix.error}
           rollbackResult={rollbackFix.data}
           onRollback={(fingerprint) => rollbackFix.mutate(fingerprint)}
+          bulk={bulk}
+          onBulkChange={setBulk}
+          onDelegate={() => setDelegateOpen(true)}
+        />
+      )}
+
+      {delegateOpen && (
+        <DelegateCampaignModal
+          fingerprints={[...bulk]}
+          onClose={() => setDelegateOpen(false)}
+          onCreated={() => { setDelegateOpen(false); setBulk(new Set()); queryClient.invalidateQueries({ queryKey: ["corrections"] }); }}
         />
       )}
 
@@ -305,30 +319,45 @@ function FindingDrawer({ finding, onClose }: { finding: TechnicalFinding; onClos
   );
 }
 
-function CorrectionsView({ items, selected, onSelect, onClose, canExecute, executing, result, error, onApprove, rollingBack, rollbackError, rollbackResult, onRollback }: {
+function CorrectionsView({ items, selected, onSelect, onClose, canExecute, executing, result, error, onApprove, rollingBack, rollbackError, rollbackResult, onRollback, bulk, onBulkChange, onDelegate }: {
   items: Correction[]; selected: Correction | null; onSelect: (c: Correction) => void; onClose: () => void;
   canExecute: boolean; executing: boolean; result: { ok: boolean; approved: boolean; dry_run: boolean } | undefined; error: Error | null; onApprove: (fingerprint: string) => void;
   rollingBack: boolean; rollbackError: Error | null; rollbackResult: { ok: boolean; reversible: boolean } | undefined; onRollback: (fingerprint: string) => void;
+  bulk: Set<string>; onBulkChange: (next: Set<string>) => void; onDelegate: () => void;
 }) {
   const [page, setPage] = useState(1);
   const visibleItems = pageSlice(items, page, PAGE_SIZE);
+  const pendingItems = items.filter((c) => c.status !== "executed" && c.status !== "reverted");
+  const allSelected = pendingItems.length > 0 && pendingItems.every((c) => bulk.has(c.fingerprint));
+  const toggleOne = (fp: string) => { const n = new Set(bulk); n.has(fp) ? n.delete(fp) : n.add(fp); onBulkChange(n); };
+  const toggleAll = () => { const n = new Set(bulk); if (allSelected) { for (const c of pendingItems) n.delete(c.fingerprint); } else { for (const c of pendingItems) n.add(c.fingerprint); } onBulkChange(n); };
   return (
     <>
+      <div className="mb-2 flex items-center justify-between">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+          <span className="text-xs text-[var(--muted)]">Selecionar todas (pendentes)</span>
+        </label>
+        {bulk.size > 0 && (
+          <Button size="sm" onClick={onDelegate} disabled={!canExecute}>Delegar correções ({bulk.size})</Button>
+        )}
+      </div>
       <div className="overflow-hidden rounded-[9px] border border-[var(--border)]">
         <table className="w-full text-sm">
           <thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]">
-            <tr><th className="px-3 py-2">Regra</th><th className="px-3 py-2">URL</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"><span className="sr-only">Ação</span></th></tr>
+            <tr><th className="w-8 px-3 py-2"><span className="sr-only">Selecionar</span></th><th className="px-3 py-2">Regra</th><th className="px-3 py-2">URL</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"><span className="sr-only">Ação</span></th></tr>
           </thead>
           <tbody>
             {visibleItems.map((c) => (
               <tr key={c.fingerprint} className="border-t border-[var(--border)]">
+                <td className="px-3 py-2"><input type="checkbox" checked={bulk.has(c.fingerprint)} disabled={c.status === "executed" || c.status === "reverted"} onChange={() => toggleOne(c.fingerprint)} aria-label={`Selecionar ${c.url}`} /></td>
                 <td className="px-3 py-2 font-medium">{c.label || friendlyRule(c.rule_id)}</td>
                 <td className="max-w-md truncate px-3 py-2">{c.url}</td>
                 <td className="px-3 py-2"><Badge tone={c.status === "executed" ? "success" : "warning"}>{c.status}</Badge></td>
                 <td className="px-3 py-2 text-right"><Button size="sm" variant="secondary" onClick={() => onSelect(c)}>Preview</Button></td>
               </tr>
             ))}
-            {items.length === 0 && <tr><td colSpan={4} className="px-3 py-6 text-center text-[var(--muted)]">Nenhuma correção registrada.</td></tr>}
+            {items.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-[var(--muted)]">Nenhuma correção registrada.</td></tr>}
           </tbody>
         </table>
         <Pagination page={page} pageSize={PAGE_SIZE} total={items.length} onPageChange={setPage} label="correções" />
