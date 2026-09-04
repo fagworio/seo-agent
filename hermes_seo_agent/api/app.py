@@ -28,6 +28,7 @@ from .schemas import (
     ChangeEmailRequest,
     ChangePasswordRequest,
     CreateUserRequest,
+    EditorialTransitionRequest,
     EditorialEnvelope,
     ExperimentsEnvelope,
     FindingsEnvelope,
@@ -64,7 +65,7 @@ from .schemas import (
 
 from ..auth.service import AuthError
 from ..auth.totp import generate_secret
-from .errors import BadRequest, Forbidden, NotFound, ReauthRequired
+from .errors import BadRequest, Forbidden, NotFound, PreconditionFailed, ReauthRequired
 
 
 def _set_session_cookie(response: Response, services: Services, token: str) -> None:
@@ -214,6 +215,21 @@ def read_routers() -> list[APIRouter]:
                   session=Depends(authenticated("editorial.review")),
                   limit: int = Query(200, ge=1, le=500)) -> dict[str, Any]:
         return {"editorial": services.control.work_items(source="backlog", limit=limit)}
+
+    @ed.post("/editorial/{id}/{action}", response_model=OkModel, operation_id="editorial_transition")
+    def editorial_transition(id: str, action: str, body: EditorialTransitionRequest,
+                             services: Services = Depends(get_services),
+                             session=Depends(authenticated("editorial.review", csrf=True))) -> dict[str, Any]:
+        status = _EDITORIAL_ACTION_STATUS.get(action)
+        if status is None:
+            raise BadRequest(f"Ação editorial inválida: {action!r}")
+        if action == "publish" and "editorial.publish_confirm" not in session.permissions:
+            raise Forbidden("Publicação exige a permissão editorial.publish_confirm.")
+        res = services.control.transition_editorial(
+            id, status, actor=session.email, published_url=body.published_url or "")
+        if res is None:
+            raise PreconditionFailed("Transição editorial não permitida a partir do estado atual.")
+        return {"ok": True}
     out.append(ed)
 
     pg = APIRouter(prefix="/pages", tags=["pages"])
@@ -227,11 +243,12 @@ def read_routers() -> list[APIRouter]:
         res = services.control.pages(query=q, limit=limit, offset=offset,
                                      sort=sort, health=health, index=index)
         return {"pages": res["items"], "total": res["total"]}
-    @pg.get("/{url}/history", operation_id="pages_history")
-    def page_history(url: str, services: Services = Depends(get_services),
+    @pg.get("/history", operation_id="pages_history")
+    def page_history(url: str = Query(...), services: Services = Depends(get_services),
                      session=Depends(authenticated("pages.read"))) -> dict[str, Any]:
         from urllib.parse import unquote
-        return {"url": unquote(url), "history": services.control.page_history(unquote(url))}
+        decoded = unquote(url)
+        return {"url": decoded, "history": services.control.page_history(decoded)}
     out.append(pg)
 
     te = APIRouter(tags=["technical"])
@@ -564,6 +581,12 @@ def settings_router() -> APIRouter:
         return {"mfa_login_required": body.enabled}
 
     return r
+
+
+_EDITORIAL_ACTION_STATUS = {
+    "approve": "approved", "reject": "rejected", "snooze": "snoozed",
+    "publish": "published", "measure": "measured",
+}
 
 
 def _is_docs_path(path: str) -> bool:

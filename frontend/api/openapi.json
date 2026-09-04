@@ -331,6 +331,67 @@
         }
       }
     },
+    "/api/v1/editorial/{id}/{action}": {
+      "post": {
+        "tags": [
+          "editorial"
+        ],
+        "summary": "Editorial Transition",
+        "operationId": "editorial_transition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Action"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditorialTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkModel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pages": {
       "get": {
         "tags": [
@@ -439,7 +500,7 @@
         }
       }
     },
-    "/api/v1/pages/{url}/history": {
+    "/api/v1/pages/history": {
       "get": {
         "tags": [
           "pages"
@@ -449,7 +510,7 @@
         "parameters": [
           {
             "name": "url",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
@@ -2735,6 +2796,17 @@
           "editorial"
         ],
         "title": "EditorialEnvelope"
+      },
+      "EditorialTransitionRequest": {
+        "properties": {
+          "published_url": {
+            "type": "string",
+            "title": "Published Url",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "EditorialTransitionRequest"
       },
       "ExperimentModel": {
         "properties": {

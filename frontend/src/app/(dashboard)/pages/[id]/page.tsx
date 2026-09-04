@@ -16,7 +16,7 @@ export default function PageWorkspace() {
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["page-history", url],
-    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[] }>(`/pages/${params.id}/history`),
+    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[] }>(`/pages/history?url=${encodeURIComponent(url)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;

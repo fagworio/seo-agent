@@ -284,3 +284,58 @@ def test_activity_ref_is_string(tmp_path):
     runs_entries = [e for e in r.json()["activity"] if e["type"] == "agent_run"]
     assert runs_entries, "esperava ao menos um agent_run no activity"
     assert all(isinstance(e["ref"], str) for e in runs_entries)
+
+
+def test_pages_history_uses_query_param_and_returns_200(tmp_path):
+    """Regressão: /pages/history recebe a URL via query (a URL tem barras e não
+    cabe num path param de segmento único — Starlette decodifica %2F)."""
+    from urllib.parse import quote
+
+    db = tmp_path / "pages.db"
+    _prepare(db)
+    storage = Storage(str(db))
+    storage.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, source, status_code, title, meta_robots, "
+        "canonical, word_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("https://www.unicorniohater.com.br/a/", "2026-01-01T00:00:00+00:00", "audit", 200,
+         "A", "", "https://www.unicorniohater.com.br/a/", 900))
+    storage.conn.commit()
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    url = "https://www.unicorniohater.com.br/a/"
+    r = client.get(f"/api/v1/pages/history?url={quote(url, safe='')}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["url"] == url
+    assert body["history"] and body["history"][0]["title"] == "A"
+
+
+def test_editorial_transition_migrated(tmp_path):
+    """Regressão: a transição editorial (aprovar/rejeitar/publicar) foi migrada
+    para o backend tipado como POST /editorial/{id}/{action}."""
+    db = tmp_path / "ed.db"
+    _prepare(db)
+    storage = Storage(str(db))
+    storage.conn.execute(
+        "INSERT INTO editorial_backlog (pauta_type, title, status, created_at) "
+        "VALUES ('post', 'Guia', 'proposed', '2026-01-01T00:00:00+00:00')")
+    storage.conn.commit()
+    storage.close()
+
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
+    # aprovar
+    r = client.post("/api/v1/editorial/backlog:1/approve", json={}, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200, r.text
+    s = Storage(str(db))
+    row = s.conn.execute("SELECT status FROM editorial_backlog WHERE id=1").fetchone()
+    assert row[0] == "approved"
+    s.close()
+    # ação inválida -> 400
+    r = client.post("/api/v1/editorial/backlog:1/inexistente", json={}, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400

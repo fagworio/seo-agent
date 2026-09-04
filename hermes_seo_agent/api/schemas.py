@@ -357,6 +357,10 @@ class WorkItemDecisionModel(BaseModel):
     reason: str = Field(default="")
 
 
+class EditorialTransitionRequest(BaseModel):
+    published_url: str = Field(default="")
+
+
 # -- envelopes (mesma forma que o frontend já consome) ----------------------
 class AgentModel(BaseModel):
     id: int

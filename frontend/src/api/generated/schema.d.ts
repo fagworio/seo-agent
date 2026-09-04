@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/editorial/{id}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Editorial Transition */
+        post: operations["editorial_transition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages": {
         parameters: {
             query?: never;
@@ -123,7 +140,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/pages/{url}/history": {
+    "/api/v1/pages/history": {
         parameters: {
             query?: never;
             header?: never;
@@ -1061,6 +1078,14 @@ export interface components {
         EditorialEnvelope: {
             /** Editorial */
             editorial: components["schemas"]["OpportunityModel"][];
+        };
+        /** EditorialTransitionRequest */
+        EditorialTransitionRequest: {
+            /**
+             * Published Url
+             * @default
+             */
+            published_url: string;
         };
         /** ExperimentModel */
         ExperimentModel: {
@@ -2499,6 +2524,42 @@ export interface operations {
             };
         };
     };
+    editorial_transition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditorialTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     pages_list: {
         parameters: {
             query?: {
@@ -2537,11 +2598,11 @@ export interface operations {
     };
     pages_history: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
+            query: {
                 url: string;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
