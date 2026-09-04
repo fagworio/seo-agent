@@ -81,6 +81,7 @@ function Workbox() {
         </div>
       </div>
     )}
+    {resolve.isError && <p className="text-xs text-[var(--danger)]">{(resolve.error as ApiError).message}</p>}
 
     <div className="hidden md:block overflow-x-auto rounded-[9px] border border-[var(--border)]">
       <table className="w-full text-sm">

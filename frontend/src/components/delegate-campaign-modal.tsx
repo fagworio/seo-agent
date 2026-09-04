@@ -90,10 +90,18 @@ export function DelegateCampaignModal({ fingerprints, onClose, onCreated }: {
 
   return (
     <Drawer title="Delegar melhorias" onClose={onClose}>
-      {preview.isLoading && <p className="text-sm text-[var(--muted)]">Validando seleção…</p>}
-      {preview.isError && <p className="text-sm text-[var(--danger)]">{(preview.error as Error).message}</p>}
+      <ModalHeader title="Delegar melhorias" onClose={onClose} />
 
-      {p && (
+      {fingerprints.length === 0 ? (
+        <EmptyState />
+      ) : preview.isError ? (
+        <p className="text-sm text-[var(--danger)]">{(preview.error as Error).message}</p>
+      ) : !p ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-[var(--muted)]">
+          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
+          Validando seleção…
+        </div>
+      ) : (
         <div className="space-y-4 text-sm">
           {/* Resumo do lote */}
           <div className="flex items-baseline justify-between">
@@ -258,6 +266,27 @@ function LinkContext({ context }: { context: NonNullable<EligibleItem["context"]
           {context.confidence === "high" ? "trecho identificado" : "trecho não identificado"}
         </Badge>
       </div>
+    </div>
+  );
+}
+
+function ModalHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <div className="mb-4 flex items-center justify-between">
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <Button variant="ghost" size="sm" onClick={onClose}>Fechar</Button>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="space-y-3 rounded-md border border-[var(--border)] p-4 text-sm">
+      <p className="font-medium">Nada para delegar</p>
+      <p className="text-[var(--muted)]">
+        As URLs selecionadas não possuem correções seguras pendentes de delegação.
+        Correções já executadas ou rejeitadas não são delegadas novamente.
+      </p>
     </div>
   );
 }
