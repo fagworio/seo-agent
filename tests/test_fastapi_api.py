@@ -390,3 +390,16 @@ def test_refresh_data_dedupe_returns_active_run(tmp_path):
                      headers={"X-CSRF-Token": csrf})
     assert r2.status_code == 200
     assert r2.json()["id"] == first_id          # devolve o run ativo, não duplica
+
+
+def test_integrations_live_requires_manage_permission(tmp_path):
+    """R15: visualizar fontes = integration.read; verificar (live) = integration.manage."""
+    db = tmp_path / "int.db"
+    _prepare(db)
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
+    # operator tem integration.read mas NÃO integration.manage
+    assert client.get("/api/v1/integrations").status_code == 200
+    r = client.get("/api/v1/integrations?live=true")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "PERMISSION_DENIED"

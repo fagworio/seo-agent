@@ -20,6 +20,8 @@ const SOURCE_LABELS: Record<string, string> = {
 export default function IntegrationsPage() {
   const qc = useQueryClient();
   const [verifying, setVerifying] = useState<string | null>(null);
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ user: { permissions: string[] } }>("/auth/me") });
+  const canVerify = me.data?.user.permissions.includes("integration.manage") ?? false;
   const { data, error, isLoading } = useQuery({
     queryKey: ["integrations"],
     queryFn: () => api.get<{ integrations: IntegrationSource[] }>("/integrations"),
@@ -56,7 +58,7 @@ export default function IntegrationsPage() {
         </div>
         <Button
           onClick={() => run()}
-          disabled={verify.isPending}
+          disabled={!canVerify || verify.isPending}
           variant="secondary"
         >
           {verifying === "all" ? "Verificando…" : "Verificar todas"}
@@ -88,7 +90,7 @@ export default function IntegrationsPage() {
               )}
               {s.limitations && <p className="mt-3 text-xs text-[var(--muted)]">Limitação: {s.limitations}</p>}
               <div className="mt-3 flex justify-end">
-                <Button size="sm" variant="secondary" onClick={() => run(s.source)} disabled={verify.isPending}>
+                <Button size="sm" variant="secondary" onClick={() => run(s.source)} disabled={!canVerify || verify.isPending}>
                   {checking ? "Verificando…" : "Verificar conexão"}
                 </Button>
               </div>

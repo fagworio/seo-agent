@@ -359,6 +359,9 @@ def read_routers() -> list[APIRouter]:
     def integrations(services: Services = Depends(get_services),
                      session=Depends(authenticated("integration.read")),
                      live: bool = False, source: str | None = None) -> dict[str, Any]:
+        # R15: visualizar fontes = integration.read; verificar conexões (live) = integration.manage.
+        if live and "integration.manage" not in session.permissions:
+            raise Forbidden("Verificar conexões exige a permissão integration.manage.")
         return {"integrations": services.control.integrations(live=live, source=source)}
     out.append(it)
 
