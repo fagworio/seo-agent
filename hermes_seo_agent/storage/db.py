@@ -934,13 +934,24 @@ class Storage:
             "AND a.work_item_id IS NOT NULL").fetchall():
             _set(wid, "rejected", url)
 
-        # (b) por URL, cobrindo o banco atual (checklist pendente com ação finalizada)
-        for cid, url in self.conn.execute(
-            "SELECT id, url FROM improvement_checklist WHERE status = 'pending' AND url IS NOT NULL"
-        ).fetchall():
-            wid = f"checklist:{cid}"
+        # (b) por URL exata, cobrindo o banco atual em TODAS as fontes de decisão
+        #     (checklist + content_briefs) — item com ação finalizada na mesma URL
+        #     sai da fila de decisão.
+        decision_rows: list[tuple[str, str, str, str]] = []
+        for cid, url, item, action in self.conn.execute(
+            "SELECT id, url, item, action FROM improvement_checklist "
+            "WHERE status = 'pending' AND url IS NOT NULL").fetchall():
+            decision_rows.append((f"checklist:{cid}", url, item or "", action or ""))
+        for cid, url, title, action in self.conn.execute(
+            "SELECT id, url, title, action FROM content_briefs "
+            "WHERE status = 'proposed' AND url IS NOT NULL").fetchall():
+            decision_rows.append((f"content_brief:{cid}", url, title or "", action or ""))
+
+        for wid, url, item, action in decision_rows:
+            if self.get_work_item_lifecycle(wid) is not None:
+                continue
             executed = self.conn.execute(
-                "SELECT 1 FROM actions WHERE url = ? AND level = 'safe_fix' AND status = 'executed' LIMIT 1",
+                "SELECT url FROM actions WHERE url = ? AND level = 'safe_fix' AND status = 'executed' LIMIT 1",
                 (url,)).fetchone()
             rejected = self.conn.execute(
                 "SELECT 1 FROM actions WHERE url = ? AND level = 'safe_fix' "
@@ -951,20 +962,16 @@ class Storage:
             elif rejected:
                 _set(wid, "rejected", url)
 
-        # (c) best-effort para itens de TÍTULO cuja URL do checklist diverge da URL
-        #     da ação executada (o slug mudou após set-title). Encontra a ação
-        #     executada de título que compartilha >=3 palavras de conteúdo no slug.
-        #     Reconciliação one-shot; o caminho preciso é via work_item_id (ações novas).
+        # (c) best-effort para itens de TÍTULO cuja URL diverge da URL da ação
+        #     executada (o slug mudou após set-title). Encontra a ação executada
+        #     de título que compartilha >=3 palavras de conteúdo no slug.
         title_actions = self.conn.execute(
             "SELECT url FROM actions WHERE level = 'safe_fix' AND status = 'executed' "
             "AND rule_id IN ('title_opportunity','title_manual') AND url IS NOT NULL"
         ).fetchall()
         title_urls = [(r[0], _slug_words(r[0])) for r in title_actions]
         title_urls = [(u, w) for u, w in title_urls if w]
-        for cid, url, item, action in self.conn.execute(
-            "SELECT id, url, item, action FROM improvement_checklist "
-            "WHERE status = 'pending' AND url IS NOT NULL").fetchall():
-            wid = f"checklist:{cid}"
+        for wid, url, item, action in decision_rows:
             if self.get_work_item_lifecycle(wid) is not None:
                 continue
             text = f"{item or ''} {action or ''}".lower()

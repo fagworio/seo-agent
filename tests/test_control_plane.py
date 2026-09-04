@@ -168,6 +168,26 @@ def test_reconcile_matches_title_items_by_slug_tokens(tmp_path):
     storage.close()
 
 
+def test_reconcile_moves_content_brief_with_executed_action(tmp_path):
+    """Item 9 — content_brief com ação executada na mesma URL sai da Caixa."""
+    storage = Storage(str(tmp_path / "recon_cb.db"))
+    storage.conn.execute(
+        "INSERT INTO content_briefs (url, title, action, status, created_at) "
+        "VALUES (?, 'Será que Wolverine', 'Reescrever título (set-title)', 'proposed', ?)",
+        ("https://x.com/sera-que-wolverine-irmaos/", "2026-01-01"))
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, executed_at, work_item_id) "
+        "VALUES ('c1', 'title_opportunity', 'https://x.com/sera-que-wolverine-irmaos/', "
+        "'safe_fix', 'executed', 'fpw', '2026-01-02', NULL)")
+    storage.conn.commit()
+    counts = storage.reconcile_work_items()
+    lc = storage.get_work_item_lifecycle("content_brief:1")
+    assert lc is not None and lc["status"] == "implemented"
+    cp = ControlPlaneService(storage, _config())
+    assert all(i["id"] != "content_brief:1" for i in cp.work_items(source="content_brief"))
+    storage.close()
+
+
 def test_integrations_missing_not_zero(tmp_path):
     storage, cp = _seed(tmp_path / "i.db")
     out = {s["source"]: s["data_status"] for s in cp.integrations()}
