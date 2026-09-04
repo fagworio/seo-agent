@@ -1,10 +1,11 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, ApiError, PageHistoryEntry } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
+import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
 
 const TABS = ["Summary", "Search", "Content", "Links", "Technical", "History"] as const;
@@ -13,6 +14,14 @@ export default function PageWorkspace() {
   const params = useParams<{ id: string }>();
   const url = decodeURIComponent(params.id);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Summary");
+  const qc = useQueryClient();
+
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
+  const canRun = me.data?.user.permissions.includes("agent.run") ?? false;
+  const analyzePage = useMutation({
+    mutationFn: () => api.post<{ id: number; status: string }>("/runs", { intent: "specific_url", target_url: url }, me.data?.csrf_token),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["page-history", url],
@@ -31,7 +40,14 @@ export default function PageWorkspace() {
         <h1 className="text-lg font-semibold">{latest?.title || url}</h1>
         <span className="text-xs text-[var(--muted)]">{url}</span>
         {latest && <Badge tone={healthyTone(latest.status_code ?? 200)}>{String(latest.status_code ?? "—")}</Badge>}
+        <div className="ml-auto">
+          <Button size="sm" variant="secondary" onClick={() => analyzePage.mutate()} disabled={!canRun || analyzePage.isPending}>
+            {analyzePage.isPending ? "Solicitando…" : "Atualizar análise"}
+          </Button>
+        </div>
       </div>
+      {analyzePage.isSuccess && <p className="text-xs text-[var(--success)]">Análise solicitada para esta página (execução #{(analyzePage.data as { id: number })?.id}). Acompanhe em Agentes & Execuções.</p>}
+      {analyzePage.isError && <p className="text-xs text-[var(--danger)]">{(analyzePage.error as Error).message}</p>}
 
       <div className="flex gap-1 overflow-x-auto">
         {TABS.map((t) => (
