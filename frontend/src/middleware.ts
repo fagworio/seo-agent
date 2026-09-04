@@ -27,9 +27,10 @@ export const config = {
     "/agents/:path*",
     "/technical",
     "/editorial",
+    "/improvements",
     "/experiments",
     "/integrations",
     "/activity",
-    "/settings",
+    "/settings/:path*",
   ],
 };

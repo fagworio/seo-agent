@@ -6,7 +6,11 @@ const ACCOUNT = [
   { href: "/settings/preferences", label: "Preferências" },
   { href: "/settings", label: "Visão geral" },
 ];
-const ADMIN = [{ href: "/settings/users", label: "Usuários" }];
+const ADMIN = [
+  { href: "/settings/users", label: "Usuários" },
+  { href: "/settings/roles", label: "Funções e permissões" },
+  { href: "/settings/audit", label: "Auditoria de acesso" },
+];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   return (
