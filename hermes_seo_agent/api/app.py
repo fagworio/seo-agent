@@ -649,7 +649,8 @@ def campaigns_router() -> APIRouter:
         svc = ImprovementCampaignService(services.storage)
         res = svc.create(body.name, body.action_type, body.fingerprints,
                          created_by=session.email, max_actions_per_run=body.max_actions_per_run,
-                         execution_mode=body.execution_mode, schedule_policy=body.schedule_policy)
+                         execution_mode=body.execution_mode, schedule_policy=body.schedule_policy,
+                         work_item_ids=body.work_item_ids)
         if res is None:
             raise PreconditionFailed("Seleção inválida: campanha exige ações homogêneas com fix suportado.")
         return res
@@ -665,7 +666,14 @@ def campaigns_router() -> APIRouter:
     def campaigns_resolve(body: CampaignResolveRequest, services: Services = Depends(get_services),
                           session=Depends(authenticated("opportunity.review", csrf=True))) -> dict[str, Any]:
         svc = ImprovementCampaignService(services.storage)
-        return svc.resolve_fingerprints(body.urls)
+        if body.items:
+            res = svc.resolve_work_items([it.model_dump() for it in body.items])
+        else:
+            # compat: resolve por URL (legado)
+            res = svc.resolve_work_items([{"work_item_id": "", "url": u} for u in body.urls])
+        res.setdefault("fingerprints", [it["fingerprint"] for it in res["items"]
+                                        if it.get("fingerprint")])
+        return res
 
     @r.get("/{id}", response_model=CampaignDetailModel, operation_id="campaigns_detail")
     def campaigns_detail(id: int, services: Services = Depends(get_services),

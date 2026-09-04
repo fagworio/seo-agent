@@ -246,6 +246,45 @@ def test_resolve_fingerprints_by_url(tmp_path):
     assert res["fingerprints"] == ["fp-title-1"]
 
 
+def test_resolve_work_items_by_id_and_lifecycle(tmp_path):
+    """Item 1/3 — resolve por work_item_id e respeita o lifecycle (não re-delega)."""
+    storage = Storage(str(tmp_path / "reswi.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    # work item já implementado -> already_implemented
+    storage.set_work_item_lifecycle("checklist:1", "implemented", source="checklist", url="https://x.com/a/")
+    res = svc.resolve_work_items([
+        {"work_item_id": "checklist:1", "url": "https://x.com/a/"},
+        {"work_item_id": "checklist:2", "url": "https://x.com/b/"},
+        {"work_item_id": "checklist:3", "url": "https://x.com/none/"},
+    ])
+    by = {it["work_item_id"]: it for it in res["items"]}
+    assert by["checklist:1"]["state"] == "already_implemented"
+    assert by["checklist:1"]["fingerprint"] is None
+    assert by["checklist:2"]["state"] == "eligible"
+    assert by["checklist:2"]["fingerprint"] == "fp-title-2"
+    assert by["checklist:3"]["state"] == "no_action"
+    storage.close()
+
+
+def test_create_persists_work_item_id_and_lifecycle(tmp_path):
+    """Item 2/5 — create grava work_item_id no lote e marca lifecycle 'delegated'."""
+    storage = Storage(str(tmp_path / "cw.db"))
+    _seed_actions(storage)
+    svc = ImprovementCampaignService(storage)
+    camp = svc.create("Títulos", "title_manual", ["fp-title-1", "fp-title-2"],
+                      created_by="admin@x.com", max_actions_per_run=10,
+                      work_item_ids={"fp-title-1": "checklist:1"})
+    assert camp is not None
+    item1 = next(it for it in camp["items"] if it["action_fingerprint"] == "fp-title-1")
+    assert item1["work_item_id"] == "checklist:1"
+    assert item1["id"] is not None
+    lc = storage.get_work_item_lifecycle("checklist:1")
+    assert lc is not None and lc["status"] == "delegated"
+    assert lc["campaign_id"] == camp["id"] and lc["campaign_item_id"] == item1["id"]
+    storage.close()
+
+
 def test_preview_internal_link_context(tmp_path):
     """B10/spec UI — prévia de links internos expõe origem/destino/trecho/âncora/confiança."""
     from hermes_seo_agent.executor.executor import _fingerprint

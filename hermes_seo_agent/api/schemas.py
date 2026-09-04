@@ -398,6 +398,8 @@ class CampaignCreateRequest(BaseModel):
     max_actions_per_run: int = 10
     execution_mode: str = "delegated"
     schedule_policy: str | None = None
+    # item 2: fingerprint -> work_item_id, para persistir o vínculo no lote.
+    work_item_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class CampaignItemModel(BaseModel):
@@ -457,11 +459,27 @@ class CampaignPreviewRequest(BaseModel):
 
 
 class CampaignResolveRequest(BaseModel):
-    urls: list[str]
+    items: list[CampaignResolveItem] = Field(default_factory=list)
+    # compat: resolve por URL apenas (legado)
+    urls: list[str] = Field(default_factory=list)
+
+
+class CampaignResolveItem(BaseModel):
+    work_item_id: str = ""
+    url: str = ""
+
+
+class CampaignResolvedItem(BaseModel):
+    work_item_id: str = ""
+    url: str = ""
+    fingerprint: str | None = None
+    state: str = "eligible"
 
 
 class CampaignResolveResponse(BaseModel):
-    fingerprints: list[str]
+    items: list[CampaignResolvedItem] = []
+    # compat: fingerprints achatadas (apenas elegíveis)
+    fingerprints: list[str] = []
 
 
 class CampaignPreviewModel(BaseModel):

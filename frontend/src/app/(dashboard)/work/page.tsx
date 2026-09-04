@@ -11,6 +11,7 @@ import { Button } from "@/design-system/button";
 import { Drawer } from "@/design-system/drawer";
 import { Pagination, pageSlice } from "@/components/pagination";
 import { DelegateCampaignModal } from "@/components/delegate-campaign-modal";
+import { StatusBadge } from "@/components/status-badge";
 
 const filters = [["", "Todas"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["backlog", "Editorial"], ["interlink", "Links internos"]] as const;
 const pageSize = 10;
@@ -27,7 +28,7 @@ function Workbox() {
   const selectedId = params.get("item");
   const [page, setPage] = useState(Math.max(1, Number(params.get("page") ?? "1") || 1));
   const [bulk, setBulk] = useState<Set<string>>(new Set());
-  const [delegateFps, setDelegateFps] = useState<string[] | null>(null);
+  const [delegate, setDelegate] = useState<{ fingerprints: string[]; workItemIds: Record<string, string> } | null>(null);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
   const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200${source ? `&source=${source}` : ""}`) });
@@ -45,8 +46,16 @@ function Workbox() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["work-items"] }); setParam("item", ""); },
   });
   const resolve = useMutation({
-    mutationFn: (urls: string[]) => api.post<{ fingerprints: string[] }>("/campaigns/resolve", { urls }, me.data?.csrf_token),
-    onSuccess: (res) => setDelegateFps(res.fingerprints),
+    mutationFn: (items: { work_item_id: string; url: string }[]) =>
+      api.post<{ items: { work_item_id: string; url: string; fingerprint: string | null; state: string }[] }>("/campaigns/resolve", { items }, me.data?.csrf_token),
+    onSuccess: (res) => {
+      const eligible = (res.items ?? []).filter((it) => it.state === "eligible" && it.fingerprint);
+      const workItemIds: Record<string, string> = {};
+      for (const it of eligible) {
+        if (it.fingerprint && it.work_item_id) workItemIds[it.fingerprint] = it.work_item_id;
+      }
+      setDelegate({ fingerprints: eligible.map((it) => it.fingerprint as string), workItemIds });
+    },
   });
 
   if (query.isLoading) return <Loading />;
@@ -55,9 +64,9 @@ function Workbox() {
   const selected = items.find((item) => item.id === selectedId);
   const visible = pageSlice(items, page, pageSize);
   const canReview = me.data?.user.permissions.includes("opportunity.review") ?? false;
-  const selectedUrls = items.filter((i) => bulk.has(i.id) && i.url).map((i) => i.url);
+  const selectedItems = items.filter((i) => bulk.has(i.id) && i.url).map((i) => ({ work_item_id: i.id, url: i.url as string }));
   const toggleBulk = (id: string) => setBulk((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const selectable = items.filter((i) => !!i.url);
+  const selectable = items.filter((i) => !!i.url && !lifecycleDone(i));
   const allSelected = canReview && selectable.length > 0 && selectable.every((i) => bulk.has(i.id));
   const toggleAll = () => {
     if (!canReview || selectable.length === 0) return;
@@ -74,10 +83,10 @@ function Workbox() {
 
     {bulk.size > 0 && (
       <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface)] px-4 py-2 shadow-sm">
-        <span className="text-sm">✓ {bulk.size} selecionado(s){selectedUrls.length !== bulk.size ? ` · ${selectedUrls.length} com URL delegável` : ""}</span>
+        <span className="text-sm">✓ {bulk.size} selecionado(s){selectedItems.length !== bulk.size ? ` · ${selectedItems.length} com URL delegável` : ""}</span>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={() => setBulk(new Set())}>Limpar</Button>
-          {canReview && <Button size="sm" onClick={() => resolve.mutate(selectedUrls)} disabled={selectedUrls.length === 0 || resolve.isPending}>Delegar melhorias</Button>}
+          {canReview && <Button size="sm" onClick={() => resolve.mutate(selectedItems)} disabled={selectedItems.length === 0 || resolve.isPending}>Delegar melhorias</Button>}
         </div>
       </div>
     )}
@@ -92,7 +101,7 @@ function Workbox() {
           {visible.map((item) => {
             const view = presentOpportunity(item);
             return <tr key={item.id} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]">
-              <td className="px-3 py-2"><input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} /></td>
+              <td className="px-3 py-2">{lifecycleDone(item) ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} />}</td>
               <td className="max-w-2xl px-3 py-2"><button onClick={() => setParam("item", item.id)} className="block max-w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span><span className="mt-0.5 block line-clamp-1 font-medium">{displayTitle(item)}</span><span className="mt-0.5 block line-clamp-1 text-xs font-normal text-[var(--muted)]">{view.detail}</span></button></td>
               <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--muted)]">{opportunityEvidenceSummary(item)}</td>
               <td className="px-3 py-2"><ActionBadge value={item.action_class} /></td>
@@ -115,7 +124,7 @@ function Workbox() {
         return (
           <div key={item.id} className="rounded-[9px] border border-[var(--border)] p-3">
             <div className="flex items-start justify-between gap-2">
-              <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} className="mt-1" />
+              {lifecycleDone(item) ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} className="mt-1" />}
               <div className="min-w-0 flex-1">
                 <span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span>
                 <button onClick={() => setParam("item", item.id)} className="block max-w-full text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]">{displayTitle(item)}</button>
@@ -135,7 +144,7 @@ function Workbox() {
     </div>
     {!canReview && bulk.size > 0 && <p className="text-xs text-[var(--muted)]">🔒 Você pode inspecionar, mas não possui permissão (opportunity.review) para selecionar em lote.</p>}
     {selected && <Detail item={selected} canReview={canReview} pending={decision.isPending} error={decision.error} close={() => setParam("item", "")} decide={(action) => decision.mutate({ id: selected.id, action })} />}
-    {delegateFps != null && <DelegateCampaignModal fingerprints={delegateFps} onClose={() => setDelegateFps(null)} onCreated={() => { setDelegateFps(null); setBulk(new Set()); queryClient.invalidateQueries({ queryKey: ["campaigns"] }); }} />}
+    {delegate != null && <DelegateCampaignModal fingerprints={delegate.fingerprints} workItemIds={delegate.workItemIds} onClose={() => setDelegate(null)} onCreated={() => { setDelegate(null); setBulk(new Set()); queryClient.invalidateQueries({ queryKey: ["campaigns"] }); }} />}
   </div>;
 }
 
@@ -147,6 +156,8 @@ function Detail({ item, canReview, pending, error, close, decide }: { item: Oppo
 }
 
 function ActionBadge({ value }: { value: Opportunity["action_class"] }) { const content = value === "safe_fix" ? ["Correção segura", "success"] : value === "observe" ? ["Observar", "info"] : ["Requer aprovação", "warning"]; return <Badge tone={content[1] as "success" | "info" | "warning"}>{content[0]}</Badge>; }
+function lifecycleDone(item: Opportunity) { const lc = item.lifecycle ?? item.status ?? ""; return ["implemented", "measured", "rejected", "done", "approved", "delegated", "executing", "snoozed", "superseded", "expired", "cancelled"].includes(lc); }
+function LifecycleBadge({ item }: { item: Opportunity }) { return <StatusBadge status={item.lifecycle ?? item.status} />; }
 function formatPriority(value: number | null) { if (value === null) return "—"; return value <= 1 ? `${Math.round(value * 100)}%` : value.toLocaleString("pt-BR", { maximumFractionDigits: 1 }); }
 function cleanTitle(value: string) { return value.replace(/\s+[—|-]\s+UnicornioHater$/i, "").trim(); }
 function displayTitle(item: Opportunity) {

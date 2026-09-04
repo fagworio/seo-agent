@@ -122,6 +122,52 @@ def test_work_items_returns_unified_feed(tmp_path):
     storage.close()
 
 
+def test_work_items_excludes_implemented_and_caixa_is_decision_queue(tmp_path):
+    """Item 3/9 — item cuja ação já foi executada NÃO pertence à fila de decisão."""
+    storage, cp = _seed(tmp_path / "caixa.db")
+    # ação safe_fix executada para a mesma URL do checklist pendente
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, executed_at, work_item_id) "
+        "VALUES ('c1', 'meta_robots', 'https://x.com/a/', 'safe_fix', 'executed', 'fp-exec', '2026-01-02', 'checklist:1')")
+    storage.conn.commit()
+    # reconciliação alinha o lifecycle -> implemented
+    counts = storage.reconcile_work_items()
+    assert counts["implemented"] >= 1
+    lc = storage.get_work_item_lifecycle("checklist:1")
+    assert lc is not None and lc["status"] == "implemented"
+    # a Caixa deixa de listar o item implementado
+    assert all(i["id"] != "checklist:1" for i in cp.work_items(source="checklist"))
+    storage.close()
+
+
+def test_work_items_exposes_lifecycle_and_excludes_rejected(tmp_path):
+    """Item 8 — rejeitado sai da Caixa (somente Histórico)."""
+    storage, cp = _seed(tmp_path / "rej.db")
+    cp.update_work_item_status("checklist:1", "rejected", actor="op@x.com")
+    assert all(i["id"] != "checklist:1" for i in cp.work_items(source="checklist"))
+    storage.close()
+
+
+def test_reconcile_matches_title_items_by_slug_tokens(tmp_path):
+    """Item 9 (best-effort) — item de título cujo slug divergiu da ação executada."""
+    storage = Storage(str(tmp_path / "recon.db"))
+    storage.conn.execute(
+        "INSERT INTO improvement_checklist (url, item, action, status, created_at) "
+        "VALUES (?, 'title_meta', 'Reescrever título (set-title)', 'pending', ?)",
+        ("https://x.com/hughie-campbell-poderes-ate-o-momento-the-boys/", "2026-01-01"))
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, executed_at, work_item_id) "
+        "VALUES ('c1', 'title_opportunity', 'https://x.com/hughie-campbell-poderes-sobre-personagem-the-boys/', "
+        "'safe_fix', 'executed', 'fpt', '2026-01-02', NULL)")
+    storage.conn.commit()
+    counts = storage.reconcile_work_items()
+    lc = storage.get_work_item_lifecycle("checklist:1")
+    assert lc is not None and lc["status"] == "implemented"
+    cp = ControlPlaneService(storage, _config())
+    assert all(i["id"] != "checklist:1" for i in cp.work_items(source="checklist"))
+    storage.close()
+
+
 def test_integrations_missing_not_zero(tmp_path):
     storage, cp = _seed(tmp_path / "i.db")
     out = {s["source"]: s["data_status"] for s in cp.integrations()}
@@ -162,12 +208,17 @@ def test_activity_mixes_runs_and_events(tmp_path):
 
 def test_update_work_item_status_approve(tmp_path):
     storage, cp = _seed(tmp_path / "w.db")
-    # aprovar checklist (pending -> done)
+    # aprovar checklist -> approved (NÃO 'done'): aprovado ≠ implementado (item 4)
     res = cp.update_work_item_status("checklist:1", "approved", actor="admin@x.com")
     assert res == {"id": "checklist:1", "source": "checklist", "status": "approved"}
     row = storage.conn.execute(
         "SELECT status FROM improvement_checklist WHERE id = 1").fetchone()
-    assert row[0] == "done"
+    assert row[0] == "approved"
+    # lifecycle canônico registrado e NÃO é decisão pendente
+    lc = storage.get_work_item_lifecycle("checklist:1")
+    assert lc is not None and lc["status"] == "approved"
+    assert cp.work_items(source="checklist") == [] or all(
+        i["id"] != "checklist:1" for i in cp.work_items(source="checklist"))
     # auditoria registrada
     audit = storage.conn.execute(
         "SELECT action_type FROM audit_log WHERE entity = 'checklist:1'").fetchone()

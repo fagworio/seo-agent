@@ -200,6 +200,11 @@ export interface Opportunity {
     google_benefits?: string[]; site_benefits?: string[]; verification_steps?: string[];
   };
   data_freshness?: Record<string, string>;
+  // lifecycle canônico (Caixa = fila de decisão): new | approved | delegated |
+  // executing | implemented | measured | rejected | snoozed
+  lifecycle?: string;
+  lifecycle_updated_at?: string;
+  lifecycle_detail?: Record<string, unknown> | null;
 }
 
 export interface AgentRun {

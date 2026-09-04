@@ -431,6 +431,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reconcile", help="Alias of inventory")
     p.set_defaults(func=_cmd_inventory)
 
+    p = sub.add_parser("reconcile-work-items",
+                       help="Item 9: alinha work items legados ao lifecycle canônico (Caixa como fila de decisão)")
+    p.add_argument("--apply", action="store_true",
+                   help="grava o lifecycle (padrão é dry-run só relatar)")
+    p.set_defaults(func=_cmd_reconcile_work_items)
+
     parser.add_argument("--dry-run", action="store_true", help="no-op; safety posture (default)")
     return parser
 
@@ -447,6 +453,27 @@ def _cmd_inventory(args: argparse.Namespace, config: Any) -> int:
     result = {
         "status": "ok",
         "summary": {"command": "inventory", **report.summary()},
+        "findings": [],
+        "safe_actions": [],
+        "approval_required": [],
+    }
+    _emit(result, force_json=args.json)
+    return 0
+
+
+def _cmd_reconcile_work_items(args: argparse.Namespace, config: Any) -> int:
+    """Item 9 — reconcilia o lifecycle (Caixa = apenas decisão pendente)."""
+    with Storage(config.sqlite_path) as storage:
+        counts = storage.reconcile_work_items(dry_run=not args.apply)
+    result = {
+        "status": "ok",
+        "summary": {
+            "command": "reconcile-work-items",
+            "apply": bool(args.apply),
+            "implemented": counts.get("implemented", 0),
+            "rejected": counts.get("rejected", 0),
+            "message": "lifecycle atualizado" if args.apply else "dry-run: use --apply para gravar",
+        },
         "findings": [],
         "safe_actions": [],
         "approval_required": [],

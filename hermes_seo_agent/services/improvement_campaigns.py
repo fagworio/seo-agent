@@ -83,14 +83,18 @@ class ImprovementCampaignService:
         max_actions_per_run: int = 10,
         execution_mode: str = "delegated",
         schedule_policy: str | None = None,
+        work_item_ids: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Cria uma campanha a partir de ações safe_fix aprovadas (por fingerprint).
 
         - Homogênea: todas as ações devem ter o MESMO rule_id == action_type.
         - Itens copiam before/after e reconstroem o fix forward (para o runner).
+        - `work_item_ids` mapeia fingerprint -> work_item_id (item 2): persiste o
+          vínculo no item de campanha e move o lifecycle para "delegado".
         """
         if not fingerprints:
             return None
+        work_item_ids = work_item_ids or {}
         items = []
         for fp in fingerprints:
             row = self.conn.execute(
@@ -112,6 +116,7 @@ class ImprovementCampaignService:
             items.append({
                 "action_fingerprint": fp, "url": row[1], "action_type": action_type,
                 "before": before, "after": after, "fix": fix,
+                "work_item_id": work_item_ids.get(fp),
             })
         if not items:
             return None
@@ -126,38 +131,73 @@ class ImprovementCampaignService:
         )
         campaign_id = int(cur.lastrowid)
         for it in items:
-            self.conn.execute(
+            icur = self.conn.execute(
                 "INSERT INTO improvement_campaign_items (campaign_id, action_fingerprint, "
-                "url, action_type, before_json, after_json, fix_json, status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "url, action_type, before_json, after_json, fix_json, status, work_item_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (campaign_id, it["action_fingerprint"], it["url"], it["action_type"],
                  json.dumps(it["before"], ensure_ascii=False, default=str),
                  json.dumps(it["after"], ensure_ascii=False, default=str),
                  json.dumps(it["fix"], ensure_ascii=False, default=str),
-                 ITEM_PENDING),
+                 ITEM_PENDING, it["work_item_id"]),
             )
+            it["id"] = int(icur.lastrowid)
+            if it["work_item_id"]:
+                self.storage.set_work_item_lifecycle(
+                    it["work_item_id"], "delegated", source="", url=it["url"],
+                    action_fingerprint=it["action_fingerprint"],
+                    campaign_id=campaign_id, campaign_item_id=it["id"])
         self.conn.commit()
         self.storage.log_audit(created_by or "system", "CAMPAIGN_CREATED", f"campaign:{campaign_id}",
                                {}, {"name": name, "action_type": action_type, "total": len(items)})
         return self.get(campaign_id)
 
     # -- leitura -------------------------------------------------------------
-    def resolve_fingerprints(self, urls: list[str]) -> dict[str, Any]:
-        """B2 — mapeia URLs de oportunidades para fingerprints de ações safe_fix.
+    def resolve_work_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Item 1 — resolve lote por work_item_id (identidade precisa).
 
-        A Caixa de trabalho lista oportunidades (URLs), mas a campanha é criada
-        a partir de fingerprints. Para cada URL, resolve a ação safe_fix pendente
-        mais recente (não-executada). Retorna {fingerprints: [...]}.
+        Uma mesma URL pode ter várias melhorias (título, ALT, link…). Em vez de
+        URL -> última safe_fix, usamos work_item_id -> fingerprint, respeitando o
+        lifecycle. Retorna {items:[{work_item_id, url, fingerprint, state}]} com
+        state ∈ eligible | already_implemented | rejected | no_action.
         """
-        fingerprints: list[str] = []
-        for url in urls:
-            row = self.conn.execute(
-                "SELECT fingerprint FROM actions WHERE url = ? AND level = 'safe_fix' "
-                "AND status IN ('pending', 'approved') ORDER BY id DESC LIMIT 1",
-                (url,)).fetchone()
-            if row:
-                fingerprints.append(row[0])
-        return {"fingerprints": fingerprints}
+        resolved: list[dict[str, Any]] = []
+        for item in items:
+            wid = item.get("work_item_id") or ""
+            url = item.get("url") or ""
+            lc = self.storage.get_work_item_lifecycle(wid) if wid else None
+            state = "eligible"
+            fingerprint: str | None = None
+            if lc and lc["status"] in ("implemented", "measured"):
+                state = "already_implemented"
+            elif lc and lc["status"] == "rejected":
+                state = "rejected"
+            else:
+                # ação precisa: primeiro por work_item_id (ações novas), senão URL.
+                row = None
+                if wid:
+                    row = self.conn.execute(
+                        "SELECT fingerprint FROM actions WHERE work_item_id = ? "
+                        "AND level = 'safe_fix' AND status IN ('pending','approved') "
+                        "ORDER BY id DESC LIMIT 1", (wid,)).fetchone()
+                if row is None and url:
+                    row = self.conn.execute(
+                        "SELECT fingerprint FROM actions WHERE url = ? AND level = 'safe_fix' "
+                        "AND status IN ('pending','approved') ORDER BY id DESC LIMIT 1",
+                        (url,)).fetchone()
+                if row:
+                    fingerprint = row[0]
+                else:
+                    state = "no_action"
+            resolved.append({"work_item_id": wid, "url": url,
+                             "fingerprint": fingerprint, "state": state})
+        return {"items": resolved}
+
+    def resolve_fingerprints(self, urls: list[str]) -> dict[str, Any]:
+        """Compat: resolve só por URL (legado). Prefira resolve_work_items()."""
+        res = self.resolve_work_items([{"work_item_id": "", "url": u} for u in urls])
+        return {"fingerprints": [it["fingerprint"] for it in res["items"]
+                                 if it.get("fingerprint")]}
 
     def preview(self, fingerprints: list[str], *, max_actions_per_run: int = 10) -> dict[str, Any]:
         """B1 — valida a seleção antes de criar a campanha.
@@ -348,6 +388,7 @@ class ImprovementCampaignService:
             "rule_id": it["action_type"], "url": it["url"],
             "detail": it["action_type"], "fix": it["fix"],
             "_campaign_fp": it["action_fingerprint"],
+            "work_item_id": it.get("work_item_id"),
         } for it in pending]
 
         if apply is None:
@@ -372,13 +413,16 @@ class ImprovementCampaignService:
             if fp in executed:
                 self._set_item_status(it["id"], ITEM_EXECUTED, run_id=run_id)
                 executed_n += 1
-                # B8 — vincula ao pipeline de revalidação (baseline before/after).
+                # B8 — vincula ao pipeline de revalidação (baseline before/after)
+                # e registra o lifecycle canônico do work item (item 5/7).
                 after_vals = list((it.get("after") or {}).values())
                 self.storage.record_implemented_outcome(
                     url=it["url"], action_type=it["action_type"],
                     implemented_action=after_vals[0] if after_vals else it["action_type"],
                     before=it.get("before") or {}, after=it.get("after") or {},
-                    implemented_at=_now())
+                    implemented_at=_now(),
+                    work_item_id=it.get("work_item_id"),
+                    campaign_item_id=it["id"])
             elif fp in unverified:
                 self._set_item_status(it["id"], ITEM_FAILED, run_id=run_id,
                                       reason="confirmação REST pós-write falhou")

@@ -549,6 +549,22 @@ CREATE TABLE IF NOT EXISTS improvement_campaign_items (
     verified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_campaign_items_campaign ON improvement_campaign_items(campaign_id, status);
+
+-- Lifecycle canônico de um work item (decisão humana -> delegação -> execução -> medição).
+-- Fonte de verdade única para o frontend: independente do vocabulário de status
+-- de cada tabela de origem (checklist/content_brief/backlog/interlink).
+CREATE TABLE IF NOT EXISTS work_item_lifecycle (
+    work_item_id TEXT PRIMARY KEY,
+    canonical_status TEXT NOT NULL DEFAULT 'new',
+    source TEXT,
+    url TEXT,
+    action_fingerprint TEXT,
+    campaign_id INTEGER,
+    campaign_item_id INTEGER,
+    outcome_id INTEGER,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_status ON work_item_lifecycle(canonical_status);
 """
 
 
@@ -580,6 +596,7 @@ class Storage:
         additions = {
             "actions": [
                 ("fix_json", "TEXT"),
+                ("work_item_id", "TEXT"),
             ],
             "editorial_backlog": [
                 ("responsible", "TEXT"), ("deadline", "TEXT"),
@@ -605,6 +622,8 @@ class Storage:
                 ("measured_56d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_90d", "INTEGER NOT NULL DEFAULT 0"),
                 ("result_7d_json", "TEXT"),
+                ("work_item_id", "TEXT"),
+                ("campaign_item_id", "INTEGER"),
             ],
             "corpus_runs": [
                 ("sitemap_total", "INTEGER NOT NULL DEFAULT 0"),
@@ -722,6 +741,7 @@ class Storage:
         rollback: Any,
         status: str = "executed",
         fix: Any = None,
+        work_item_id: str | None = None,
     ) -> None:
         """Register an executed (or UNVERIFIED) action.
 
@@ -733,13 +753,13 @@ class Storage:
         """
         self.conn.execute(
             "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, "
-            "before_json, after_json, rollback_json, fix_json, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "before_json, after_json, rollback_json, fix_json, executed_at, work_item_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(fingerprint) DO UPDATE SET "
             "cycle_id = excluded.cycle_id, status = excluded.status, "
             "before_json = excluded.before_json, after_json = excluded.after_json, "
             "rollback_json = excluded.rollback_json, fix_json = excluded.fix_json, "
-            "executed_at = excluded.executed_at",
+            "executed_at = excluded.executed_at, work_item_id = excluded.work_item_id",
             (
                 cycle_id, rule_id, url, level, status, fingerprint,
                 json.dumps(before, ensure_ascii=False, default=str),
@@ -747,6 +767,7 @@ class Storage:
                 json.dumps(rollback, ensure_ascii=False, default=str),
                 json.dumps(fix, ensure_ascii=False, default=str) if fix else None,
                 _now(),
+                work_item_id,
             ),
         )
         self.conn.commit()
@@ -785,21 +806,176 @@ class Storage:
 
     def record_implemented_outcome(self, *, url: str, action_type: str,
                                    implemented_action: str, before: Any, after: Any,
-                                   implemented_at: str) -> None:
+                                   implemented_at: str, work_item_id: str | None = None,
+                                   campaign_item_id: int | None = None) -> int:
         """B8 — vincula uma melhoria executada ao pipeline de revalidação.
 
         Cria um opportunity_outcome (human_decision=approved, implemented_at) com
         o baseline (before/after da correção). O fluxo de revalidação já existente
         (`_revalidations` → `revalidate_outcome`) passa a medir este item.
+        Retorna o id do outcome criado e o registra no lifecycle canônico.
         """
-        self.conn.execute(
+        cur = self.conn.execute(
             "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
-            "human_decision, implemented_action, url, baseline_json, implemented_at, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "human_decision, implemented_action, url, baseline_json, implemented_at, "
+            "created_at, work_item_id, campaign_item_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (url, action_type, action_type, "approved", implemented_action, url,
              json.dumps({"before": before, "after": after}, ensure_ascii=False, default=str),
-             implemented_at, implemented_at))
+             implemented_at, implemented_at, work_item_id, campaign_item_id))
+        outcome_id = int(cur.lastrowid)
+        if work_item_id:
+            self.set_work_item_lifecycle(
+                work_item_id, "implemented", source="",
+                url=url, action_fingerprint=None, outcome_id=outcome_id)
         self.conn.commit()
+        return outcome_id
+
+    # -- lifecycle canônico de work item ------------------------------------
+
+    def set_work_item_lifecycle(self, work_item_id: str, canonical_status: str, *,
+                                source: str = "", url: str = "",
+                                action_fingerprint: str | None = None,
+                                campaign_id: int | None = None,
+                                campaign_item_id: int | None = None,
+                                outcome_id: int | None = None) -> None:
+        """Registra/aprimora o estado canônico de um work item (única fonte p/ UI).
+
+        NUNCA retrocede um estado já terminal (implemented/measured/rejected) para
+        um estado anterior (approved/delegated), para não "reenfileirar" na Caixa.
+        Executado também por transições externas (approve, campanha, runner).
+        """
+        if not work_item_id:
+            return
+        now = _now()
+        cur = self.conn.execute(
+            "SELECT canonical_status FROM work_item_lifecycle WHERE work_item_id = ?",
+            (work_item_id,),
+        ).fetchone()
+        if cur:
+            prior = cur[0]
+            # Ordem canônica: estados à frente nunca voltam para trás.
+            rank = {"new": 0, "approved": 1, "delegated": 2, "executing": 3,
+                    "implemented": 4, "measured": 5, "rejected": 5}
+            if rank.get(canonical_status, 0) < rank.get(prior, 0) \
+                    and prior not in ("rejected", "measured", "implemented"):
+                # Implementado/medido não retrocede. Rejeitado é terminal.
+                if prior in ("measured", "rejected"):
+                    return
+            self.conn.execute(
+                "UPDATE work_item_lifecycle SET canonical_status = ?, source = ?, url = ?, "
+                "action_fingerprint = COALESCE(?, action_fingerprint), "
+                "campaign_id = COALESCE(?, campaign_id), "
+                "campaign_item_id = COALESCE(?, campaign_item_id), "
+                "outcome_id = COALESCE(?, outcome_id), updated_at = ? WHERE work_item_id = ?",
+                (canonical_status, source, url, action_fingerprint, campaign_id,
+                 campaign_item_id, outcome_id, now, work_item_id),
+            )
+            self.conn.commit()
+            return
+        self.conn.execute(
+            "INSERT INTO work_item_lifecycle (work_item_id, canonical_status, source, url, "
+            "action_fingerprint, campaign_id, campaign_item_id, outcome_id, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (work_item_id, canonical_status, source, url, action_fingerprint,
+             campaign_id, campaign_item_id, outcome_id, now),
+        )
+        self.conn.commit()
+
+    def get_work_item_lifecycle(self, work_item_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT work_item_id, canonical_status, source, url, action_fingerprint, "
+            "campaign_id, campaign_item_id, outcome_id, updated_at "
+            "FROM work_item_lifecycle WHERE work_item_id = ?",
+            (work_item_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"work_item_id": row[0], "status": row[1], "source": row[2], "url": row[3],
+                "action_fingerprint": row[4], "campaign_id": row[5],
+                "campaign_item_id": row[6], "outcome_id": row[7], "updated_at": row[8]}
+
+    def reconcile_work_items(self, *, dry_run: bool = False) -> dict[str, int]:
+        """Item 9 — alinha work items legados ao lifecycle canônico.
+
+        Rows de origem que ainda estão 'pending'/'proposed' mas cuja ação safe_fix
+        já foi executada/revertida/rejeitada saem da fila de decisão. Dois modos:
+          (a) por work_item_id (ações novas, preciso); e
+          (b) por URL, cobrindo registros antigos em que `actions.work_item_id`
+              ainda é NULL (a reconciliação é one-shot no banco atual).
+        Não muta o status da tabela de origem: apenas registra o lifecycle, que é
+        o que a Caixa de trabalho passa a ler. Com dry_run=True só reporta.
+        """
+        counts = {"implemented": 0, "rejected": 0, "unchanged": 0}
+        seen: set[str] = set()
+
+        def _set(wid: str, status: str, url: str) -> None:
+            if not wid or wid in seen:
+                return
+            existing = self.get_work_item_lifecycle(wid)
+            if existing and existing["status"] in ("implemented", "measured", "rejected"):
+                seen.add(wid)
+                return
+            if not dry_run:
+                self.set_work_item_lifecycle(wid, status, source="", url=url or "")
+            counts[status] = counts.get(status, 0) + 1
+            seen.add(wid)
+
+        # (a) caminho preciso por work_item_id (ações novas)
+        for status in ("executed",):
+            for wid, url in self.conn.execute(
+                "SELECT a.work_item_id, a.url FROM actions a "
+                "WHERE a.level = 'safe_fix' AND a.status = ? AND a.work_item_id IS NOT NULL",
+                (status,)).fetchall():
+                _set(wid, "implemented", url)
+        for wid, url in self.conn.execute(
+            "SELECT a.work_item_id, a.url FROM actions a "
+            "WHERE a.level = 'safe_fix' AND a.status IN ('rejected','reverted','cancelled') "
+            "AND a.work_item_id IS NOT NULL").fetchall():
+            _set(wid, "rejected", url)
+
+        # (b) por URL, cobrindo o banco atual (checklist pendente com ação finalizada)
+        for cid, url in self.conn.execute(
+            "SELECT id, url FROM improvement_checklist WHERE status = 'pending' AND url IS NOT NULL"
+        ).fetchall():
+            wid = f"checklist:{cid}"
+            executed = self.conn.execute(
+                "SELECT 1 FROM actions WHERE url = ? AND level = 'safe_fix' AND status = 'executed' LIMIT 1",
+                (url,)).fetchone()
+            rejected = self.conn.execute(
+                "SELECT 1 FROM actions WHERE url = ? AND level = 'safe_fix' "
+                "AND status IN ('rejected','reverted','cancelled') LIMIT 1",
+                (url,)).fetchone()
+            if executed:
+                _set(wid, "implemented", url)
+            elif rejected:
+                _set(wid, "rejected", url)
+
+        # (c) best-effort para itens de TÍTULO cuja URL do checklist diverge da URL
+        #     da ação executada (o slug mudou após set-title). Encontra a ação
+        #     executada de título que compartilha >=3 palavras de conteúdo no slug.
+        #     Reconciliação one-shot; o caminho preciso é via work_item_id (ações novas).
+        title_actions = self.conn.execute(
+            "SELECT url FROM actions WHERE level = 'safe_fix' AND status = 'executed' "
+            "AND rule_id IN ('title_opportunity','title_manual') AND url IS NOT NULL"
+        ).fetchall()
+        title_urls = [(r[0], _slug_words(r[0])) for r in title_actions]
+        title_urls = [(u, w) for u, w in title_urls if w]
+        for cid, url, item, action in self.conn.execute(
+            "SELECT id, url, item, action FROM improvement_checklist "
+            "WHERE status = 'pending' AND url IS NOT NULL").fetchall():
+            wid = f"checklist:{cid}"
+            if self.get_work_item_lifecycle(wid) is not None:
+                continue
+            text = f"{item or ''} {action or ''}".lower()
+            if not any(k in text for k in ("título", "title", "meta description", "set-title")):
+                continue
+            w = _slug_words(url)
+            best = max(((len(w & tw), u) for u, tw in title_urls), default=(0, ""))
+            if best[0] >= 3:
+                _set(wid, "implemented", best[1])
+        self.conn.commit()
+        return counts
 
     # -- inspection queue ----------------------------------------------------
 
@@ -2613,6 +2789,18 @@ class Storage:
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+_STOP = {"de", "da", "do", "das", "dos", "e", "em", "no", "na", "para", "com", "um",
+         "uma", "que", "por", "sobre", "como", "qual", "quais", "quanto", "quando",
+         "onde", "quem", "o", "a", "os", "as", "the", "and", "of", "to"}
+
+
+def _slug_words(url: str) -> set[str]:
+    """Palavras de conteúdo de um slug de URL (para matching conservador)."""
+    import re
+    slug = (url or "").strip().rstrip("/").rsplit("/", 1)[-1].lower()
+    return {w for w in re.findall(r"[a-zà-ú0-9]{4,}", slug) if w not in _STOP}
 
 
 def _evidence_fingerprint(text: str) -> str:

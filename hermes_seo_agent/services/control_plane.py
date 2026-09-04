@@ -505,7 +505,34 @@ class ControlPlaneService:
     # -- Caixa de Trabalho ---------------------------------------------------
     def work_items(self, *, source: str | None = None, status: str | None = None,
                    limit: int = 200) -> list[dict[str, Any]]:
-        return self.opportunities.feed(source=source, status=status, limit=limit)
+        """Caixa de trabalho = SOMENTE decisão humana pendente.
+
+        Enriquece cada item com o lifecycle canônico (item 3/9) e remove os que já
+        têm destino (approved/delegated/executing/implemented/measured/rejected),
+        para não exibir trabalho que não exige mais decisão. Itens sem lifecycle
+        são novos -> entram na fila de decisão.
+        """
+        items = self.opportunities.feed(source=source, status=status, limit=limit)
+        out: list[dict[str, Any]] = []
+        for it in items:
+            lc = self.storage.get_work_item_lifecycle(it["id"])
+            canonical = lc["status"] if lc else "new"
+            it["lifecycle"] = canonical
+            it["lifecycle_updated_at"] = lc["updated_at"] if lc else it.get("updated_at", "")
+            it["lifecycle_detail"] = lc or None
+            if self._caixa_excludes(canonical) or self._caixa_excludes(it.get("status", "")):
+                continue
+            out.append(it)
+        return out
+
+    @staticmethod
+    def _caixa_excludes(canonical: str) -> bool:
+        """Estados que NÃO pertencem à fila de decisão."""
+        return canonical in {
+            "approved", "delegated", "executing", "implemented", "measured",
+            "rejected", "snoozed", "done", "superseded", "expired", "cancelled",
+            "unverified",
+        }
 
     ACTION_EVENTS = {"approved": "OPPORTUNITY_APPROVED", "rejected": "OPPORTUNITY_REJECTED",
                      "snoozed": "OPPORTUNITY_SNOOZED"}
@@ -527,10 +554,9 @@ class ControlPlaneService:
         key_id = int(key)
         done = False
         if source == "checklist":
-            if status == "approved":
-                done = self.storage.mark_checklist_done(key_id)
-            else:
-                done = self._update_simple("improvement_checklist", key_id, status, reason)
+            # Aprovar NÃO marca 'done' (implementado): apenas registra a decisão
+            # humana como 'approved'. A implementação é um passo separado (runner).
+            done = self._update_simple("improvement_checklist", key_id, status, reason)
         elif source == "content_brief":
             done = self._update_simple("content_briefs", key_id, status, reason)
         elif source == "interlink":
@@ -541,9 +567,33 @@ class ControlPlaneService:
                 done = self.storage.transition_backlog(key_id, status, reason=reason)
         if not done:
             return None
+        canonical = {"approved": "approved", "rejected": "rejected", "snoozed": "snoozed"}
+        if source in ("checklist", "content_brief", "interlink", "backlog") and status in canonical:
+            url = self._source_url(source, key_id)
+            self.storage.set_work_item_lifecycle(
+                item_id, canonical[status], source=source, url=url)
         self.storage.log_audit(actor or "system", event, item_id,
                                {"status": status}, {"status": status, "reason": reason})
         return {"id": item_id, "source": source, "status": status}
+
+    def _source_url(self, source: str, row_id: int) -> str:
+        try:
+            if source == "checklist":
+                r = self.storage.conn.execute(
+                    "SELECT url FROM improvement_checklist WHERE id = ?", (row_id,)).fetchone()
+            elif source == "content_brief":
+                r = self.storage.conn.execute(
+                    "SELECT url FROM content_briefs WHERE id = ?", (row_id,)).fetchone()
+            elif source == "interlink":
+                r = self.storage.conn.execute(
+                    "SELECT source_url FROM interlink_suggestions WHERE id = ?", (row_id,)).fetchone()
+            elif source == "backlog":
+                r = None
+            else:
+                r = None
+            return (r[0] if r else "") or ""
+        except Exception:
+            return ""
 
     def _update_simple(self, table: str, row_id: int, status: str, reason: str) -> bool:
         cur = self.storage.conn.execute(

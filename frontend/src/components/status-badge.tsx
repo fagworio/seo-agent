@@ -27,9 +27,15 @@ const META: Record<string, { label: string; tone: Tone }> = {
   pending: { label: "Aguardando", tone: "info" },
   new: { label: "Novo", tone: "neutral" },
   executed: { label: "Implementado", tone: "success" },
+  implemented: { label: "Implementado", tone: "success" },
   verified: { label: "Verificado", tone: "success" },
   stale: { label: "Precisa revisão", tone: "warning" },
   skipped: { label: "Ignorado", tone: "neutral" },
+  // — lifecycle canônico (work item) —
+  delegated: { label: "Delegado", tone: "info" },
+  executing: { label: "Em execução", tone: "info" },
+  rejected: { label: "Rejeitada", tone: "danger" },
+  snoozed: { label: "Adiado", tone: "neutral" },
   // — execução de agente (runs) —
   success: { label: "Concluído", tone: "success" },
 };

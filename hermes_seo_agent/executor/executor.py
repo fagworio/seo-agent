@@ -54,6 +54,7 @@ class Executor:
         for action in actions:
             rule_id = action.get("rule_id", "")
             url = action.get("url", "")
+            work_item_id = action.get("work_item_id")
             fix = action.get("fix") or {}
             # Fingerprint inclui o CONTEÚDO do fix (ex.: post_id + meta_key +
             # novo_valor), não só o detail — dois títulos com o mesmo número de
@@ -94,7 +95,7 @@ class Executor:
                         cycle_id=cycle_id, rule_id=rule_id, url=url,
                         level="safe_fix", fingerprint=fingerprint,
                         before=before, after=after, rollback=rollback,
-                        status="unverified", fix=fix,
+                        status="unverified", fix=fix, work_item_id=work_item_id,
                     )
                     self.storage.log_audit(
                         actor="executor",
@@ -119,6 +120,7 @@ class Executor:
                 after=after,
                 rollback=rollback,
                 fix=fix,
+                work_item_id=work_item_id,
             )
             self.storage.log_audit(
                 actor="executor",

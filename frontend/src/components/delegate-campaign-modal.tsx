@@ -43,8 +43,9 @@ const RULE_LABELS: Record<string, string> = {
   interlink: "Links internos",
 };
 
-export function DelegateCampaignModal({ fingerprints, onClose, onCreated }: {
+export function DelegateCampaignModal({ fingerprints, workItemIds = {}, onClose, onCreated }: {
   fingerprints: string[];
+  workItemIds?: Record<string, string>;
   onClose: () => void;
   onCreated: (id: number) => void;
 }) {
@@ -69,6 +70,9 @@ export function DelegateCampaignModal({ fingerprints, onClose, onCreated }: {
       fingerprints: effectiveFingerprints,
       execution_mode: mode,
       max_actions_per_run: limit,
+      work_item_ids: Object.fromEntries(effectiveFingerprints
+        .filter((fp) => workItemIds[fp])
+        .map((fp) => [fp, workItemIds[fp]])),
     }, me.data?.csrf_token),
     onSuccess: async (campaign) => {
       qc.invalidateQueries({ queryKey: ["campaigns"] });
