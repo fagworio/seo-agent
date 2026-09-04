@@ -29,7 +29,7 @@ class WseTrigger:
         if self.config.dry_run:
             return {"action": "cdn_purge", "url": url, "executed": False,
                     "note": "dry-run: purge skipped"}
-        return self._run(["wse", "cdn", "purge", "--url=" + url])
+        return self._run(["wse", "cdn", "purge", "--purge-url=" + url])
 
     def rebuild(self, kind: str = "smart") -> dict[str, Any]:
         """Trigger a static-site rebuild (smart|full|flush)."""
