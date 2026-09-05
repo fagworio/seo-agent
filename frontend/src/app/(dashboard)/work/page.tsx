@@ -13,7 +13,7 @@ import { Pagination, pageSlice } from "@/components/pagination";
 import { DelegateCampaignModal } from "@/components/delegate-campaign-modal";
 import { StatusBadge } from "@/components/status-badge";
 
-const filters = [["", "Todas"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["backlog", "Editorial"], ["interlink", "Links internos"]] as const;
+const filters = [["", "Todas"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["interlink", "Links internos"]] as const;
 const pageSize = 10;
 type Decision = "approve" | "reject" | "snooze";
 
@@ -31,7 +31,7 @@ function Workbox() {
   const [delegate, setDelegate] = useState<{ fingerprints: string[]; workItemIds: Record<string, string> } | null>(null);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
-  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200${source ? `&source=${source}` : ""}`) });
+  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200${source ? `&source=${source}` : ""}`), refetchInterval: 30_000 });
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params.toString());
@@ -144,7 +144,7 @@ function Workbox() {
     </div>
     {!canReview && bulk.size > 0 && <p className="text-xs text-[var(--muted)]">🔒 Você pode inspecionar, mas não possui permissão (opportunity.review) para selecionar em lote.</p>}
     {selected && <Detail item={selected} canReview={canReview} pending={decision.isPending} error={decision.error} close={() => setParam("item", "")} decide={(action) => decision.mutate({ id: selected.id, action })} />}
-    {delegate != null && <DelegateCampaignModal fingerprints={delegate.fingerprints} workItemIds={delegate.workItemIds} onClose={() => setDelegate(null)} onCreated={() => { setDelegate(null); setBulk(new Set()); queryClient.invalidateQueries({ queryKey: ["campaigns"] }); }} />}
+    {delegate != null && <DelegateCampaignModal fingerprints={delegate.fingerprints} workItemIds={delegate.workItemIds} onClose={() => setDelegate(null)} onCreated={() => { setDelegate(null); setBulk(new Set()); queryClient.invalidateQueries({ queryKey: ["work-items"] }); queryClient.invalidateQueries({ queryKey: ["campaigns"] }); }} />}
   </div>;
 }
 

@@ -515,6 +515,12 @@ class ControlPlaneService:
         items = self.opportunities.feed(source=source, status=status, limit=limit)
         out: list[dict[str, Any]] = []
         for it in items:
+            if it.get("source") == "backlog":
+                # Pautas editoriais têm trilhagem própria no menu Editorial
+                # (proposed → approved → published → measured), com confirmação
+                # de publicação. Não pertencem à Caixa de trabalho: não têm URL
+                # delegável nem o fluxo de publicar/medir do drawer da Caixa.
+                continue
             lc = self.storage.get_work_item_lifecycle(it["id"])
             canonical = lc["status"] if lc else "new"
             it["lifecycle"] = canonical
