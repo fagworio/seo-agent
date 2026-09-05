@@ -67,6 +67,26 @@ class SearchConsoleClient:
         data = response.json()
         return data.get("rows", []) if isinstance(data, dict) else []
 
+    def search_analytics_discover_daily(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        """Google Discover volume per day (search type=discover).
+
+        The Search Analytics API only accepts the DATE dimension when a
+        search type is set (page/query dimensions return HTTP 400), so
+        Discover is site-wide only — never per URL. Strategic context:
+        site momentum on Discover (accelerating/stable/losing reach).
+
+        Rows: [{keys: [date], clicks, impressions, ctr}, ...] (no position —
+        Discover has no position).
+        """
+        return self._sa_query(
+            ["date"], start_date, end_date, 1000, search_type="discover"
+        )
+
     def search_analytics_by_page(
         self,
         *,
@@ -130,6 +150,7 @@ class SearchConsoleClient:
         end_date: str,
         row_limit: int,
         filters: list[dict[str, Any]] | None = None,
+        search_type: str | None = None,
     ) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {
             "startDate": start_date,
@@ -137,6 +158,10 @@ class SearchConsoleClient:
             "dimensions": dimensions,
             "rowLimit": row_limit,
         }
+        if search_type:
+            # Search-type ("web"/"news"/"discover"/...) is a top-level field,
+            # NOT a dimension filter; with a type set only DATE is allowed.
+            payload["type"] = search_type
         if filters:
             payload["dimensionFilterGroups"] = [{"filters": filters}]
         url = f"{_BASE}/sites/{_quoted(self.config.gsc_site_url)}/searchAnalytics/query"

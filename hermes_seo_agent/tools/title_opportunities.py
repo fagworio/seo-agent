@@ -70,6 +70,40 @@ def candidate_title(query: str, *, max_len: int = 60) -> str:
 # Strategic generator (GSC x Trends)
 # --------------------------------------------------------------------------
 
+def discover_momentum(
+    daily_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Site-wide Google Discover signal from daily rows.
+
+    Returns {impressions, clicks, active_days, momentum} where momentum is
+    +1 (Discover accelerating: second half > first half +15%), -1 (losing
+    reach) or 0 (stable). Discover is site-wide only (the API forbids
+    page/query dimensions under the type filter) — this signal tells the
+    agent WHEN discovery-style titles/content are worth prioritizing.
+    """
+    impressions = sum(float(r.get("impressions", 0)) for r in daily_rows)
+    clicks = sum(float(r.get("clicks", 0)) for r in daily_rows)
+    active = sum(1 for r in daily_rows if float(r.get("impressions", 0)) > 0)
+    n = len(daily_rows)
+    if n >= 6:
+        half = max(n // 2, 1)
+        recent = sum(float(r.get("impressions", 0)) for r in daily_rows[-half:])
+        previous = sum(float(r.get("impressions", 0)) for r in daily_rows[: n - half])
+        if previous <= 0:
+            momentum = 1 if recent > 0 else 0
+        else:
+            delta = (recent - previous) / previous
+            momentum = 1 if delta > 0.15 else (-1 if delta < -0.15 else 0)
+    else:
+        momentum = 0
+    return {
+        "impressions": round(impressions),
+        "clicks": round(clicks),
+        "active_days": active,
+        "momentum": momentum,
+    }
+
+
 def _tokens(text: str) -> set[str]:
     """Significant lowercase tokens (no stopwords, no punctuation)."""
     words = re.findall(r"[a-zà-ú0-9]+", (text or "").lower())

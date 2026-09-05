@@ -1377,6 +1377,21 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     # --limit 0 (default) = TODOS os elegíveis; >0 = top N.
     targets = low_ctr if not args.limit else low_ctr[: args.limit]
 
+    # — Google Discover (site-wide): momento da superficie de descoberta.
+    # A API do GSC so permite a dimensao DATE sob o filtro type=discover,
+    # entao o sinal e global (nunca por URL). Entra como contexto
+    # estrategico: Discover em alta => titulos/conteudo de descoberta valem
+    # mais; tambem orienta oportunidades de conteudo no report do agente.
+    discover: dict[str, Any] = {}
+    try:
+        disc_rows = gsc.search_analytics_discover_daily(
+            start_date=start.isoformat(), end_date=end.isoformat())
+        if disc_rows:
+            from .tools.title_opportunities import discover_momentum
+            discover = discover_momentum(disc_rows)
+    except Exception:  # noqa: BLE001 - Discover is context, never fatal
+        discover = {}
+
     # — dedup: NÃO re-analisar URLs já em revisão de título ou com medição em
     # andamento (evita o laço de repetir candidatos que o agente já tratou).
     skipped: list[dict[str, Any]] = []
@@ -1458,7 +1473,8 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         "summary": {"command": "title-opportunities",
                     "candidates": len(candidates_rows),
                     "window_days": config.search_analytics_days,
-                    "skipped": len(skipped)},
+                    "skipped": len(skipped),
+                    "discover": discover},
         "findings": [],
         "safe_actions": [],
         "approval_required": [],
