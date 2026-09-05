@@ -39,6 +39,7 @@ from .executor.executor import Executor
 from .inventory.reconcile import normalize_url, reconcile, wp_link_to_static
 from .planner.planner import build_action_plan
 from .queue.inspection import build_queue_entries, remaining_budget
+from .report.corpus_source import corpus_source
 from .report.markdown import render_markdown
 from .rules.registry import get_rule
 from .storage.db import Storage
@@ -1153,15 +1154,15 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         steps.append("ga4-collect")
 
     # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
-    #    — só se não houver um run ativo (checkpoint evita concorrência).
+    #    — SEMPRE chama o rebuild (retomada real). Removida a trava de "run
+    #    ativo": um run parcial ficava "running" para sempre e o build semanal
+    #    nunca retomava (bug do corpus eternamente incompleto). O rebuild é
+    #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
+    #    com um run parcial apenas retoma e drena a fila até finalizar.
     if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
-        with Storage(config.sqlite_path) as storage:
-            last_run = storage.corpus_run_summary()["runs"]
-            active = last_run and last_run[0]["status"] == "running"
-        if not active:
-            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0),
-                         config=config)
-            steps.append("corpus-rebuild")
+        run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0),
+                     config=config)
+        steps.append("corpus-rebuild")
 
     # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
     #    motor novo de correção). O cron só acorda o runner.
@@ -3105,8 +3106,11 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
             #    morto) voltam a pending no início.
             import hashlib
 
-            with StaticSiteClient(config) as static:
-                urls = static.all_sitemap_urls()
+            # Fonte do corpus: API do WordPress preferida (evita bot-fight do
+            # Cloudflare no sitemap estático e usa o conteúdo principal do post);
+            # fallback: sitemap estático (comportamento legado, inalterado).
+            source = corpus_source(config)
+            urls = source.urls
             sitemap_total = len(urls)
             signature = hashlib.sha256("\n".join(urls).encode("utf-8")).hexdigest()[:16]
             exec_limit = args.limit or config.max_corpus_docs  # escopo desta execução
@@ -3158,56 +3162,55 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
             built_at = _now()
             attempted = processed = changed = failed = 0
             try:
-                with StaticSiteClient(config) as static:
-                    # O ORÇAMENTO do --limit é `attempted` (tentativas), não
-                    # `processed` (sucessos): falhas de fetch consomem o limite
-                    # para a execução não estourar a fila de falhas.
-                    while attempted < exec_limit:
-                        claims = storage.corpus_claim_pending_with_token(
-                            run_id, limit=min(50, exec_limit - attempted),
-                            worker_id=worker_id)
-                        if not claims:
-                            break
-                        for claim in claims:
-                            url = claim["url"]
-                            token = claim["lease_version"]
-                            # HEARTBEAT: renova o lease ANTES do fetch. Se o
-                            # renew não afetar nenhuma linha (lease tomado por
-                            # outro), PULA a URL — ela não pertence mais.
-                            if storage.corpus_renew_lease(run_id, [url], worker_id) != 1:
-                                continue
-                            attempted += 1  # antes do fetch (orçamento real)
-                            try:
-                                page = static.fetch_page(url)
-                            except Exception as exc:
-                                failed += 1
-                                # marca failed SÓ se ainda é o dono (fencing) E
-                                # o lease não expirou por relógio — o caminho
-                                # de falha respeita o mesmo TTL da escrita.
-                                if storage.corpus_mark_failed(
-                                        run_id, url, str(exc)[:200], worker_id, token,
-                                        lease_seconds=config.corpus_lease_seconds):
-                                    storage.record_corpus_failure(
-                                        run_id, url, str(exc)[:200])
-                                continue
-                            # OPERAÇÃO TRANSACIONAL ÚNICA: grava doc+seções+
-                            # entidades+FTS e marca done sob BEGIN IMMEDIATE,
-                            # revalidando a posse DENTRO da transação — a
-                            # janela entre validação e escrita é eliminada.
-                            # lease_seconds aplica o TTL por relógio também.
-                            result = storage.corpus_commit_page(
-                                run_id=run_id, url=url, worker_id=worker_id,
-                                lease_version=token, built_at=built_at, page=page,
-                                lease_seconds=config.corpus_lease_seconds)
-                            if result == "not_owned":
-                                continue  # posse perdida durante o fetch: nada grava
-                            if result == "written":
-                                processed += 1
-                                changed += 1
-                            elif result == "unchanged":
-                                processed += 1
-                        storage.update_corpus_run(
-                            run_id, processed=processed, changed=changed, failed=failed)
+                # O ORÇAMENTO do --limit é `attempted` (tentativas), não
+                # `processed` (sucessos): falhas de fetch consomem o limite
+                # para a execução não estourar a fila de falhas.
+                while attempted < exec_limit:
+                    claims = storage.corpus_claim_pending_with_token(
+                        run_id, limit=min(50, exec_limit - attempted),
+                        worker_id=worker_id)
+                    if not claims:
+                        break
+                    for claim in claims:
+                        url = claim["url"]
+                        token = claim["lease_version"]
+                        # HEARTBEAT: renova o lease ANTES do fetch. Se o
+                        # renew não afetar nenhuma linha (lease tomado por
+                        # outro), PULA a URL — ela não pertence mais.
+                        if storage.corpus_renew_lease(run_id, [url], worker_id) != 1:
+                            continue
+                        attempted += 1  # antes do fetch (orçamento real)
+                        try:
+                            page = source.fetch(url)
+                        except Exception as exc:
+                            failed += 1
+                            # marca failed SÓ se ainda é o dono (fencing) E
+                            # o lease não expirou por relógio — o caminho
+                            # de falha respeita o mesmo TTL da escrita.
+                            if storage.corpus_mark_failed(
+                                    run_id, url, str(exc)[:200], worker_id, token,
+                                    lease_seconds=config.corpus_lease_seconds):
+                                storage.record_corpus_failure(
+                                    run_id, url, str(exc)[:200])
+                            continue
+                        # OPERAÇÃO TRANSACIONAL ÚNICA: grava doc+seções+
+                        # entidades+FTS e marca done sob BEGIN IMMEDIATE,
+                        # revalidando a posse DENTRO da transação — a
+                        # janela entre validação e escrita é eliminada.
+                        # lease_seconds aplica o TTL por relógio também.
+                        result = storage.corpus_commit_page(
+                            run_id=run_id, url=url, worker_id=worker_id,
+                            lease_version=token, built_at=built_at, page=page,
+                            lease_seconds=config.corpus_lease_seconds)
+                        if result == "not_owned":
+                            continue  # posse perdida durante o fetch: nada grava
+                        if result == "written":
+                            processed += 1
+                            changed += 1
+                        elif result == "unchanged":
+                            processed += 1
+                    storage.update_corpus_run(
+                        run_id, processed=processed, changed=changed, failed=failed)
                 status = "ok" if not failed else "partial"
                 if storage.corpus_queue_counts(run_id)["pending"] > 0:
                     # escopo desta execução esgotou mas a fila continua: o run
@@ -3218,6 +3221,7 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                     finished = True
             except Exception as exc:  # noqa: BLE001 — a fila guarda o cursor
                 storage.finish_corpus_run(run_id, status="failed", error=str(exc)[:300])
+                source.close()
                 print(json.dumps({"status": "error", "error": f"rebuild falhou: {exc}"},
                                  ensure_ascii=False))
                 return 2
@@ -3241,6 +3245,7 @@ def _cmd_corpus(args: argparse.Namespace, config: Any) -> int:
                 "findings": [], "safe_actions": [], "approval_required": [],
                 "coverage": report, "global_coverage": global_cov,
             }
+            source.close()
             _emit(result, force_json=True)
             return 0
 

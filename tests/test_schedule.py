@@ -69,8 +69,14 @@ def test_schedule_includes_ga4_and_corpus_on_deep_weekday(
     assert captured["corpus"] == "rebuild"
 
 
-def test_schedule_skips_corpus_when_run_active(monkeypatch, capsys, tmp_path):
-    """Guarda M2: se já existe um rebuild running, o schedule NÃO dispara outro."""
+def test_schedule_resumes_corpus_when_run_active(monkeypatch, capsys, tmp_path):
+    """Guarda M2: um rebuild running é RETOMADO (drenado), nunca deixado preso.
+
+    Removida a trava de "run ativo": um run parcial ficava 'running' para sempre
+    e o build semanal nunca retomava (bug do corpus eternamente incompleto). O
+    rebuild é concorrente-seguro (claim atômico + lease fencing), então o
+    schedule sempre o aciona para retomar/drenar.
+    """
     db = tmp_path / "sched2.db"
     _now_patch(monkeypatch, weekday=0, hour=6)
     with Storage(str(db)) as storage:
@@ -103,8 +109,8 @@ def test_schedule_skips_corpus_when_run_active(monkeypatch, capsys, tmp_path):
         argparse.Namespace(inspect_hours="6", deep_weekday=1), _config(db))
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert "corpus-rebuild" not in out["summary"]["steps"]
-    assert corpus_calls == []  # não disparou rebuild concorrente
+    assert "corpus-rebuild" in out["summary"]["steps"]
+    assert corpus_calls == ["rebuild"]  # retomou o build (drenou a fila)
 
 
 def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, capsys, tmp_path):

@@ -648,6 +648,19 @@ def test_global_coverage_independent_of_batch(tmp_path):
         assert cov["global_coverage_pct"] == 1.0   # 1 doc / 100, não 50%
 
 
+class _FakeSource:
+    """Fonte fake para o rebuild: emula o contrato de CorpusSource (urls+fetch)."""
+    def __init__(self, static):
+        self._static = static
+        self.urls = static.all_sitemap_urls()
+
+    def fetch(self, url):
+        return self._static.fetch_page(url)
+
+    def close(self):
+        pass
+
+
 def test_rebuild_limit_counts_attempts_not_successes(monkeypatch, capsys, tmp_path):
     """O orçamento de --limit é TENTATIVAS: se muitas URLs falham, a execução
     não estoura o limite nem drena a fila de falhas (o bug apontado)."""
@@ -670,7 +683,7 @@ def test_rebuild_limit_counts_attempts_not_successes(monkeypatch, capsys, tmp_pa
                 raise ConnectionError("boom")
             return _page(url=url)
 
-    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    monkeypatch.setattr("hermes_seo_agent.cli.corpus_source", lambda c: _FakeSource(_FakeStatic()))
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
     args = argparse.Namespace(action="rebuild", limit=4, resume_id=0)
     rc = _cmd_corpus(args, config)
@@ -756,7 +769,7 @@ def test_rebuild_cli_records_run_and_failures(monkeypatch, capsys, tmp_path):
                 raise ConnectionError("boom")
             return _page(url=url)
 
-    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    monkeypatch.setattr("hermes_seo_agent.cli.corpus_source", lambda c: _FakeSource(_FakeStatic()))
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
     args = argparse.Namespace(action="rebuild", limit=0, resume_id=0)
     rc = _cmd_corpus(args, config)
@@ -794,7 +807,7 @@ def test_rebuild_resumes_queue_not_restarts(monkeypatch, capsys, tmp_path):
             calls.append(url)
             return _page(url=url)
 
-    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    monkeypatch.setattr("hermes_seo_agent.cli.corpus_source", lambda c: _FakeSource(_FakeStatic()))
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
 
     # 1º run: processa a, b e 'cai' antes de c (simula: c fica pending)
@@ -846,7 +859,7 @@ def test_rebuild_is_incremental_across_runs(monkeypatch, capsys, tmp_path):
         def fetch_page(self, url):
             return _page(url=url)
 
-    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    monkeypatch.setattr("hermes_seo_agent.cli.corpus_source", lambda c: _FakeSource(_FakeStatic()))
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
     args = argparse.Namespace(action="rebuild", limit=0, resume_id=0)
 
@@ -881,7 +894,7 @@ def test_rebuild_limit_paginates_advancing_each_run(monkeypatch, capsys, tmp_pat
             fetches.append(url)
             return _page(url=url)
 
-    monkeypatch.setattr("hermes_seo_agent.cli.StaticSiteClient", lambda c: _FakeStatic())
+    monkeypatch.setattr("hermes_seo_agent.cli.corpus_source", lambda c: _FakeSource(_FakeStatic()))
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db))
     args = argparse.Namespace(action="rebuild", limit=2, resume_id=0)
 
