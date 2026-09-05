@@ -8,6 +8,7 @@ sem credencial NUNCA aparece como "zero" — fica missing/invalid com motivo.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,8 +19,8 @@ from ..storage.db import Storage
 # Ação de recuperação sugerida por fonte (determinística, legível por humano).
 # O agente NUNCA executa; é orientação para o operador.
 RECOVERY_HINTS: dict[str, str] = {
-    "wordpress": "configure WORDPRESS_URL, gere um Application Password e rode a coleta de inventário editorial.",
-    "sitemap": "configure SITEMAP_URL e confirme que o sitemap estático está publicado e acessível.",
+    "wordpress": "configure WORDPRESS_URL/credenciais e rode 'Atualizar dados' (refresh-data) para coletar o estado dos posts.",
+    "sitemap": "configure SITEMAP_URL, confirme o sitemap publicado e rode 'Atualizar dados' (refresh-data).",
     "corpus": "rode um novo run do corpus para atualizar cobertura e reduzir staleness.",
     "gsc": "configure GOOGLE_APPLICATION_CREDENTIALS (service account), autorize a propriedade e rode a coleta do Search Console.",
     "ga4": "confirme GA4_PROPERTY_ID e as permissões de leitura e rode a coleta semanal do Analytics.",
@@ -107,7 +108,12 @@ class IntegrationStatusService:
                 return ""
         return {
             "wordpress": q("SELECT MAX(last_collected_at) FROM wp_post_state"),
-            "sitemap": q("SELECT MAX(crawled_at) FROM editorial_inventory"),
+            "sitemap": q(
+                "SELECT MAX(ar.started_at) FROM agent_run_steps s "
+                "JOIN agent_runs ar ON ar.id = s.run_id "
+                "WHERE s.stage = 'sitemap' AND s.status = 'success' "
+                "AND ar.intent = 'refresh_data'"
+            ),
             "gsc": q("SELECT MAX(window_end) FROM query_pages"),
             "ga4": q("SELECT MAX(collected_at) FROM ga4_collection_runs"),
             "corpus": q("SELECT MAX(started_at) FROM corpus_runs"),
@@ -154,14 +160,17 @@ class IntegrationStatusService:
         if not self.config.wordpress_url:
             return SourceStatus("wordpress", False, "missing",
                                 detail="WORDPRESS_URL vazio")
-        # Inventário persistido é o vestígio de que o WP já foi lido.
+        # Vestígio do pipeline atual: wp_post_state é gravado a cada refresh-data
+        # (R3) com a lista de posts publicados. editorial_inventory (crawl
+        # profundo via link-graph --store) é legado/opcional e NÃO define o
+        # status da fonte.
         row = self.storage.conn.execute(
-            "SELECT COUNT(*), MAX(crawled_at) FROM editorial_inventory"
+            "SELECT COUNT(*), MAX(modified_at) FROM wp_post_state"
         ).fetchone()
         return SourceStatus(
             "wordpress", True,
             "available" if row and row[0] else "missing",
-            detail="URL configurada; inventário editorial é o vestígio de leitura",
+            detail="URL configurada; estado dos posts (wp_post_state) é o vestígio de leitura",
             last_window=row[1] or "", rows=row[0] or 0,
             limitations="não faz escrita; exige Application Password p/ meta",
         )
@@ -170,14 +179,41 @@ class IntegrationStatusService:
         if not self.config.sitemap_url:
             return SourceStatus("sitemap", False, "missing",
                                 detail="SITEMAP_URL vazio")
+        # Evidência do pipeline atual: último refresh_data que resolveu a árvore
+        # do sitemap (agent_run_steps.stage='sitemap'). Fallback legado:
+        # editorial_inventory (link-graph --store) quando não há run de refresh.
         row = self.storage.conn.execute(
-            "SELECT COUNT(*), MAX(crawled_at) FROM editorial_inventory"
+            "SELECT ar.started_at, s.detail_json "
+            "FROM agent_run_steps s JOIN agent_runs ar ON ar.id = s.run_id "
+            "WHERE s.stage = 'sitemap' AND s.status = 'success' "
+            "AND ar.intent = 'refresh_data' "
+            "ORDER BY s.id DESC LIMIT 1"
         ).fetchone()
+        via_refresh = False
+        rows = 0
+        last = ""
+        if row:
+            try:
+                detail = json.loads(row[1] or "{}")
+                rows = int(detail.get("records_read", 0) or 0)
+                last = row[0] or ""
+                via_refresh = True
+            except Exception:
+                rows = 0
+        if not via_refresh:
+            legacy = self.storage.conn.execute(
+                "SELECT COUNT(*), MAX(crawled_at) FROM editorial_inventory"
+            ).fetchone()
+            rows = legacy[0] or 0
+            last = legacy[1] or ""
         return SourceStatus(
             "sitemap", True,
-            "available" if row and row[0] else "missing",
-            detail="sitemap configurado; cobertura medida pelo inventário",
-            last_window=row[1] or "", rows=row[0] or 0,
+            "available" if rows else "missing",
+            detail=(f"sitemap resolvido no último refresh ({rows} URLs)"
+                    if via_refresh else
+                    "sitemap configurado; cobertura medida pelo inventário"),
+            last_window="" if via_refresh else last,
+            rows=rows,
             limitations="cobertura canônica = URLs do inventário no sitemap",
         )
 
@@ -253,11 +289,13 @@ class IntegrationStatusService:
     # -- checagens ao vivo (opcionais) --------------------------------------
 
     def _live(self, out: list[SourceStatus]) -> None:
-        # WordPress: tenta listar 1 post (sem escrever).
+        # WordPress: tenta listar 1 post (sem escrever). max_pages=1: só a
+        # primeira página — list_posts seguiria X-WP-TotalPages e, com
+        # per_page=1, faria ~18k requests sequenciais (trava o verify).
         try:
             from ..connectors.wordpress import WordPressClient
             with WordPressClient(self.config) as wp:
-                posts = wp.list_posts(per_page=1)
+                posts = wp.list_posts(per_page=1, max_pages=1)
                 self._update(out, "wordpress",
                              "available" if posts else "partial",
                              "conexão OK; posts lidos")
