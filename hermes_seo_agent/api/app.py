@@ -822,6 +822,18 @@ def create_app(*, storage_path: str, config: Any) -> FastAPI:
     app.include_router(roles_permissions_router(), prefix="/api/v1")
     app.include_router(settings_router(), prefix="/api/v1")
     app.include_router(campaigns_router(), prefix="/api/v1")
+
+    @app.get("/api/v1/health", tags=["health"], operation_id="health", response_model=None)
+    def health():
+        """Liveness público (healthcheck do Docker); espelha a stdlib."""
+        from ..storage.db import Storage
+        try:
+            with Storage(app.state.storage_path) as storage:
+                storage.conn.execute("SELECT 1").fetchone()
+            return {"status": "ok"}
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "degraded"})
+
     return app
 
 

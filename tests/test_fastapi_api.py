@@ -34,6 +34,20 @@ def _prepare(db):
     storage.close()
 
 
+def test_fastapi_health_public(tmp_path):
+    """GET /api/v1/health é público e responde ok (healthcheck do Docker)."""
+    db = tmp_path / "h.db"
+    _prepare(db)
+    app = create_app(storage_path=str(db), config=_cfg())
+    client = TestClient(app)
+    r = client.get("/api/v1/health")
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+    # presente no OpenAPI
+    ops = [op["operationId"] for p in client.get("/api/v1/openapi.json").json()["paths"].values()
+           for op in p.values() if "operationId" in op]
+    assert "health" in ops
+
+
 def test_fastapi_login_me_and_openapi(tmp_path):
     db = tmp_path / "api.db"
     _prepare(db)
