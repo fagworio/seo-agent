@@ -1347,7 +1347,7 @@ def _title_matches_visible(expected: str, visible: str) -> bool:
 
 def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     """Research real queries -> title candidates anchored in GSC data."""
-    from .tools.title_opportunities import candidate_title, pick_top_query
+    from .tools.title_opportunities import strategic_title
 
     warnings: list[str] = []
     if not config.google_credentials:
@@ -1393,6 +1393,8 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     targets = eligible
 
     with StaticSiteClient(config) as static, WordPressClient(config) as wp:
+        # Pass 1: collect each page's real GSC queries (row_limit=15).
+        page_queries: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         for row in targets:
             url = (row.get("keys") or [""])[0]
             try:
@@ -1401,24 +1403,53 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
             except ConnectorError as exc:
                 warnings.append(f"{url}: {exc}")
                 continue
-            top_query = pick_top_query(queries)
-            suggested = candidate_title(top_query)
+            page_queries.append((row, queries))
+
+        # Pass 2: Google Trends for the top-5 queries of each page (dedup
+        # global; fail-soft -> neutral scores when Trends is unreachable).
+        trends: dict[str, dict[str, Any]] = {}
+        try:
+            from .connectors.google_trends import GoogleTrendsClient
+            trend_terms: list[str] = []
+            for _row, queries in page_queries:
+                for q in queries[:5]:
+                    term = (q.get("keys") or [""])[0]
+                    if term and term not in trend_terms:
+                        trend_terms.append(term)
+            if trend_terms:
+                trends = GoogleTrendsClient().batch_interest(trend_terms)
+        except Exception:  # noqa: BLE001 - Trends is enrichment, never fatal
+            trends = {}
+
+        # Pass 3: strategic decision per page (GSC score x Trends).
+        for row, queries in page_queries:
+            url = (row.get("keys") or [""])[0]
             page = static.fetch_page(url)
             post = wp.get_post_by_slug(url.rstrip("/").split("/")[-1])
+            current = (page.title if page else "") or ""
+            decision = strategic_title(current, queries, trends)
+            if decision is None:
+                # Current title already optimal for its best query — no
+                # candidate (a worse fragment must never be proposed).
+                skipped.append({"url": url, "reason": "titulo atual ja otimo"})
+                continue
             candidates_rows.append({
                 "url": url,
-                "current_title": page.title,
+                "current_title": current,
                 "impressions": float(row.get("impressions", 0)),
                 "clicks": float(row.get("clicks", 0)),
                 "ctr": float(row.get("ctr", 0)),
                 "position": float(row.get("position", 0)),
-                "top_query": top_query,
+                "top_query": decision["keyword"],
                 "top_queries": [
                     {"query": q["keys"][0], "impressions": q["impressions"],
                      "position": q["position"], "ctr": q["ctr"]}
                     for q in queries[:5]
                 ],
-                "suggested_title": suggested,
+                "suggested_title": decision["title"],
+                "rationale": decision["rationale"],
+                "score": decision["score"],
+                "trends": decision.get("trends"),
                 "post_id": post["id"] if post else None,
             })
 
