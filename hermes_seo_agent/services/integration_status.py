@@ -85,6 +85,8 @@ class IntegrationStatusService:
             self._sitemap(),
             self._corpus(),
             self._gsc(),
+            self._discover(),
+            self._trends(),
             self._ga4(),
             self._crux(),
             self._external(),
@@ -119,7 +121,13 @@ class IntegrationStatusService:
             "corpus": q("SELECT MAX(started_at) FROM corpus_runs"),
             "crux": "",  # CrUX é consultado ao vivo; sem coleta persistida
             "external": "",
+            "discover": "",  # preenchido abaixo via google_signals
+            "trends": "",  # consultado ao vivo no probe; sem coleta persistida
         }
+        # Discover: freshness vem do signal persistido pelo title-opportunities.
+        sig = self.storage.get_signals().get("discover", {})
+        if sig.get("updated_at"):
+            collected["discover"] = str(sig["updated_at"])
 
     # -- corpus (M2: memória editorial — "não encontrei conteúdo" confiável?) --
 
@@ -233,6 +241,61 @@ class IntegrationStatusService:
             detail="credencial configurada",
             last_window=ws or "", rows=rows,
             limitations="Search Console API não aceita API key (usa service account)",
+        )
+
+    def _discover(self) -> SourceStatus:
+        """Google Discover — site-wide signal persisted by title-opportunities.
+
+        The Search Analytics API never returns Discover per URL (only the
+        DATE dimension is allowed under a search type), so this source is a
+        site-level volume/momentum signal, refreshed every SEO-agent run.
+        """
+        sig = self.storage.get_signals().get("discover", {})
+        updated = sig.get("updated_at", "")
+        impressions = int(sig.get("impressions", 0) or 0)
+        momentum = int(sig.get("momentum", 0) or 0)
+        configured = bool(self.config.google_credentials)
+        has_data = impressions > 0 or bool(updated)
+        status = "missing"
+        if has_data and impressions > 0:
+            status = "available"
+        elif has_data:
+            status = "partial"  # respondeu, mas 0 impressoes (site sem tracao)
+        momentum_txt = {1: "em alta", 0: "estavel", -1: "em queda"}.get(momentum,
+                                                                       "estavel")
+        return SourceStatus(
+            "discover", configured, status,
+            detail=(f"{impressions:,} impressoes (28d) — {momentum_txt}"
+                    if has_data else "sem dados (site ainda sem presenca)"),
+            last_window=updated[:19] if updated else "",
+            rows=impressions,
+            limitations="API GSC so expoe Discover agregado (nunca por URL)",
+            extras={"momentum": momentum,
+                    "clicks": int(sig.get("clicks", 0) or 0)},
+        )
+
+    def _trends(self) -> SourceStatus:
+        """Google Trends — enrichment layer (fail-soft by design).
+
+        Default (offline) reads the persisted signal written by the last
+        title-opportunities run; the live probe (pytrends, ~5s) runs only
+        when the status endpoint is asked with live=1.
+        """
+        sig = self.storage.get_signals().get("trends", {})
+        if sig.get("ok"):
+            status = "available"
+            detail = (f"operacional ({sig.get('terms', 0)} termos no ultimo run)")
+        elif sig.get("ok") is False:
+            status = "unavailable"
+            detail = "indisponivel no ultimo run (fallback: GSC-only)"
+        else:
+            status = "unknown"
+            detail = "nao verificado neste ciclo (probe ao vivo com live=1)"
+        return SourceStatus(
+            "trends", True, status,
+            detail=detail,
+            last_window=str(sig.get("updated_at", ""))[:19],
+            limitations="pytrends (endpoint nao oficial); geo=BR, janela 90d",
         )
 
     def _ga4(self) -> SourceStatus:
@@ -375,6 +438,19 @@ class IntegrationStatusService:
                 self._update(out, "external", "invalid",
                              f"{provider.name} bloqueado/indisponível: {str(exc)[:120]}",
                              extras={"provider": provider.name})
+
+        # Trends (live): probe pytrends real (uma query de teste).
+        try:
+            from ..connectors.google_trends import GoogleTrendsClient
+            probe = GoogleTrendsClient().batch_interest(["gta 6"])
+            ok = bool(probe.get("gta 6", {}).get("interest") is not None)
+            self._update(
+                out, "trends", "available" if ok else "unavailable",
+                "operacional (probe ao vivo OK)"
+                if ok else "indisponivel do datacenter (fallback: GSC-only)")
+        except Exception as exc:
+            self._update(out, "trends", "unavailable",
+                         f"probe falhou: {str(exc)[:100]}")
 
     def _update(self, out: list[SourceStatus], source: str, status: str,
                 detail: str, extras: dict[str, Any] | None = None) -> None:

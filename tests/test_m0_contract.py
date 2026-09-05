@@ -79,10 +79,14 @@ def test_integration_status_all_sources_present(tmp_path):
         service = IntegrationStatusService(config, storage)
         statuses = {s.source: s for s in service.check()}
         assert set(statuses) == {"wordpress", "sitemap", "corpus", "gsc",
-                                 "ga4", "crux", "external"}
+                                 "discover", "trends", "ga4", "crux", "external"}
         assert statuses["ga4"].data_status == "available"
         assert statuses["gsc"].data_status == "missing"     # sem query_pages
         assert statuses["crux"].configured is True
+        # discover/trends: sem signals persistidos -> sem dados (nao quebra)
+        assert statuses["discover"].configured is True
+        assert statuses["discover"].data_status == "missing"
+        assert statuses["trends"].data_status == "unknown"
         # corpus: sem docs indexados -> missing; com docs -> available/partial
         assert statuses["corpus"].data_status == "missing"
         # M4: default scrape (frontend público) -> external configurada

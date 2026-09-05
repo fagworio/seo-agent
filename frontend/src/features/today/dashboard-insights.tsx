@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { GoogleDataSummary, ImprovementSummary, Revalidation, SearchQuerySummary, SearchTrendPoint } from "@/lib/api";
+import type { GoogleDataSummary, GoogleSignal, ImprovementSummary, Revalidation, SearchQuerySummary, SearchTrendPoint } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
@@ -48,3 +48,36 @@ function shortDate(value: string) { const [year, month, day] = value.split("-");
 function dateLabel(value: string) { if (!value) return "—"; const date = new Date(value.length === 10 ? `${value}T12:00:00` : value); return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("pt-BR").format(date); }
 function revalidationLabel(value: string) { return ({ waiting_7d: "Aguardando 7 dias", waiting_google: "Aguardando nova coleta", ready: "Pronta para revalidar", measured: "Medida" } as Record<string, string>)[value] ?? value; }
 function revalidationTone(value: string): "success" | "warning" | "info" | "neutral" { if (value === "measured") return "success"; if (value === "ready" || value === "waiting_google") return "warning"; if (value === "waiting_7d") return "info"; return "neutral"; }
+const momentumLabel = (value?: number) => ({ 1: "em alta", 0: "estável", "-1": "em queda" } as Record<string, string>)[String(value ?? 0)] ?? "estável";
+function momentumTone(value?: number): "success" | "warning" | "neutral" { if (value === 1) return "success"; if (value === -1) return "warning"; return "neutral"; }
+
+export function GoogleSignalsPanel({ signals }: { signals: Record<string, GoogleSignal> }) {
+  const discover = signals.discover;
+  const gsc = signals.gsc_web;
+  if (!discover && !gsc) {
+    return <Card title="Sinais Google — Discover e Busca"><Empty text="Ainda não há sinais persistidos. O próximo run do SEO agent grava aqui o volume do Google Discover, o total da busca (GSC) e a janela consultada." /></Card>;
+  }
+  return <Card title="Sinais Google — base estatística das decisões">
+    <p className="mb-4 text-xs text-[var(--muted)]">Volumes site-wide consultados pelo gerador de títulos e oportunidades (Google Search Console web + Discover + Google Trends).</p>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {discover && <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3">
+        <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold">Google Discover</span><Badge tone={momentumTone(discover.momentum)}>{momentumLabel(discover.momentum)}</Badge></div>
+        <p className="mt-2 text-2xl font-semibold tabular-nums">{integer.format(discover.impressions ?? 0)}</p>
+        <p className="text-xs text-[var(--muted)]">impressões {discover.window_days ? `(${discover.window_days}d)` : ""} · {integer.format(discover.clicks ?? 0)} cliques{discover.active_days ? ` · ${discover.active_days} dias ativos` : ""}</p>
+        {discover.updated_at && <p className="mt-2 text-[11px] text-[var(--muted)]">Atualizado: {dateLabel(discover.updated_at)}</p>}
+        <p className="mt-1 text-[11px] text-[var(--muted)]">API GSC só expõe Discover agregado (nunca por URL).</p>
+      </div>}
+      {gsc && <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3">
+        <span className="text-xs font-semibold">Busca Google (GSC web)</span>
+        <p className="mt-2 text-2xl font-semibold tabular-nums">{integer.format(gsc.impressions ?? 0)}</p>
+        <p className="text-xs text-[var(--muted)]">impressões {gsc.window_days ? `(${gsc.window_days}d)` : ""} · {integer.format(gsc.clicks ?? 0)} cliques · {integer.format(gsc.pages ?? 0)} páginas</p>
+        {gsc.updated_at && <p className="mt-2 text-[11px] text-[var(--muted)]">Atualizado: {dateLabel(gsc.updated_at)}</p>}
+      </div>}
+      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3">
+        <span className="text-xs font-semibold">Google Trends</span>
+        <p className="mt-2 text-sm text-[var(--muted)]">Enriquece a escolha da keyword: interesse 0–100 + momentum 90d por query (geo BR).</p>
+        <p className="mt-1 text-[11px] text-[var(--muted)]">Consultado ao vivo pelo gerador; consulte a página Fontes de dados para o status.</p>
+      </div>
+    </div>
+  </Card>;
+}

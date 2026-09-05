@@ -104,6 +104,7 @@ export interface TodayResponse {
     top_opportunities: Opportunity[];
     integration_warnings: IntegrationSource[];
     google_data: GoogleDataSummary;
+    google_signals: Record<string, GoogleSignal>;
     search_trend: SearchTrendPoint[];
     top_searches: SearchQuerySummary[];
     revalidations: Revalidation[];
@@ -139,6 +140,18 @@ export interface GoogleDataSummary {
   opportunities_total: number;
   opportunities_with_google: number;
   opportunities_without_google: number;
+}
+
+/** Sinal site-wide persistido pelo SEO agent (Discover / GSC web / Trends). */
+export interface GoogleSignal {
+  impressions?: number;
+  clicks?: number;
+  pages?: number;
+  momentum?: number;
+  active_days?: number;
+  window_days?: number;
+  source?: string;
+  updated_at?: string;
 }
 
 export interface Revalidation {

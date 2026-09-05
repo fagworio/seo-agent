@@ -1436,6 +1436,29 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         except Exception:  # noqa: BLE001 - Trends is enrichment, never fatal
             trends = {}
 
+        # — Persist signals for the control plane (Hoje / Fontes de dados).
+        try:
+            web_imps = sum(float(r.get("impressions", 0)) for r in pages)
+            web_clicks = sum(float(r.get("clicks", 0)) for r in pages)
+            trend_ok = (any(
+                isinstance(v.get("interest"), (int, float))
+                for v in trends.values()) if trends else None)
+            with Storage(config.sqlite_path) as storage:
+                storage.save_signal("discover", {
+                    **discover, "window_days": config.search_analytics_days})
+                storage.save_signal("gsc_web", {
+                    "impressions": round(web_imps),
+                    "clicks": round(web_clicks),
+                    "pages": len(pages),
+                    "window_days": config.search_analytics_days,
+                    "source": "search_analytics_by_page (type=web)"})
+                if trend_ok is not None:
+                    storage.save_signal("trends", {
+                        "ok": trend_ok, "terms": len(trends),
+                        "window_days": 90})
+        except Exception:  # noqa: BLE001 - persistence never breaks the run
+            pass
+
         # Pass 3: strategic decision per page (GSC score x Trends).
         for row, queries in page_queries:
             url = (row.get("keys") or [""])[0]

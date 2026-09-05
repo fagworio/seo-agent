@@ -632,11 +632,20 @@ class ControlPlaneService:
             "top_opportunities": top,
             "integration_warnings": warnings,
             "google_data": self._google_data_summary(items),
+            "google_signals": self._google_signals(),
             "search_trend": self._search_trend(),
             "top_searches": self._top_searches(limit=max(limit, 8)),
             "revalidations": revalidations,
             "improvement_summary": self._improvement_summary(revalidations),
         }
+
+    def _google_signals(self) -> dict[str, dict[str, Any]]:
+        """Discover / GSC-web / Trends site-wide signals (persisted by the
+        SEO-agent runs) for the Hoje / Fontes de dados views."""
+        try:
+            return self.storage.get_signals()
+        except Exception:  # noqa: BLE001 - signals are contextual
+            return {}
 
     # -- Fontes de dados ------------------------------------------------------
     def integrations(self, *, live: bool = False, source: str | None = None) -> list[dict[str, Any]]:

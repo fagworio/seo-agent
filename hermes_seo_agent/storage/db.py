@@ -720,6 +720,28 @@ class Storage:
         )
         self.conn.commit()
 
+    # -- google signals (Discover / GSC web / Trends — contexto p/ o front) --
+
+    def save_signal(self, source: str, payload: dict[str, Any]) -> None:
+        """Persist a Google signal (site-wide metrics for the control plane)."""
+        self.set_setting(f"signal:{source}", json.dumps(payload, ensure_ascii=False))
+
+    def get_signals(self) -> dict[str, dict[str, Any]]:
+        """All persisted signals: {source: {payload..., updated_at}}."""
+        out: dict[str, dict[str, Any]] = {}
+        for key, value, updated in self.conn.execute(
+            "SELECT key, value, updated_at FROM app_settings WHERE key LIKE 'signal:%'"
+        ).fetchall():
+            source = key.split(":", 1)[1]
+            try:
+                payload = json.loads(value)
+            except json.JSONDecodeError:
+                payload = {"raw": value}
+            if isinstance(payload, dict):
+                payload["updated_at"] = updated
+                out[source] = payload
+        return out
+
     # -- actions (Phase 4) ---------------------------------------------------
 
     def action_executed(self, fingerprint: str) -> bool:

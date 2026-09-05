@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, TodayResponse, ApiError, GoogleDataSummary, ImprovementSummary } from "@/lib/api";
 import { presentOpportunity } from "@/lib/opportunity-presentation";
 import { opportunityEvidenceSummary } from "@/features/opportunities/decision-insight";
-import { GoogleTrust, ImprovementChart, OrganicTrend, RevalidationPanel, TopSearches } from "@/features/today/dashboard-insights";
+import { GoogleTrust, GoogleSignalsPanel, ImprovementChart, OrganicTrend, RevalidationPanel, TopSearches } from "@/features/today/dashboard-insights";
 import { Card } from "@/design-system/card";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
@@ -55,6 +55,8 @@ export default function TodayPage() {
     <section aria-label="Resumo de atenção" className="grid grid-cols-2 gap-4 lg:grid-cols-4"><Kpi label="Decisões pendentes" value={today.needs_attention} detail="Caixa de trabalho" /><Kpi label="Revalidações exigindo dados" value={revalidationAttention} detail="Prazo atingido ou coleta pendente" /><Kpi label="Melhoras observadas" value={improvementSummary.improved} detail={`${improvementSummary.measured} intervenções medidas`} /><Kpi label="Cobertura Google" value={`${googleData.opportunities_with_google}/${googleData.opportunities_total}`} detail="oportunidades com evidência GSC" /></section>
 
     <GoogleTrust data={googleData} />
+
+    <GoogleSignalsPanel signals={rawToday.google_signals ?? {}} />
 
     <div className="grid gap-6 xl:grid-cols-2"><RecentRuns runs={today.recent_runs} /><RevalidationPanel items={today.revalidations} summary={improvementSummary} /></div>
 
