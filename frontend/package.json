@@ -8,6 +8,7 @@
     "dev:api": "bash ./scripts/dev-api.sh",
     "build": "next build",
     "start": "next start",
+    "start:prod": "next start -H 127.0.0.1 -p 3100",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
