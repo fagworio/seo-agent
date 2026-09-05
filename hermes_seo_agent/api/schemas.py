@@ -541,8 +541,29 @@ class RunsEnvelope(BaseModel):
     runs: list[AgentRunModel]
 
 
+class EditorialItemModel(BaseModel):
+    """Item do backlog editorial (product board) — projeção rica do
+    editorial_backlog (não é o DTO da Caixa de trabalho)."""
+
+    id: str
+    type: str = ""
+    title: str = ""
+    intent: str = ""
+    evidence: str = ""
+    related_urls: list[str] = []
+    recommendation: str = ""
+    duplication_risk: str = ""
+    score: float | None = None
+    status: str = ""
+    created_at: str = ""
+    published_url: str = ""
+    baseline: dict[str, Any] = {}
+    responsible: str = ""
+    deadline: str = ""
+
+
 class EditorialEnvelope(BaseModel):
-    editorial: list[OpportunityModel]
+    items: list[EditorialItemModel]
 
 
 class RunCreateRequest(BaseModel):

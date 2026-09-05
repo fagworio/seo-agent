@@ -295,6 +295,22 @@
         "operationId": "editorial_list",
         "parameters": [
           {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -4090,19 +4106,113 @@
       },
       "EditorialEnvelope": {
         "properties": {
-          "editorial": {
+          "items": {
             "items": {
-              "$ref": "#/components/schemas/OpportunityModel"
+              "$ref": "#/components/schemas/EditorialItemModel"
             },
             "type": "array",
-            "title": "Editorial"
+            "title": "Items"
           }
         },
         "type": "object",
         "required": [
-          "editorial"
+          "items"
         ],
         "title": "EditorialEnvelope"
+      },
+      "EditorialItemModel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "default": ""
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "default": ""
+          },
+          "intent": {
+            "type": "string",
+            "title": "Intent",
+            "default": ""
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence",
+            "default": ""
+          },
+          "related_urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Urls",
+            "default": []
+          },
+          "recommendation": {
+            "type": "string",
+            "title": "Recommendation",
+            "default": ""
+          },
+          "duplication_risk": {
+            "type": "string",
+            "title": "Duplication Risk",
+            "default": ""
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "published_url": {
+            "type": "string",
+            "title": "Published Url",
+            "default": ""
+          },
+          "baseline": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Baseline",
+            "default": {}
+          },
+          "responsible": {
+            "type": "string",
+            "title": "Responsible",
+            "default": ""
+          },
+          "deadline": {
+            "type": "string",
+            "title": "Deadline",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "EditorialItemModel",
+        "description": "Item do backlog editorial (product board) — projeção rica do\neditorial_backlog (não é o DTO da Caixa de trabalho)."
       },
       "EditorialTransitionRequest": {
         "properties": {

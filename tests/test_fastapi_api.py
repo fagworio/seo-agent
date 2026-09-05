@@ -112,14 +112,24 @@ def test_fastapi_csrf_and_permission_on_mutation(tmp_path):
 def test_fastapi_editorial_and_run_mutations(tmp_path):
     db = tmp_path / "api3.db"
     _prepare(db)
+    storage = Storage(str(db))
+    storage.conn.execute(
+        "INSERT INTO editorial_backlog (pauta_type, title, status, created_at) "
+        "VALUES ('supporting_post', 'Pauta teste', 'proposed', '2026-01-01T00:00:00+00:00')")
+    storage.conn.commit()
+    storage.close()
     app = create_app(storage_path=str(db), config=_cfg())
     client = TestClient(app)
     client.post("/api/v1/auth/login", json={"email": "op@x.com", "password": PWD})
     csrf = client.get("/api/v1/auth/me").json()["csrf_token"]
 
-    # /editorial (operator tem editorial.review)
+    # /editorial devolve a projeção do backlog editorial (envelope "items",
+    # NÃO o feed da Caixa de trabalho — regressão: work_items exclui backlog)
     r = client.get("/api/v1/editorial")
-    assert r.status_code == 200 and "editorial" in r.json()
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1 and items[0]["id"] == "backlog:1"
+    assert items[0]["status"] == "proposed"
 
     # POST /runs com target_url (escopo por URL) — exige CSRF
     r = client.post("/api/v1/runs", json={"intent": "url", "target_url": "https://www.unicorniohater.com.br/xbox-disc-to-digital/"})

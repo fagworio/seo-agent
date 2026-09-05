@@ -1623,8 +1623,86 @@ export interface components {
         };
         /** EditorialEnvelope */
         EditorialEnvelope: {
-            /** Editorial */
-            editorial: components["schemas"]["OpportunityModel"][];
+            /** Items */
+            items: components["schemas"]["EditorialItemModel"][];
+        };
+        /**
+         * EditorialItemModel
+         * @description Item do backlog editorial (product board) — projeção rica do
+         *     editorial_backlog (não é o DTO da Caixa de trabalho).
+         */
+        EditorialItemModel: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default
+             */
+            type: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Intent
+             * @default
+             */
+            intent: string;
+            /**
+             * Evidence
+             * @default
+             */
+            evidence: string;
+            /**
+             * Related Urls
+             * @default []
+             */
+            related_urls: string[];
+            /**
+             * Recommendation
+             * @default
+             */
+            recommendation: string;
+            /**
+             * Duplication Risk
+             * @default
+             */
+            duplication_risk: string;
+            /** Score */
+            score?: number | null;
+            /**
+             * Status
+             * @default
+             */
+            status: string;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Published Url
+             * @default
+             */
+            published_url: string;
+            /**
+             * Baseline
+             * @default {}
+             */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /**
+             * Responsible
+             * @default
+             */
+            responsible: string;
+            /**
+             * Deadline
+             * @default
+             */
+            deadline: string;
         };
         /** EditorialTransitionRequest */
         EditorialTransitionRequest: {
@@ -3147,6 +3225,7 @@ export interface operations {
     editorial_list: {
         parameters: {
             query?: {
+                status?: string | null;
                 limit?: number;
             };
             header?: never;

@@ -226,9 +226,13 @@ def read_routers() -> list[APIRouter]:
     ed = APIRouter(tags=["editorial"])
     @ed.get("/editorial", response_model=EditorialEnvelope, operation_id="editorial_list")
     def editorial(services: Services = Depends(get_services),
-                  session=Depends(authenticated("editorial.review")),
+                  session=Depends(authenticated("editorial.read")),
+                  status: str | None = None,
                   limit: int = Query(200, ge=1, le=500)) -> dict[str, Any]:
-        return {"editorial": services.control.work_items(source="backlog", limit=limit)}
+        # Projeção própria do backlog editorial (product board com
+        # intent/evidência/escopo/publicação). NÃO usar work_items(): a Caixa de
+        # trabalho exclui pautas editoriais (elas vivem neste menu).
+        return {"items": services.control.editorial_items(status=status, limit=limit)}
 
     @ed.post("/editorial/{id}/{action}", response_model=OkModel, operation_id="editorial_transition")
     def editorial_transition(id: str, action: str, body: EditorialTransitionRequest,
