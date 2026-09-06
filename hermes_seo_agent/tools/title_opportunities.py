@@ -104,6 +104,84 @@ def discover_momentum(
     }
 
 
+def shorten_title(
+    current_title: str,
+    *,
+    max_len: int = 60,
+    brand: str = "UnicornioHater",
+) -> str | None:
+    """Deterministic title shortening (title_too_long safe_fix).
+
+    Conservative rules, in order:
+    1. Strip the trailing brand (" — UnicornioHater"): the brand has zero
+       search value and is the usual cause of >65 chars.
+    2. If still too long, keep the ENTITY (text before ':') and trim the
+       description at a word boundary so the whole fits max_len.
+    3. Never drop the entity, never cut mid-word, never return a title that
+       is not shorter than the input.
+
+    Returns None when the title cannot be safely shortened (rare).
+    """
+    title = re.sub(r"\s+", " ", (current_title or "").strip())
+    if not title:
+        return None
+    if len(title) <= max_len:
+        return None  # nothing to fix
+
+    # 1) drop brand suffix "— UnicornioHater" / "- UnicornioHater"
+    candidate = re.sub(
+        r"\s*[—–-]\s*" + re.escape(brand) + r"\s*$", "", title).strip()
+    if not candidate:
+        return None
+    if len(candidate) <= max_len:
+        return candidate if candidate != title else None
+
+    # 2) keep entity + trimmed description at a word boundary (work on the
+    # brand-stripped candidate — the brand has zero search value).
+    base = candidate
+    entity = base
+    rest = ""
+    if ":" in base:
+        entity, rest = base.split(":", 1)
+        entity = entity.strip()
+        rest = rest.strip()
+    if not entity:
+        return None
+    if not rest:
+        # No "entity:" split (news/question headlines): keep the leading
+        # words — the main information comes first — cut at a word boundary.
+        words = re.findall(r"\S+", base)
+        out: list[str] = []
+        for word in words:
+            if len(" ".join(out + [word])) <= max_len - 1:
+                out.append(word)
+            else:
+                break
+        if not out or " ".join(out) == base:
+            return None
+        return " ".join(out).rstrip("…,;:") + "…"
+    budget = max_len - len(entity) - 2  # ": " prefix
+    if budget < 10:
+        # Very long entity: fall back to the entity itself (still has the
+        # indexed identity) when it is meaningfully shorter.
+        return entity if len(entity) < len(base) and len(entity) > 0 else None
+    words = re.findall(r"\S+", rest)
+    trimmed: list[str] = []
+    for word in words:
+        if len(" ".join(trimmed + [word])) <= budget:
+            trimmed.append(word)
+        else:
+            break
+    if not trimmed:
+        return entity if len(entity) <= max_len and entity != base else None
+    candidate = f"{entity}: {' '.join(trimmed)}".strip()
+    if len(candidate) > max_len:
+        candidate = candidate[: max_len - 1].rstrip() + "…"
+    if candidate == base or len(candidate) >= len(base):
+        return None
+    return candidate
+
+
 def _tokens(text: str) -> set[str]:
     """Significant lowercase tokens (no stopwords, no punctuation)."""
     words = re.findall(r"[a-zà-ú0-9]+", (text or "").lower())
