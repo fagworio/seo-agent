@@ -434,12 +434,15 @@ class ControlPlaneService:
             return None
 
     # -- Experimentos (F11) --------------------------------------------------
-    def experiments(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def experiments(self, *, limit: int = 100,
+                    include_rankability_v2: bool = False) -> list[dict[str, Any]]:
         """Intervenções implementadas com baseline, janela de medição e delta.
 
         Distingue movimento observado de certeza causal: expõe baseline, verdict
         e o estado de medição (waiting_data | measuring | measured). Nunca
-        sobrestima causalidade sem evidência.
+        sobrestima causalidade sem evidência. Quando ``include_rankability_v2``
+        é True, cruza os sinais (corpus+GSC+GA4+links+semântica) e anexa o
+        pacote V2 (Topic Authority × Query Rankability + OpportunityScore).
         """
         try:
             outcomes = [item for item in self.storage.list_opportunity_outcomes(limit=limit)
@@ -467,7 +470,7 @@ class ControlPlaneService:
                 delta["ga4"] = result["ga4_deltas"]
             projections = self.storage.expectations_for(outcome.get("url", ""), limit=1) \
                 if outcome.get("url") else []
-            out.append({
+            item: dict[str, Any] = {
                 "id": outcome["id"], "keyword": outcome.get("keyword", ""),
                 "opportunity_type": outcome.get("opportunity_type", ""),
                 "url": outcome.get("url", ""),
@@ -483,7 +486,15 @@ class ControlPlaneService:
                 "windows": windows,
                 "measurement_state": self._measurement_state(outcome.get("verdict"), recorded),
                 "limitations": self._measurement_limitations(outcome.get("verdict"), recorded),
-            })
+            }
+            if include_rankability_v2 and outcome.get("keyword"):
+                try:
+                    from ..report.opportunity_v2 import compute_opportunity_v2
+                    item["rankability_v2"] = compute_opportunity_v2(
+                        self.storage, outcome["keyword"], as_percent=True)
+                except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
+                    item["rankability_v2"] = None
+            out.append(item)
         return out
 
     @staticmethod

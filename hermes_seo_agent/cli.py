@@ -111,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("market", "M4: optional external intelligence (keywords/SERP)"),
         ("rankability", "M5: topical rankability profile per cluster"),
         ("rankability-v2", "M5-V2: Topic Authority × Query Rankability + Opportunity V2 (R1–R5)"),
+        ("calibrate", "M8-V2: R9 calibração de pesos pelos resultados medidos"),
         ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
@@ -393,6 +394,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_rankability)
         elif name == "rankability-v2":
             p.set_defaults(func=_cmd_rankability_v2)
+        elif name == "calibrate":
+            p.set_defaults(func=_cmd_calibrate)
         elif name == "decide":
             p.set_defaults(func=_cmd_decide)
         elif name == "brief":
@@ -3617,6 +3620,29 @@ def _cmd_rankability_v2(args: argparse.Namespace, config: Any) -> int:
     return 0
 
 
+def _cmd_calibrate(args: argparse.Namespace, config: Any) -> int:
+    """M8-V2 (R9): calibra os pesos pelos resultados medidos (sem ML)."""
+    from .report.calibration import calibration_report, calibrated_output_weights
+
+    with Storage(config.sqlite_path) as storage:
+        outcomes = storage.list_opportunity_outcomes(limit=2000)
+        report = calibration_report(outcomes)
+        weights = calibrated_output_weights(report)
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "calibrate",
+                    "n_outcomes": report["n_outcomes"],
+                    "gradient": report["gradient"],
+                    "weights": weights},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "calibration": report,
+        "adjusted_opportunity_weights": weights,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
 def _cmd_decide(args: argparse.Namespace, config: Any) -> int:
     """M6: árvore de decisão editorial + CandidateScore/ActionScore separados."""
     from .report.decision_engine import decide
@@ -3691,15 +3717,25 @@ def _cmd_decide(args: argparse.Namespace, config: Any) -> int:
         }
         outcome = decide(intent)
 
+        # M6-V2: cruzamento de sinais (corpus+GSC+GA4+links+semântica) →
+        # Topic Authority × Query Rankability + OpportunityScore ponderado.
+        try:
+            from .report.opportunity_v2 import compute_opportunity_v2
+            v2 = compute_opportunity_v2(storage, keyword, as_percent=False)
+        except Exception as exc:  # noqa: BLE001 — V2 não pode quebrar a decisão
+            v2 = {"error": f"V2 indisponível: {exc}"}
+
     result = {
         "status": "ok",
         "summary": {"command": "decide", "keyword": keyword,
                     "decision": outcome["decision"],
                     "opportunity_type": outcome["opportunity_type"],
                     "candidate_score": outcome["candidate_score"]["score"],
-                    "action_score": outcome["action_score"]["score"]},
+                    "action_score": outcome["action_score"]["score"],
+                    "opportunity_v2": (v2.get("opportunity") or {}).get("score")},
         "findings": [], "safe_actions": [], "approval_required": [],
         "decision": outcome,
+        "rankability_v2": v2,
     }
     _emit(result, force_json=True)
     return 0

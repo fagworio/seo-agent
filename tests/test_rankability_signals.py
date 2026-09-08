@@ -4,6 +4,9 @@ from hermes_seo_agent.report.rankability_signals import (
     build_cluster_signals, build_query_signals)
 from hermes_seo_agent.report.rankability_v2 import (
     topic_authority, query_rankability, opportunity_engine, query_distribution)
+from hermes_seo_agent.report.opportunity_v2 import compute_opportunity_v2
+from hermes_seo_agent.services.control_plane import ControlPlaneService
+from types import SimpleNamespace
 
 
 def _seed(storage: Storage):
@@ -100,4 +103,36 @@ def test_query_rankability_and_opportunity_end_to_end():
                        "query_stability": 0.6, "technical_known": 0.7},
     }, as_percent=True)
     assert 0 <= opp["score"] <= 100
+    s.close()
+
+
+def test_compute_opportunity_v2_full_bundle():
+    s = Storage(":memory:")
+    _seed(s)
+    bundle = compute_opportunity_v2(s, "dragon ball daima temporada 2", as_percent=True)
+    assert "topic_authority" in bundle and "query_rankability" in bundle
+    assert "opportunity" in bundle and "confidence" in bundle
+    assert 0 <= bundle["opportunity"]["score"] <= 100
+    assert bundle["signals"]["posts"] >= 3
+    s.close()
+
+
+def test_experiments_enriched_with_rankability_v2():
+    s = Storage(":memory:")
+    _seed(s)
+    s.conn.execute(
+        "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
+        "human_decision, implemented_action, url, implemented_at, created_at, "
+        "baseline_json) VALUES (?, ?, 'expand', 'approved', 'expanded', ?, ?, ?, ?)",
+        ("dragon ball daima temporada 2", "expand_existing",
+         "https://x.com/a/", "2026-02-01", "2026-02-01",
+         '{"gsc": {"position": 12, "clicks": 30}}'))
+    s.conn.commit()
+    cp = ControlPlaneService(s, SimpleNamespace())
+    items = cp.experiments(limit=10, include_rankability_v2=True)
+    assert items, "experiments devem ter ao menos o outcome aprovado"
+    enriched = next((i for i in items if i.get("keyword") == "dragon ball daima temporada 2"), None)
+    assert enriched is not None
+    assert enriched.get("rankability_v2"), "V2 deve ser anexado quando solicitado"
+    assert "opportunity" in enriched["rankability_v2"]
     s.close()

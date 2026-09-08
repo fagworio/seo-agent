@@ -428,6 +428,14 @@ export interface Experiment {
   windows: Record<string, boolean>;
   measurement_state: string;
   limitations?: string;
+  // M6-V2 — enriquecimento opcional (Topic Authority × Query Rankability + OpportunityScore)
+  rankability_v2?: {
+    topic_authority?: { score?: number; label?: string };
+    query_rankability?: { score?: number; label?: string };
+    opportunity?: { score?: number; label?: string; factors?: Record<string, unknown> };
+    confidence?: { score?: number; label?: string };
+    signals?: Record<string, unknown>;
+  } | null;
 }
 
 // Contrato OpenAPI gerado: o schema tipado oficial vem de

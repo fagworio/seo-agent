@@ -392,8 +392,10 @@ def read_routers() -> list[APIRouter]:
     @ex.get("/experiments", response_model=ExperimentsEnvelope, operation_id="experiments_list")
     def experiments(services: Services = Depends(get_services),
                     session=Depends(authenticated("experiment.read")),
-                    limit: int = Query(100, ge=1, le=200)) -> dict[str, Any]:
-        return {"experiments": services.control.experiments(limit=limit)}
+                    limit: int = Query(100, ge=1, le=200),
+                    include_rankability_v2: bool = Query(False)) -> dict[str, Any]:
+        return {"experiments": services.control.experiments(
+            limit=limit, include_rankability_v2=include_rankability_v2)}
     out.append(ex)
 
     rv = APIRouter(tags=["revalidations"])

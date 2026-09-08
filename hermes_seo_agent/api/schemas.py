@@ -291,6 +291,8 @@ class ExperimentModel(BaseModel):
     windows: dict[str, bool] = {}
     measurement_state: str = "waiting_data"
     limitations: str = ""
+    # M6-V2 — enriquecimento opcional (Topic Authority × Query Rankability + OpportunityScore)
+    rankability_v2: dict[str, Any] | None = None
 
 
 class RuleModel(BaseModel):

@@ -228,3 +228,28 @@ def _question_score(heading: str) -> bool:
     return "?" in heading or any(w in normalize_entity(heading)
                                  for w in ("quantos", "quantas", "quem", "como",
                                            "qual", "quais", "quando", "onde"))
+
+
+def resolve_cluster_entity(storage: Any, keyword: str) -> str:
+    """Resolve uma keyword para a ENTIDADE do cluster mais próximo (por tokens).
+
+    Ex.: "dragon ball daima temporada 2" -> "dragon ball". Determinístico.
+    """
+    from .topics import build_topic_graph
+    kw_terms = set(normalize_entity(keyword).split())
+    if not kw_terms:
+        return canonical_entity(keyword)
+    best, best_score = canonical_entity(keyword), 0
+    try:
+        graph = build_topic_graph(storage, min_urls=1)
+        for c in graph:
+            ent_terms = set(normalize_entity(c["entity"]).split())
+            overlap = len(kw_terms & ent_terms)
+            # prefere a entidade que aparece por extenso na keyword
+            if overlap > best_score or (overlap == best_score and best_score > 0
+                                        and normalize_entity(c["entity"]) in kw_terms):
+                best_score = overlap
+                best = c["entity"]
+    except Exception:
+        pass
+    return best

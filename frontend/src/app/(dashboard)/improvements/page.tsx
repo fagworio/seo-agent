@@ -29,7 +29,7 @@ function Improvements() {
   const view = rawView === "implemented" ? "todas" : rawView;
   const selectedId = Number(params.get("item"));
   const [page, setPage] = useState(1);
-  const query = useQuery({ queryKey: ["improvements"], queryFn: () => api.get<{ experiments: Experiment[] }>("/experiments?limit=200") });
+  const query = useQuery({ queryKey: ["improvements"], queryFn: () => api.get<{ experiments: Experiment[] }>("/experiments?limit=200&include_rankability_v2=true") });
   const setParam = (key: string, value: string) => { const next = new URLSearchParams(params.toString()); value ? next.set(key, value) : next.delete(key); router.replace(`/improvements?${next}`, { scroll: false }); };
   if (query.isLoading) return <Loading />;
   if (query.error) return <p className="text-sm text-[var(--danger)]">{(query.error as ApiError).message}</p>;
@@ -41,7 +41,7 @@ function Improvements() {
   return <div className="space-y-5"><header><h1 className="text-xl font-semibold">Melhorias</h1><p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">Acompanhe o que foi implementado, quando será revalidado e qual resultado foi realmente observado.</p></header>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Resumo das melhorias"><Summary label="Implementadas" value={all.length} /><Summary label="Aguardando dados" value={all.length - measured.length} /><Summary label="Melhoraram" value={all.filter((item) => item.verdict === "improved").length} /><Summary label="Neutras" value={all.filter((item) => item.verdict === "neutral").length} /><Summary label="Regressões" value={all.filter((item) => item.verdict === "worsened").length} /></section>
     <nav aria-label="Visões de melhorias" className="flex flex-wrap gap-2">{views.map(([key, label]) => <Button key={key} size="sm" variant={view === key ? "primary" : "ghost"} onClick={() => { setPage(1); setParam("view", key); }}>{label}</Button>)}</nav>
-    {view === "batches" ? <Batches /> : <div className="overflow-x-auto rounded-[9px] border border-[var(--border)]"><table className="w-full text-sm"><thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]"><tr><th className="px-3 py-2">Status</th><th className="px-3 py-2">Melhoria</th><th className="px-3 py-2">Página</th><th className="px-3 py-2">Previsto</th><th className="px-3 py-2">Resultado observado</th></tr></thead><tbody>{pageSlice(items, page, pageSize).map((item) => <tr key={item.id} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]"><td className="px-3 py-3"><StatusBadge item={item} /></td><td className="max-w-xs px-3 py-3"><button className="text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]" onClick={() => setParam("item", String(item.id))}>{friendlyType(item.opportunity_type)}</button><span className="block text-xs text-[var(--muted)]">{item.implemented_action || "Ação não descrita"}</span></td><td className="max-w-xs truncate px-3 py-3 text-xs">{item.keyword || item.url}</td><td className="px-3 py-3 tabular-nums">{forecastLabel(item.forecast)}</td><td className="px-3 py-3 tabular-nums">{resultLabel(item)}</td></tr>)}{!items.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-[var(--muted)]">Nenhuma melhoria nesta visão.</td></tr>}</tbody></table><Pagination page={page} pageSize={pageSize} total={items.length} onPageChange={setPage} label="melhorias" /></div>}
+    {view === "batches" ? <Batches /> : <div className="overflow-x-auto rounded-[9px] border border-[var(--border)]"><table className="w-full text-sm"><thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]"><tr><th className="px-3 py-2">Status</th><th className="px-3 py-2">Melhoria</th><th className="px-3 py-2">Página</th><th className="px-3 py-2">Previsto</th><th className="px-3 py-2">Resultado observado</th><th className="px-3 py-2">Oportunidade V2</th></tr></thead><tbody>{pageSlice(items, page, pageSize).map((item) => <tr key={item.id} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]"><td className="px-3 py-3"><StatusBadge item={item} /></td><td className="max-w-xs px-3 py-3"><button className="text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]" onClick={() => setParam("item", String(item.id))}>{friendlyType(item.opportunity_type)}</button><span className="block text-xs text-[var(--muted)]">{item.implemented_action || "Ação não descrita"}</span></td><td className="max-w-xs truncate px-3 py-3 text-xs">{item.keyword || item.url}</td><td className="px-3 py-3 tabular-nums">{forecastLabel(item.forecast)}</td><td className="px-3 py-3 tabular-nums">{resultLabel(item)}</td><td className="px-3 py-3"><V2Badge item={item} /></td></tr>)}{!items.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-[var(--muted)]">Nenhuma melhoria nesta visão.</td></tr>}</tbody></table><Pagination page={page} pageSize={pageSize} total={items.length} onPageChange={setPage} label="melhorias" /></div>}
     {selected && <ImprovementDrawer item={selected} close={() => setParam("item", "")} />}
   </div>;
 }
@@ -137,6 +137,13 @@ function normalizeExperiment(value: Experiment, index: number): Experiment {
     verdict: raw.verdict ?? null,
     windows: record(raw.windows) as Record<string, boolean>,
     measurement_state: raw.measurement_state ?? "waiting_data",
+    rankability_v2: raw.rankability_v2 ?? null,
   };
 }
 function Loading() { return <p className="text-sm text-[var(--muted)]">Carregando melhorias…</p>; }
+function V2Badge({ item }: { item: Experiment }) {
+  const opp = item.rankability_v2?.opportunity;
+  if (!opp?.score) return <span className="text-xs text-[var(--muted)]">—</span>;
+  const tone = opp.score >= 70 ? "success" : opp.score >= 40 ? "warning" : "danger";
+  return <Badge tone={tone} title={`Oportunidade V2: ${Math.round(opp.score)}/100`}>{Math.round(opp.score)}</Badge>;
+}
