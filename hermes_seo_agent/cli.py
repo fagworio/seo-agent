@@ -110,6 +110,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("topics", "M3: entities, topic graph and cluster coverage"),
         ("market", "M4: optional external intelligence (keywords/SERP)"),
         ("rankability", "M5: topical rankability profile per cluster"),
+        ("rankability-v2", "M5-V2: Topic Authority × Query Rankability + Opportunity V2 (R1–R5)"),
         ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
@@ -281,6 +282,12 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("term", help="tema/entidade do cluster")
             p.add_argument("--external-difficulty", type=float, default=None,
                            help="dificuldade externa 0..1 (M4, opcional)")
+        if name == "rankability-v2":
+            p.add_argument("term", help="tema/entidade do cluster")
+            p.add_argument("--query", default="",
+                           help="keyword específica p/ Query Rankability (opcional)")
+            p.add_argument("--percent", action="store_true",
+                           help="retorna scores 0..100 (default 0..1)")
         if name == "decide":
             p.add_argument("keyword", help="intenção/keyword a decidir")
             p.add_argument("--impressions", type=float, default=None,
@@ -384,6 +391,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_market)
         elif name == "rankability":
             p.set_defaults(func=_cmd_rankability)
+        elif name == "rankability-v2":
+            p.set_defaults(func=_cmd_rankability_v2)
         elif name == "decide":
             p.set_defaults(func=_cmd_decide)
         elif name == "brief":
@@ -3537,6 +3546,72 @@ def _cmd_rankability(args: argparse.Namespace, config: Any) -> int:
         "findings": [], "safe_actions": [], "approval_required": [],
         "profile": profile,
         "cluster": {**cov, "growth_delta_pct": growth},
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_rankability_v2(args: argparse.Namespace, config: Any) -> int:
+    """M5-V2 (R1–R5): Topic Authority × Query Rankability + Opportunity V2."""
+    term = (args.term or "").strip()
+    if not term:
+        print(json.dumps({"status": "error", "error": "informe o tema"},
+                         ensure_ascii=False))
+        return 2
+    from .report.rankability_signals import build_cluster_signals, build_query_signals
+    from .report.rankability_v2 import (topic_authority, query_rankability,
+                                        opportunity_engine, headroom,
+                                        query_distribution)
+    pct = bool(getattr(args, "percent", False))
+
+    with Storage(config.sqlite_path) as storage:
+        signals, cov = build_cluster_signals(storage, term)
+        topic = topic_authority(signals, as_percent=pct)
+        query = (args.query or "").strip()
+        dist = query_distribution(signals.get("positions", []))
+        query_result = None
+        opportunity = None
+        if query:
+            qs = build_query_signals(storage, signals, query)
+            top10 = dist.get("shares", {}).get("top10", 0.0)
+            qs["related_top10_share"] = top10
+            qs["topic_authority"] = topic["score"]
+            qr = query_rankability(qs, signals, dist, as_percent=pct)
+            query_result = qr
+            impressions = float(qs.get("impressions", 0) or 0)
+            clicks = float(qs.get("clicks", 0) or 0)
+            ctr = (clicks / impressions) if impressions else None
+            room, _ = headroom(qs.get("position"), ctr, 0.06)
+            sig_momentum = signals.get("momentum_delta_pct")
+            momentum = (min(sig_momentum / 50, 1.0) if isinstance(sig_momentum, (int, float))
+                        else 0.5)
+            opportunity = opportunity_engine({
+                "query_rankability": qr["score"],
+                "demand": min(impressions / 20000, 1.0) if impressions else 0.0,
+                "headroom": room,
+                "momentum": momentum,
+                "strategic_fit": 1.0 if signals.get("entities") else 0.5,
+                "confidence": {
+                    "gsc_sample": 0.9 if impressions else 0.2,
+                    "windows": 0.9 if signals.get("momentum_delta_pct") is not None else 0.4,
+                    "ga4_available": 0.5 if signals.get("ga4_engagement_rate") else 0.0,
+                    "corpus_available": 1.0 if signals.get("posts") else 0.0,
+                    "semantic_evidence": 0.8 if qs.get("semantic", {}).get("body_fit") else 0.2,
+                    "query_stability": 0.6,
+                    "technical_known": 0.7,
+                },
+            }, as_percent=pct)
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "rankability-v2", "term": term,
+                    "topic_authority": topic["score"], "label": topic["label"],
+                    "query": query, "query_rankability": (query_result or {}).get("score")},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "topic_authority": topic,
+        "query_rankability": query_result,
+        "opportunity": opportunity,
+        "cluster": {**cov, "positions": signals.get("positions", [])},
     }
     _emit(result, force_json=True)
     return 0
