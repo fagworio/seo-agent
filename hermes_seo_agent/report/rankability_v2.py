@@ -138,18 +138,21 @@ def _coverage_depth(cluster: dict[str, Any]) -> tuple[float, str]:
 
 
 def _technical_health(cluster: dict[str, Any]) -> tuple[float, str]:
-    """R1 — saúde técnica: indexável, HTTP 200, canonical, robôs, sitemap, CWV."""
+    """R1 — saúde técnica: indexável, HTTP 200, canonical, robôs, sitemap, CWV.
+
+    ``None`` = desconhecido (não bloqueia — só True/FALSE explicitamente
+    bloqueiam), para não zerar o score quando o dado não foi coletado.
+    """
     checks = {
-        "indexable": bool(cluster.get("indexable", True)),
-        "http_ok": bool(cluster.get("http_ok", True)),
-        "canonical_ok": bool(cluster.get("canonical_ok", True)),
-        "in_sitemap": bool(cluster.get("in_sitemap", True)),
-        "indexed": bool(cluster.get("google_indexed", True)),
-        "cwv_ok": bool(cluster.get("cwv_ok", None)),
+        "indexable": cluster.get("indexable"),
+        "http_ok": cluster.get("http_ok"),
+        "canonical_ok": cluster.get("canonical_ok"),
+        "in_sitemap": cluster.get("in_sitemap"),
+        "indexed": cluster.get("google_indexed"),
+        "cwv_ok": cluster.get("cwv_ok"),
     }
-    # falhas duras anulam (gate); CWV ruim só penaliza levemente (None = desconhecido)
-    blocking = [k for k, v in checks.items()
-                if k != "cwv_ok" and not v]
+    # falhas duras apenas quando EXPLÍCITAMENTE False; None/True não bloqueiam.
+    blocking = [k for k, v in checks.items() if k != "cwv_ok" and v is False]
     if blocking:
         return 0.0, f"bloqueio técnico: {', '.join(blocking)}"
     score = 1.0

@@ -352,9 +352,7 @@ class ControlPlaneService:
         return out
 
     def page_intelligence(self, url: str) -> dict[str, Any]:
-        """Inteligência V2 de uma página (Summary do Page Workspace): métricas +
-        Topic Authority/Headroom/Opportunity + Search Intelligence (F3) +
-        Semantic Coverage (F4)."""
+        """Inteligência V2 de uma página (Summary do Page Workspace)."""
         try:
             from ..report.opportunity_v2 import page_rankability_v2
             from ..report.page_intelligence import search_intelligence, semantic_coverage
@@ -369,6 +367,65 @@ class ControlPlaneService:
                     "semantic": semantic_coverage(self.storage, url, entity)}
         except Exception:  # noqa: BLE001 — inteligência é enriquecimento opcional
             return {"metrics": self._page_metrics(url), "rankability_v2": None}
+
+    # -- F7: Topic Explorer --------------------------------------------------
+    def topics(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Topic Explorer: authority + cobertura + momentum por tópico (cluster)."""
+        from ..report.rankability_signals import build_cluster_signals
+        from ..report.rankability_v2 import query_distribution, topic_authority
+        from ..report.topics import build_topic_graph
+        graph = build_topic_graph(self.storage, min_urls=1)[:limit]
+        out: list[dict[str, Any]] = []
+        for c in graph:
+            try:
+                signals, _cov = build_cluster_signals(self.storage, c["entity"])
+                if not signals.get("posts"):
+                    continue
+                ta = topic_authority(signals, as_percent=True)
+                dist = query_distribution(signals["positions"])
+                out.append({
+                    "topic": c["entity"],
+                    "authority": ta["score"], "label": ta["label"],
+                    "pages": signals.get("posts", 0),
+                    "queries": len(signals.get("positions", [])),
+                    "top10": dist.get("counts", {}).get("top10", 0),
+                    "coverage": round((ta.get("factors", {}).get("coverage", {}).get("score", 0)) * 100, 1),
+                    "momentum": signals.get("momentum_delta_pct"),
+                    "opportunities": 0,
+                })
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    def topic_detail(self, entity: str) -> dict[str, Any] | None:
+        """Detalhe de um tópico: authority breakdown + páginas fortes + queries emergentes."""
+        from ..report.rankability_signals import build_cluster_signals
+        from ..report.rankability_v2 import query_distribution, topic_authority
+        signals, _cov = build_cluster_signals(self.storage, entity)
+        if not signals.get("posts"):
+            return None
+        ta = topic_authority(signals, as_percent=True)
+        dist = query_distribution(signals["positions"])
+        # páginas fortes: urls do cluster (ordenadas pela cobertura de authority)
+        # queries emergentes: posições mais afastadas do topo (mais headroom)
+        queries = sorted(signals.get("positions", []), key=lambda p: p, reverse=True)[:8]
+        weak = [{"factor": k, "score": round(v.get("score", 0) * 100, 1)}
+                for k, v in (ta.get("factors", {}) or {}).items()
+                if isinstance(v, dict) and k not in ("_blocked",) and v.get("score", 0) < 0.6][:6]
+        return {
+            "topic": entity, "labels": ta,
+            "authority_breakdown": {k: round(v.get("score", 0) * 100, 1) for k, v in (ta.get("factors", {}) or {}).items() if isinstance(v, dict) and k != "_blocked"},
+            "pages": [{"url": u} for u in signals.get("urls", [])[:8]],
+            "strongest_pages": [{"url": u} for u in signals.get("urls", [])[:5]],
+            "emerging_queries": [{"position": p} for p in queries],
+            "weak_areas": weak,
+            "distribution": dist,
+        }
+
+    # -- F8: Content Gaps ----------------------------------------------------
+    def content_gaps(self, *, as_percent: bool = True) -> dict[str, Any]:
+        from ..report.content_gap import content_gaps as _gaps
+        return _gaps(self.storage, as_percent=as_percent)
 
     def editorial_items(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         """Editorial backlog as a product board, preserving the native workflow."""

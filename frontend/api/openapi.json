@@ -418,6 +418,142 @@
         }
       }
     },
+    "/api/v1/topics": {
+      "get": {
+        "tags": [
+          "intelligence"
+        ],
+        "summary": "Topics",
+        "operationId": "intelligence_topics",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Intelligence Topics"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/topics/detail": {
+      "get": {
+        "tags": [
+          "intelligence"
+        ],
+        "summary": "Topic Detail",
+        "operationId": "intelligence_topic_detail",
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Intelligence Topic Detail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/content-gaps": {
+      "get": {
+        "tags": [
+          "intelligence"
+        ],
+        "summary": "Content Gaps",
+        "operationId": "intelligence_content_gaps",
+        "parameters": [
+          {
+            "name": "as_percent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "As Percent"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Intelligence Content Gaps"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pages": {
       "get": {
         "tags": [

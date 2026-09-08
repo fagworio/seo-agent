@@ -207,3 +207,19 @@ def test_page_intelligence_search_and_semantic():
     assert 0 <= sem["coverage"] <= 1
     assert "entity" in sem["components"]
     s.close()
+
+
+def test_topics_and_content_gaps_endpoints():
+    s = Storage(":memory:")
+    _seed(s)
+    s.upsert_competitor_documents([{"domain": "ign.com", "url": f"https://ign.com/persona-6-{i}/",
+                                    "entities": ["persona 6"]} for i in range(3)])
+    cp = ControlPlaneService(s, SimpleNamespace())
+    topics = cp.topics(limit=20)
+    assert any(t["topic"] == "dragon ball" and t["authority"] > 0 for t in topics)
+    detail = cp.topic_detail("dragon ball")
+    assert detail is not None and "authority_breakdown" in detail
+    gaps = cp.content_gaps(as_percent=True)
+    assert gaps["total"] >= 1
+    assert gaps["by_type"].get("missing_topic", 0) >= 1  # persona 6 só nos concorrentes
+    s.close()

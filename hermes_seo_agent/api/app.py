@@ -253,6 +253,26 @@ def read_routers() -> list[APIRouter]:
         return {"ok": True}
     out.append(ed)
 
+    intel = APIRouter(tags=["intelligence"])
+    @intel.get("/topics", operation_id="intelligence_topics")
+    def topics(services: Services = Depends(get_services),
+               session=Depends(authenticated("experiment.read")),
+               limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        return {"topics": services.control.topics(limit=limit)}
+    @intel.get("/topics/detail", operation_id="intelligence_topic_detail")
+    def topic_detail(entity: str = Query(...), services: Services = Depends(get_services),
+                     session=Depends(authenticated("experiment.read"))) -> dict[str, Any]:
+        res = services.control.topic_detail(entity)
+        if res is None:
+            raise NotFound("Tópico não encontrado no corpora/topic graph.")
+        return res
+    @intel.get("/content-gaps", operation_id="intelligence_content_gaps")
+    def content_gaps(services: Services = Depends(get_services),
+                     session=Depends(authenticated("experiment.read")),
+                     as_percent: bool = Query(True)) -> dict[str, Any]:
+        return services.control.content_gaps(as_percent=as_percent)
+    out.append(intel)
+
     pg = APIRouter(prefix="/pages", tags=["pages"])
     @pg.get("", response_model=PagesEnvelope, operation_id="pages_list")
     def pages(services: Services = Depends(get_services),
