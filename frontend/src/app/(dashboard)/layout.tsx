@@ -1,6 +1,7 @@
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { RefreshDataButton } from "@/components/refresh-data-button";
+import { LogoutButton } from "@/components/logout-button";
 
 const NAV = [
   { href: "/today", label: "Hoje" },
@@ -30,6 +31,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span>unicorniohater.com.br</span>
             <RefreshDataButton />
             <ThemeToggle />
+            <LogoutButton />
           </div>
         </header>
         <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
