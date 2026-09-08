@@ -729,6 +729,28 @@ class ControlPlaneService:
         warnings = [s for s in integrations if s["data_status"] != "available"]
 
         revalidations = self._revalidations(limit=max(limit, 8), minimum_days=7)
+
+        # F10 — enriquece as oportunidades do Hoje com os scores V2 (cruzados) e
+        # deriva tópicos emergentes/em queda pelo momentum do topic graph.
+        try:
+            from ..report.opportunity_v2 import compute_opportunity_v2
+            for o in top:
+                keyword = o.get("recommendation") or o.get("title") or o.get("url") or ""
+                if keyword:
+                    try:
+                        o["rankability_v2"] = compute_opportunity_v2(
+                            self.storage, keyword, as_percent=True)
+                    except Exception:  # noqa: BLE001
+                        o["rankability_v2"] = None
+        except Exception:
+            pass
+        try:
+            topic_rows = self.topics(limit=100)
+            emerging = [t for t in topic_rows if (t.get("momentum") or 0) > 15][:5]
+            declining = [t for t in topic_rows if (t.get("momentum") or 0) < -10][:5]
+        except Exception:
+            emerging, declining = [], []
+
         return {
             "needs_attention": len(needs_attention),
             "critical_findings": self._count_findings(),
@@ -743,6 +765,8 @@ class ControlPlaneService:
             "top_searches": self._top_searches(limit=max(limit, 8)),
             "revalidations": revalidations,
             "improvement_summary": self._improvement_summary(revalidations),
+            "emerging_topics": emerging,
+            "declining_topics": declining,
         }
 
     def _google_signals(self) -> dict[str, dict[str, Any]]:

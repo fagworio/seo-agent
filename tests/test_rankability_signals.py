@@ -223,3 +223,14 @@ def test_topics_and_content_gaps_endpoints():
     assert gaps["total"] >= 1
     assert gaps["by_type"].get("missing_topic", 0) >= 1  # persona 6 só nos concorrentes
     s.close()
+
+
+def test_today_enriches_v2_and_topics():
+    s = Storage(":memory:")
+    _seed(s)
+    cp = ControlPlaneService(s, SimpleNamespace())
+    today = cp.today(limit=3)
+    assert "emerging_topics" in today and "declining_topics" in today
+    for o in today["top_opportunities"]:
+        assert "rankability_v2" in o  # cross-data V2 presente no Hoje
+    s.close()

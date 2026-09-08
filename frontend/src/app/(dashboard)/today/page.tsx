@@ -65,6 +65,7 @@ export default function TodayPage() {
     <TopSearches searches={today.top_searches} />
 
     <div className="grid gap-6 xl:grid-cols-2"><TopOpportunities opportunities={today.top_opportunities} /><SourceWarnings warnings={today.integration_warnings} /></div>
+    <TopicMovers today={today} />
   </div>;
 }
 
@@ -73,7 +74,7 @@ function RecentRuns({ runs }: { runs: TodayResponse["today"]["recent_runs"] }) {
 }
 
 function TopOpportunities({ opportunities }: { opportunities: TodayResponse["today"]["top_opportunities"] }) {
-  return <Card title="Decisões sustentadas por dados Google">{opportunities.length ? <ul className="divide-y divide-[var(--border)]">{opportunities.map((opportunity) => { const presentation = presentOpportunity(opportunity); return <li key={opportunity.id} className="py-3 first:pt-0 last:pb-0"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-medium">{presentation.label}</p><p className="mt-0.5 truncate text-sm">{opportunity.title || opportunity.url}</p></div><span className="shrink-0 text-xs tabular-nums text-[var(--muted)]">{opportunityEvidenceSummary(opportunity)}</span></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{presentation.detail}</p><Link className="mt-2 inline-flex" href={`/work?source=${encodeURIComponent(opportunity.source)}&item=${encodeURIComponent(opportunity.id)}`}><Button size="sm" variant="secondary">{presentation.action}</Button></Link></li>; })}</ul> : <p className="text-sm text-[var(--muted)]">Nenhuma decisão pendente possui evidência GSC para a janela atual. Itens sem Google permanecem visíveis na Caixa de trabalho como dados parciais.</p>}</Card>;
+  return <Card title="Decisões sustentadas por dados Google">{opportunities.length ? <ul className="divide-y divide-[var(--border)]">{opportunities.map((opportunity) => { const presentation = presentOpportunity(opportunity); return <li key={opportunity.id} className="py-3 first:pt-0 last:pb-0"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-medium">{presentation.label}</p><p className="mt-0.5 truncate text-sm">{opportunity.title || opportunity.url}</p></div><span className="shrink-0 text-xs tabular-nums text-[var(--muted)]">{opportunityEvidenceSummary(opportunity)}</span></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{presentation.detail}</p>{opportunity.rankability_v2?.opportunity?.score != null && <p className="mt-1 text-xs tabular-nums">Oportunidade {Math.round(opportunity.rankability_v2.opportunity.score)} · Rank {Math.round(opportunity.rankability_v2.query_rankability?.score ?? 0)} · Headroom {Math.round(opportunity.rankability_v2.headroom?.score ?? 0)} · Conf {opportunity.rankability_v2.confidence?.label ?? "—"}</p>}<Link className="mt-2 inline-flex" href={`/work?source=${encodeURIComponent(opportunity.source)}&item=${encodeURIComponent(opportunity.id)}`}><Button size="sm" variant="secondary">{presentation.action}</Button></Link></li>; })}</ul> : <p className="text-sm text-[var(--muted)]">Nenhuma decisão pendente possui evidência GSC para a janela atual. Itens sem Google permanecem visíveis na Caixa de trabalho como dados parciais.</p>}</Card>;
 }
 
 function SourceWarnings({ warnings }: { warnings: TodayResponse["today"]["integration_warnings"] }) {
@@ -83,3 +84,15 @@ function SourceWarnings({ warnings }: { warnings: TodayResponse["today"]["integr
 function Kpi({ label, value, detail }: { label: string; value: number | string; detail: string }) { return <div className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4"><div className="text-2xl font-semibold tabular-nums">{value}</div><div className="mt-1 text-xs font-medium">{label}</div><div className="mt-0.5 text-xs text-[var(--muted)]">{detail}</div></div>; }
 function runLabel(status: string) { return ({ success: "Concluída", failed: "Falhou", partial: "Parcial", running: "Em execução" } as Record<string, string>)[status] ?? status; }
 function runTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" { if (status === "success") return "success"; if (status === "failed") return "danger"; if (status === "partial") return "warning"; if (status === "running") return "info"; return "neutral"; }
+
+function TopicMovers({ today }: { today: { emerging_topics?: { topic: string; authority: number; momentum: number | null }[]; declining_topics?: { topic: string; authority: number; momentum: number | null }[] } }) {
+  const emerging = today.emerging_topics ?? [];
+  const declining = today.declining_topics ?? [];
+  if (!emerging.length && !declining.length) return null;
+  return (
+    <div className="grid gap-6 md:grid-cols-2">
+      {emerging.length > 0 && <Card title="Tópicos ganhando força"><ul className="space-y-2">{emerging.map((t) => <li key={t.topic} className="flex items-center justify-between text-sm"><span className="font-medium">{t.topic}</span><Badge tone="success">↑ {Math.round(t.momentum ?? 0)}%</Badge></li>)}</ul></Card>}
+      {declining.length > 0 && <Card title="Perdendo visibilidade"><ul className="space-y-2">{declining.map((t) => <li key={t.topic} className="flex items-center justify-between text-sm"><span className="font-medium">{t.topic}</span><Badge tone="danger">↓ {Math.abs(Math.round(t.momentum ?? 0))}%</Badge></li>)}</ul></Card>}
+    </div>
+  );
+}

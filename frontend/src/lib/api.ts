@@ -109,6 +109,9 @@ export interface TodayResponse {
     top_searches: SearchQuerySummary[];
     revalidations: Revalidation[];
     improvement_summary: ImprovementSummary;
+    // F10 — tópicos emergentes/em queda (momentum do topic graph)
+    emerging_topics?: { topic: string; authority: number; momentum: number | null }[];
+    declining_topics?: { topic: string; authority: number; momentum: number | null }[];
   };
 }
 
@@ -217,6 +220,7 @@ export interface Opportunity {
   rankability_v2?: {
     topic_authority?: { score?: number; label?: string };
     query_rankability?: { score?: number; label?: string };
+    headroom?: { score?: number };
     opportunity?: { score?: number; label?: string };
     confidence?: { score?: number; label?: string };
     signals?: Record<string, unknown>;
