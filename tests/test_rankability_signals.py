@@ -174,3 +174,22 @@ def test_pages_includes_rankability_v2_when_requested():
     assert target.get("rankability_v2"), "/pages deve anexar rankability_v2 quando solicitado"
     assert "opportunity" in target["rankability_v2"]
     s.close()
+
+
+def test_page_intelligence_and_history_integration():
+    s = Storage(":memory:")
+    _seed(s)
+    s.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, title, status_code, content_hash) "
+        "VALUES ('https://x.com/a/', '2026-02-01T00:00:00+00:00', 'Dragon Ball', 200, 'h')")
+    s.conn.execute(
+        "INSERT INTO seo_expectations (url, position, clicks, impressions, ctr, computed_at) "
+        "VALUES ('https://x.com/a/', 11.4, 3500, 127000, 0.0275, '2026-02-01')")
+    s.conn.commit()
+    cp = ControlPlaneService(s, SimpleNamespace())
+    info = cp.page_intelligence("https://x.com/a/")
+    assert info["metrics"]["position"] == 11.4
+    assert info["rankability_v2"], "page_intelligence deve anexar rankability_v2"
+    hist = cp.page_history("https://x.com/a/")
+    assert len(hist) == 1
+    s.close()

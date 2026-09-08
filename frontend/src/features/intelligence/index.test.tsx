@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { classify } from "./contract";
-import { ScoreBar, ScoreBreakdown, ConfidenceBadge, TrendIndicator, IntelligenceScores } from "./index";
+import { ScoreBar, ScoreBreakdown, ConfidenceBadge, TrendIndicator, IntelligenceScores, MissingData } from "./index";
 
 describe("classify (níveis 0-100)", () => {
   it("mapeia faixas para níveis/cor", () => {
@@ -67,5 +67,12 @@ describe("IntelligenceScores (fluxo funcional: análise V2 integrada)", () => {
     expect(screen.getByText("Oportunidade")).toBeTruthy();
     expect(screen.getAllByText("91").length).toBeGreaterThan(0); // headroom + opportunity
     expect(screen.getAllByText(/89%/).length).toBeGreaterThan(0); // confidence
+  });
+
+  it("F14: dados ausentes nunca aparecem como 0 — mostra '—' e detalhe", () => {
+    render(<MissingData label="Engagement" detail="Dados GA4 indisponíveis." />);
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("Engagement")).toBeTruthy();
+    expect(screen.getByText(/GA4 indisponíveis/)).toBeTruthy();
   });
 });

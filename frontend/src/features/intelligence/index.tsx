@@ -76,3 +76,14 @@ export function IntelligenceScores({ scores }: { scores: { rankability?: Intelli
     </div>
   );
 }
+
+/** F14 — estado de dados ausentes/incompletos (nunca mostrar "0" como dado). */
+export function MissingData({ label = "Dados indisponíveis", detail }: { label?: string; detail?: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-[var(--border)] px-4 py-3 text-sm">
+      <span className="text-[var(--muted)]">—</span>
+      <span className="ml-2 font-medium">{label}</span>
+      {detail && <p className="mt-1 text-xs text-[var(--muted)]">{detail}</p>}
+    </div>
+  );
+}

@@ -7,6 +7,7 @@ import { api, ApiError, PageHistoryEntry } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
+import { ScoreBar, ConfidenceBadge, MissingData } from "@/features/intelligence";
 
 const TABS = ["Summary", "Search", "Content", "Links", "Technical", "History"] as const;
 
@@ -25,7 +26,7 @@ export default function PageWorkspace() {
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["page-history", url],
-    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[] }>(`/pages/history?url=${encodeURIComponent(url)}`),
+    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[]; intelligence?: { metrics?: { position?: number | null; clicks?: number; impressions?: number; ctr?: number | null }; rankability_v2?: { topic_authority?: { score?: number; label?: string }; headroom?: { score?: number }; opportunity?: { score?: number; label?: string }; confidence?: { score?: number; label?: string }; signals?: { posts?: number; momentum_delta_pct?: number | null } } } }>(`/pages/history?url=${encodeURIComponent(url)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -33,6 +34,8 @@ export default function PageWorkspace() {
 
   const history = data!.history;
   const latest = history[history.length - 1];
+  const intelligence = data?.intelligence;
+  const v2 = intelligence?.rankability_v2;
 
   return (
     <div className="space-y-4">
@@ -58,21 +61,47 @@ export default function PageWorkspace() {
       </div>
 
       {tab === "Summary" && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card title="Estado atual">
-            <ul className="space-y-2 text-sm">
-              <li><span className="text-[var(--muted)]">Title:</span> {latest?.title || "—"}</li>
-              <li><span className="text-[var(--muted)]">Meta robots:</span> {latest?.meta_robots || "—"}</li>
-              <li><span className="text-[var(--muted)]">Fonte:</span> {latest?.source || "—"}</li>
-              <li><span className="text-[var(--muted)]">Ação vinculada:</span> {latest?.linked_action || "—"}</li>
-            </ul>
+        <div className="space-y-4">
+          <Card title="Inteligência desta página (V2)">
+            {v2 ? (
+              <div className="space-y-4">
+                <div className="grid gap-1.5">
+                  {typeof v2.topic_authority?.score === "number" && <ScoreBar label="Topic Authority" score={v2.topic_authority.score} level={v2.topic_authority.label} />}
+                  {typeof intelligence?.metrics?.position === "number" && <ScoreBar label="Headroom" score={v2.headroom?.score ?? null} />}
+                  {v2.opportunity && typeof v2.opportunity.score === "number" && <ScoreBar label="Oportunidade" score={v2.opportunity.score} level={v2.opportunity.label} />}
+                  {v2.confidence && <div className="pt-1"><ConfidenceBadge score={v2.confidence.score} label={v2.confidence.label} /></div>}
+                </div>
+                {v2.opportunity?.score != null && v2.opportunity.score >= 70 && (
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-sm">
+                    <strong>↑ Oportunidade forte</strong>
+                    <p className="mt-1 text-[var(--muted)]">Posição {String(intelligence?.metrics?.position ?? "—")} · autoridade {v2.topic_authority?.score ?? "—"} no tópico. Recomendado: <em>expandir conteúdo</em>.</p>
+                  </div>
+                )}
+                <p className="text-xs text-[var(--muted)]">Dados usados: GSC · Corpus · Links internos. Janela: últimos 28 dias.</p>
+              </div>
+            ) : (
+              <MissingData label="Dados insuficientes" detail="Esta página não resolve para um tópico do cluster (ou o corpus ainda não cobre o assunto). Os scores compostos ficam indisponíveis até haver base." />
+            )}
           </Card>
-          <Card title="Métricas (última captura)">
-            <ul className="space-y-2 text-sm">
-              <li><span className="text-[var(--muted)]">GSC:</span> {summary(latest?.gsc)}</li>
-              <li><span className="text-[var(--muted)]">CWV:</span> {summary(latest?.cwv)}</li>
-            </ul>
-          </Card>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card title="Estado atual">
+              <ul className="space-y-2 text-sm">
+                <li><span className="text-[var(--muted)]">Title:</span> {latest?.title || "—"}</li>
+                <li><span className="text-[var(--muted)]">Meta robots:</span> {latest?.meta_robots || "—"}</li>
+                <li><span className="text-[var(--muted)]">Fonte:</span> {latest?.source || "—"}</li>
+                <li><span className="text-[var(--muted)]">Ação vinculada:</span> {latest?.linked_action || "—"}</li>
+              </ul>
+            </Card>
+            <Card title="Métricas (última captura)">
+              <dl className="space-y-2 text-sm">
+                <Row label="Posição" value={String(intelligence?.metrics?.position ?? "—")} />
+                <Row label="Cliques" value={String(intelligence?.metrics?.clicks ?? "—")} />
+                <Row label="Impressões" value={String(intelligence?.metrics?.impressions ?? "—")} />
+                <Row label="GSC" value={summary(latest?.gsc)} />
+                <Row label="CWV" value={summary(latest?.cwv)} />
+              </dl>
+            </Card>
+          </div>
         </div>
       )}
 

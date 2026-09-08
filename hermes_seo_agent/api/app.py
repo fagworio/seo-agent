@@ -271,7 +271,8 @@ def read_routers() -> list[APIRouter]:
                      session=Depends(authenticated("pages.read"))) -> dict[str, Any]:
         from urllib.parse import unquote
         decoded = unquote(url)
-        return {"url": decoded, "history": services.control.page_history(decoded)}
+        return {"url": decoded, "history": services.control.page_history(decoded),
+                "intelligence": services.control.page_intelligence(decoded)}
     out.append(pg)
 
     te = APIRouter(tags=["technical"])

@@ -351,6 +351,19 @@ class ControlPlaneService:
             })
         return out
 
+    def page_intelligence(self, url: str) -> dict[str, Any]:
+        """Inteligência V2 de uma página (Summary do Page Workspace): métricas +
+        Topic Authority/Headroom/Opportunity do cluster da página."""
+        try:
+            from ..report.opportunity_v2 import page_rankability_v2
+            metrics = self._page_metrics(url)
+            v2 = page_rankability_v2(self.storage, url)
+            return {"metrics": metrics,
+                    "index_state": self._index_state(url, None),
+                    "rankability_v2": v2}
+        except Exception:  # noqa: BLE001 — inteligência é enriquecimento opcional
+            return {"metrics": self._page_metrics(url), "rankability_v2": None}
+
     def editorial_items(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         """Editorial backlog as a product board, preserving the native workflow."""
         sql = ("SELECT id, pauta_type, title, intent, evidence, related_urls_json, scope, "
