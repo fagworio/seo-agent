@@ -427,6 +427,15 @@ class ControlPlaneService:
         from ..report.content_gap import content_gaps as _gaps
         return _gaps(self.storage, as_percent=as_percent)
 
+    # -- R9: calibração (UI) -------------------------------------------------
+    def calibration(self) -> dict[str, Any]:
+        """Relatório de calibração + pesos ajustados (sem ML)."""
+        from ..report.calibration import calibration_report, calibrated_output_weights
+        outcomes = self.storage.list_opportunity_outcomes(limit=2000)
+        report = calibration_report(outcomes)
+        weights = calibrated_output_weights(report)
+        return {"report": report, "adjusted_opportunity_weights": weights}
+
     def editorial_items(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         """Editorial backlog as a product board, preserving the native workflow."""
         sql = ("SELECT id, pauta_type, title, intent, evidence, related_urls_json, scope, "

@@ -234,3 +234,14 @@ def test_today_enriches_v2_and_topics():
     for o in today["top_opportunities"]:
         assert "rankability_v2" in o  # cross-data V2 presente no Hoje
     s.close()
+
+
+def test_calibration_endpoint_exposes_report_and_weights():
+    s = Storage(":memory:")
+    _seed(s)
+    cp = ControlPlaneService(s, SimpleNamespace())
+    cal = cp.calibration()
+    assert "report" in cal and "adjusted_opportunity_weights" in cal
+    assert cal["report"]["n_outcomes"] >= 0
+    assert abs(sum(cal["adjusted_opportunity_weights"].values()) - 1.0) < 1e-6
+    s.close()

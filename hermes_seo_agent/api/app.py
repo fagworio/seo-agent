@@ -271,6 +271,10 @@ def read_routers() -> list[APIRouter]:
                      session=Depends(authenticated("experiment.read")),
                      as_percent: bool = Query(True)) -> dict[str, Any]:
         return services.control.content_gaps(as_percent=as_percent)
+    @intel.get("/calibration", operation_id="intelligence_calibration")
+    def calibration(services: Services = Depends(get_services),
+                    session=Depends(authenticated("experiment.read"))) -> dict[str, Any]:
+        return services.control.calibration()
     out.append(intel)
 
     pg = APIRouter(prefix="/pages", tags=["pages"])
