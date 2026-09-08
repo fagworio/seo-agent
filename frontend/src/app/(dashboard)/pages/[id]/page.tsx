@@ -7,7 +7,7 @@ import { api, ApiError, PageHistoryEntry } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
-import { ScoreBar, ConfidenceBadge, MissingData } from "@/features/intelligence";
+import { ScoreBar, ConfidenceBadge, MissingData, TechnicalEligibility } from "@/features/intelligence";
 
 const TABS = ["Summary", "Search", "Content", "Links", "Technical", "History"] as const;
 
@@ -26,7 +26,7 @@ export default function PageWorkspace() {
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["page-history", url],
-    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[]; intelligence?: { metrics?: { position?: number | null; clicks?: number; impressions?: number; ctr?: number | null }; rankability_v2?: { topic_authority?: { score?: number; label?: string }; headroom?: { score?: number }; opportunity?: { score?: number; label?: string }; confidence?: { score?: number; label?: string }; signals?: { posts?: number; momentum_delta_pct?: number | null } } } }>(`/pages/history?url=${encodeURIComponent(url)}`),
+    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[]; intelligence?: { index_state?: string; metrics?: { position?: number | null; clicks?: number; impressions?: number; ctr?: number | null }; rankability_v2?: { topic_authority?: { score?: number; label?: string }; headroom?: { score?: number }; opportunity?: { score?: number; label?: string }; confidence?: { score?: number; label?: string }; signals?: { posts?: number; momentum_delta_pct?: number | null } } } }>(`/pages/history?url=${encodeURIComponent(url)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -63,7 +63,9 @@ export default function PageWorkspace() {
       {tab === "Summary" && (
         <div className="space-y-4">
           <Card title="Inteligência desta página (V2)">
-            {v2 ? (
+            {noindexGate(intelligence) ? (
+              <TechnicalEligibility blocked={["Não indexável (noindex)"]} />
+            ) : v2 ? (
               <div className="space-y-4">
                 <div className="grid gap-1.5">
                   {typeof v2.topic_authority?.score === "number" && <ScoreBar label="Topic Authority" score={v2.topic_authority.score} level={v2.topic_authority.label} />}
@@ -125,13 +127,19 @@ export default function PageWorkspace() {
       {tab === "Search" && <Card title="Search"><p className="text-sm">{latest?.gsc ? summary(latest.gsc) : "Search Console não forneceu dados nesta captura; isso não representa zero."}</p></Card>}
       {tab === "Content" && <Card title="Conteúdo"><dl className="space-y-2 text-sm"><Row label="Título" value={latest?.title || "não capturado"} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /><Row label="Hash de conteúdo" value={latest?.content_hash || "não capturado"} /></dl></Card>}
       {tab === "Links" && <Card title="Links"><p className="text-sm text-[var(--muted)]">Não há evidência de links associada a esta captura. Uma análise posterior poderá preencher esta área; ausência não equivale a ausência de links.</p></Card>}
-      {tab === "Technical" && <Card title="SEO técnico"><dl className="space-y-2 text-sm"><Row label="Status HTTP" value={String(latest?.status_code ?? "não capturado")} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /></dl></Card>}
+      {tab === "Technical" && <Card title="SEO técnico"><TechnicalEligibility checks={technicalChecks(intelligence, latest)} /><dl className="mt-3 space-y-2 text-sm"><Row label="Status HTTP" value={String(latest?.status_code ?? "não capturado")} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /></dl></Card>}
     </div>
   );
 }
 
 function summary(value: Record<string, unknown> | null | undefined) { return value ? Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join(" · ") : "não capturado"; }
 function Row({ label, value }: { label: string; value: string }) { return <div className="flex justify-between gap-4"><dt className="text-[var(--muted)]">{label}</dt><dd className="max-w-[60%] truncate">{value}</dd></div>; }
+function noindexGate(intelligence?: { index_state?: string } | null) { return intelligence?.index_state === "noindex"; }
+function technicalChecks(intelligence?: { index_state?: string } | null, latest?: { status_code?: number | null; meta_robots?: string; canonical?: string; cwv?: Record<string, unknown> | null } | undefined) {
+  const robots = (latest?.meta_robots ?? "").toLowerCase();
+  const cwv = latest?.cwv as { lcp?: number } | undefined;
+  return { indexable: intelligence?.index_state !== "noindex", http_ok: (latest?.status_code ?? 200) < 400, canonical_ok: !!latest?.canonical, in_sitemap: intelligence?.index_state !== "outside", robots: !robots.includes("noindex"), google_indexed: latest != null, cwv_ok: cwv?.lcp == null ? null : cwv.lcp <= 2.5 };
+}
 
 function healthyTone(status: number): "success" | "warning" | "danger" {
   if (status >= 400) return "danger";

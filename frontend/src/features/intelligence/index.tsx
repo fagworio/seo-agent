@@ -87,3 +87,74 @@ export function MissingData({ label = "Dados indisponíveis", detail }: { label?
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Wrappers nomeados do spec (F0) — todos consomem o mesmo contrato IntelligenceScore.
+// ---------------------------------------------------------------------------
+
+export function RankabilitySummary({ score, level, factors }: IntelligenceScore) {
+  return <ScoreBreakdown title="Rankability" score={score} level={level as string} factors={factors} />;
+}
+
+export function TopicAuthoritySummary({ score, level, factors }: IntelligenceScore) {
+  return <ScoreBreakdown title="Topic Authority" score={score} level={level as string} factors={factors} />;
+}
+
+/** Headroom — usa o score da página/oportunidade. */
+export function HeadroomSummary({ score = null }: { score?: number | null }) {
+  return <ScoreBar label="Headroom" score={score} />;
+}
+
+export function OpportunityScoreSummary({ score, level, factors }: IntelligenceScore) {
+  return <ScoreBreakdown title="Oportunidade" score={score} level={level as string} factors={factors} />;
+}
+
+/** F6 — elegibilidade técnica com gate (bloqueio duro anula rankability). */
+export function TechnicalEligibility({ checks, blocked }: { checks?: Record<string, boolean | null>; blocked?: string[] }) {
+  const items = checks ?? {};
+  const label: Record<string, string> = { indexable: "Indexable", http_ok: "HTTP 200", canonical_ok: "Canonical self", in_sitemap: "No sitemap", google_indexed: "Indexado no Google", cwv_ok: "Core Web Vitals", robots: "Robots permitido" };
+  if (blocked && blocked.length) {
+    return (
+      <div className="rounded-[9px] border border-[var(--danger)]/40 bg-[var(--danger)]/5 p-4 text-sm">
+        <strong className="text-[var(--danger)]">RANKABILITY BLOQUEADA</strong>
+        <p className="mt-1 text-[var(--muted)]">{blocked.join(", ")}. Enquanto o problema existir, a página não deve ser priorizada para otimização editorial.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1 text-sm">
+      {Object.entries(items).map(([k, v]) => (
+        <div key={k} className="flex items-center gap-2">
+          <span aria-hidden>{v === true ? "✓" : v === false ? "✗" : "△"}</span>
+          <span>{label[k] ?? k}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** F3 — distribuição de queries (Top3/4-10/11-20/21-50/>50) com barra. */
+export function QueryDistribution({ buckets }: { buckets?: Record<string, number> }) {
+  const b = buckets ?? {};
+  const total = Object.values(b).reduce((a, c) => a + (c || 0), 0) || 1;
+  const rows: [string, string][] = [["top3", "Top 3"], ["top10", "Top 4–10"], ["top20", "Top 11–20"], ["top50", "Top 21–50"], ["rest", "> 50"]];
+  return (
+    <div className="space-y-1 text-sm">
+      {rows.map(([k, label]) => {
+        const v = b[k] ?? 0;
+        return <div key={k} className="flex items-center gap-2"><span className="w-20 text-[var(--muted)]">{label}</span><div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--surface-raised)]"><div className="h-full rounded-full bg-[var(--primary)]" style={{ width: `${Math.min((v / total) * 100, 100)}%` }} /></div><span className="w-8 text-right tabular-nums">{v}</span></div>;
+      })}
+    </div>
+  );
+}
+
+/** F4 — cobertura semântica (percentual + componentes + gaps). */
+export function SemanticCoverage({ coverage, components, gaps }: { coverage?: number; components?: Record<string, number>; gaps?: string[] }) {
+  return (
+    <div className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="flex items-center justify-between"><h3 className="font-medium">Cobertura semântica</h3><Badge tone={typeof coverage === "number" && coverage >= 70 ? "success" : "warning"}>{typeof coverage === "number" ? `${Math.round(coverage)}%` : "—"}</Badge></div>
+      {components && <div className="mt-3 space-y-1.5">{Object.entries(components).map(([k, v]) => <ScoreBar key={k} label={k} score={v} />)}</div>}
+      {gaps && gaps.length > 0 && <div className="mt-3"><span className="text-xs text-[var(--muted)]">Lacunas:</span><ul className="mt-1 flex flex-wrap gap-1">{gaps.map((g) => <Badge key={g} tone="neutral">{g}</Badge>)}</ul></div>}
+    </div>
+  );
+}

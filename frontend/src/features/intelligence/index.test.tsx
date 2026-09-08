@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { classify } from "./contract";
-import { ScoreBar, ScoreBreakdown, ConfidenceBadge, TrendIndicator, IntelligenceScores, MissingData } from "./index";
+import { ScoreBar, ScoreBreakdown, ConfidenceBadge, TrendIndicator, IntelligenceScores, MissingData, TechnicalEligibility, QueryDistribution, SemanticCoverage } from "./index";
 
 describe("classify (níveis 0-100)", () => {
   it("mapeia faixas para níveis/cor", () => {
@@ -74,5 +74,32 @@ describe("IntelligenceScores (fluxo funcional: análise V2 integrada)", () => {
     expect(screen.getByText("—")).toBeTruthy();
     expect(screen.getByText("Engagement")).toBeTruthy();
     expect(screen.getByText(/GA4 indisponíveis/)).toBeTruthy();
+  });
+});
+
+describe("TechnicalEligibility (F6 — gate)", () => {
+  it("bloqueia o score quando há bloqueio duro", () => {
+    render(<TechnicalEligibility blocked={["Não indexável (noindex)"]} />);
+    expect(screen.getByText(/RANKABILITY BLOQUEADA/)).toBeTruthy();
+    expect(screen.getByText(/priorizada para otimização/)).toBeTruthy();
+  });
+  it("lista os checks técnicos (✓/✗/△)", () => {
+    const { container } = render(<TechnicalEligibility checks={{ indexable: true, http_ok: false, cwv_ok: null }} />);
+    expect(container.textContent).toContain("Indexable");
+    expect(container.textContent).toContain("HTTP 200");
+    expect(container.textContent).toContain("△");   // CWV desconhecido
+  });
+});
+
+describe("QueryDistribution + SemanticCoverage", () => {
+  it("renderiza distribuição de queries por faixa", () => {
+    render(<QueryDistribution buckets={{ top3: 143, top10: 469, top20: 422, top50: 567, rest: 226 }} />);
+    expect(screen.getByText("Top 3")).toBeTruthy();
+    expect(screen.getByText("143")).toBeTruthy();
+  });
+  it("mostra cobertura semântica em % + lacunas", () => {
+    render(<SemanticCoverage coverage={74} gaps={["temporada 2", "confirmação oficial"]} />);
+    expect(screen.getByText(/74%/)).toBeTruthy();
+    expect(screen.getByText("temporada 2")).toBeTruthy();
   });
 });
