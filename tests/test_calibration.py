@@ -7,15 +7,16 @@ from hermes_seo_agent.report.calibration import (
 
 def _outcome(score, verdict=None, position_delta=None, ctr_delta=None):
     results = {}
-    if position_delta is not None or ctr_delta is not None:
-        gsc = {}
-        if position_delta is not None:
-            gsc["position"] = position_delta
-        if ctr_delta is not None:
-            gsc["ctr"] = ctr_delta
-        results["gsc_deltas"] = gsc
+    for window in ("90d", "56d", "28d", "7d"):
+        if position_delta is not None or ctr_delta is not None:
+            gsc = {}
+            if position_delta is not None:
+                gsc["position"] = position_delta
+            if ctr_delta is not None:
+                gsc["ctr"] = ctr_delta
+            results[window] = {"gsc_deltas": gsc}
     return {"candidate_score": score, "action_score": score, "verdict": verdict,
-            "results": results, "delta": {"gsc": results.get("gsc_deltas", {})}}
+            "results": results}
 
 
 def test_improved_detects_verdict_and_delta():

@@ -29,8 +29,15 @@ def improved(outcome: dict[str, Any]) -> bool | None:
         return True
     if verdict in ("worsened", "neutral"):
         return False
-    gsc = ((outcome.get("results") or {}).get("gsc_deltas")
-           or (outcome.get("delta") or {}).get("gsc") or {})
+    # resultados aninhados por janela: usa a janela medida mais recente
+    results = outcome.get("results") or {}
+    gsc: dict[str, Any] = {}
+    for window in ("90d", "56d", "28d", "7d"):
+        r = results.get(window)
+        if isinstance(r, dict):
+            gsc = r.get("gsc_deltas") or {}
+            if gsc:
+                break
     pos = gsc.get("position")
     ctr = gsc.get("ctr")
     if pos is not None and pos < 0:
