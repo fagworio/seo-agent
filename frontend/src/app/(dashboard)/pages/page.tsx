@@ -26,7 +26,7 @@ export default function PagesPage() {
   const { data, error, isLoading } = useQuery({
     queryKey: ["pages", q, sort, page],
     queryFn: () => api.get<{ pages?: PageSummary[]; total?: number }>(
-      `/pages?limit=${PAGE_SIZE}&offset=${offset}&sort=${sort}&q=${encodeURIComponent(q)}&include_rankability_v2=true`),
+      `/pages?limit=${PAGE_SIZE}&offset=${offset}&sort=${sort}&q=${encodeURIComponent(q)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -101,9 +101,11 @@ export default function PagesPage() {
 
 function presetFilter(p: PageSummary, preset: string): boolean {
   if (!preset) return true;
-  const opp = p.rankability_v2?.opportunity?.score ?? 0;
+  const opp = p.rankability_v2?.opportunity?.score ?? null;
   const pos = p.metrics.position ?? null;
-  if (preset === "high_potential") return opp >= 70;
+  // V2 pontual é computado sob demanda (detalhe), não na lista: sem o score a
+  // lista não pode filtrar por potencial — mantém a página (em vez de esvaziar).
+  if (preset === "high_potential") return opp != null ? opp >= 70 : true;
   if (preset === "near_top10") return pos != null && pos > 10 && pos <= 20;
   if (preset === "technical_block") return p.index_state === "noindex" || p.health === "error";
   return true;

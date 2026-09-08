@@ -586,7 +586,14 @@ class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
+        self.conn = sqlite3.connect(str(self.path), timeout=15)
+        # Robustez para app long-running: busy_timeout evita "database is locked"
+        # imediato sob carga (o singleton do get_services já reduz contenção).
+        try:
+            self.conn.execute("PRAGMA busy_timeout=15000")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
         self.conn.executescript(_SCHEMA)
         self._migrate()
         self.conn.commit()

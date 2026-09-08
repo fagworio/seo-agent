@@ -739,24 +739,34 @@ class ControlPlaneService:
 
         revalidations = self._revalidations(limit=max(limit, 8), minimum_days=7)
 
-        # F10 — enriquece as oportunidades do Hoje com os scores V2 (cruzados) e
-        # deriva tópicos emergentes/em queda pelo momentum do topic graph.
+        # F10 — tópicos emergentes/em queda. Custo controlado: build_topic_graph
+        # UMA vez (0.8s) e momentum por cluster consultado em lote único, sem
+        # compute_opportunity_v2 por item (que era o gargalo — 3.8s cada).
         try:
-            from ..report.opportunity_v2 import compute_opportunity_v2
-            for o in top:
-                keyword = o.get("recommendation") or o.get("title") or o.get("url") or ""
-                if keyword:
-                    try:
-                        o["rankability_v2"] = compute_opportunity_v2(
-                            self.storage, keyword, as_percent=True)
-                    except Exception:  # noqa: BLE001
-                        o["rankability_v2"] = None
-        except Exception:
-            pass
-        try:
-            topic_rows = self.topics(limit=100)
-            emerging = [t for t in topic_rows if (t.get("momentum") or 0) > 15][:5]
-            declining = [t for t in topic_rows if (t.get("momentum") or 0) < -10][:5]
+            from ..report.rankability_v2 import query_distribution
+            from ..report.topics import build_topic_graph
+            graph = build_topic_graph(self.storage, min_urls=1)
+            entity_scores: dict[str, dict[str, Any]] = {}
+            for c in graph[:300]:
+                urls = c.get("urls", [])
+                ws = self.storage.latest_window_start()
+                moments: list[str] = []
+                if urls and ws:
+                    ph = ",".join("?" * len(urls))
+                    rows = self.storage.conn.execute(
+                        f"SELECT window_start, SUM(impressions) FROM query_pages "
+                        f"WHERE url IN ({ph}) AND window_start >= ? GROUP BY window_start "
+                        f"ORDER BY window_start LIMIT 2", (*urls, ws)
+                    ).fetchall()
+                    if len(rows) == 2 and rows[0][1]:
+                        prev, cur = float(rows[0][1]), float(rows[1][1])
+                        entity_scores[c["entity"]] = {"momentum": round((cur - prev) / prev * 100, 1) if prev else None}
+            emerging = sorted([e for e in entity_scores.items() if (e[1].get("momentum") or 0) > 15],
+                              key=lambda e: -e[1]["momentum"])[:5]
+            declining = sorted([e for e in entity_scores.items() if (e[1].get("momentum") or 0) < -10],
+                               key=lambda e: e[1]["momentum"])[:5]
+            emerging = [{"topic": k, "authority": 0, "momentum": v["momentum"]} for k, v in emerging]
+            declining = [{"topic": k, "authority": 0, "momentum": v["momentum"]} for k, v in declining]
         except Exception:
             emerging, declining = [], []
 

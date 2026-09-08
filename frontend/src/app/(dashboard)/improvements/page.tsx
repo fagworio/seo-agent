@@ -30,7 +30,7 @@ function Improvements() {
   const view = rawView === "implemented" ? "todas" : rawView;
   const selectedId = Number(params.get("item"));
   const [page, setPage] = useState(1);
-  const query = useQuery({ queryKey: ["improvements"], queryFn: () => api.get<{ experiments: Experiment[] }>("/experiments?limit=200&include_rankability_v2=true") });
+  const query = useQuery({ queryKey: ["improvements"], queryFn: () => api.get<{ experiments: Experiment[] }>("/experiments?limit=200") });
   const setParam = (key: string, value: string) => { const next = new URLSearchParams(params.toString()); value ? next.set(key, value) : next.delete(key); router.replace(`/improvements?${next}`, { scroll: false }); };
   if (query.isLoading) return <Loading />;
   if (query.error) return <p className="text-sm text-[var(--danger)]">{(query.error as ApiError).message}</p>;

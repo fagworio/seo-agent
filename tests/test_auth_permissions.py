@@ -43,3 +43,22 @@ def test_seed_rbac_is_idempotent(tmp_path):
         assert perms == all_permissions()
         expected_mapping = sum(len(v) for v in ROLE_PERMISSIONS.values())
         assert role_perms == expected_mapping
+
+
+def test_seed_rbac_is_noop_when_already_seeded(tmp_path):
+    """Regressão: quando o RBAC já está completo o seed NÃO pode enfileirar
+    escrita (in_transaction deve continuar False).
+
+    Cada `INSERT OR IGNORE` marca a transação como pendente → o `commit()`
+    subsequente precisa de lock EXCLUSIVE e, com journal ``delete``, bloqueia
+    qualquer request do control plane sob lock concorrente (`database is
+    locked`). O guard de COUNT evita adquirir o write-lock a cada requisição.
+    """
+    db = tmp_path / "rbac.db"
+    with Storage(str(db)) as storage:
+        seed_rbac(storage.conn)
+        storage.conn.commit()
+        assert not storage.conn.in_transaction
+        # reinvocar num RBAC completo deve retornar cedo SEM enfileirar escrita
+        seed_rbac(storage.conn)
+        assert not storage.conn.in_transaction

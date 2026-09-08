@@ -132,7 +132,21 @@ def permissions_for_role(role: str) -> set[str]:
 
 
 def seed_rbac(conn: Any) -> None:
-    """Popula permissions/roles/role_permissions de forma idempotente."""
+    """Popula permissions/roles/role_permissions de forma idempotente.
+
+    Ineficiência/robustez: o `INSERT OR IGNORE` aqui adquire o write-lock do
+    SQLite mesmo quando nada é inserido, e o `commit()` subsequente precisa de
+    um lock EXCLUSIVE. Com journal ``delete`` (sem WAL) isso serializa leitores
+    e escritores — e, sob qualquer lock concorrente, TODAS as requisições do
+    control plane estouram ``database is locked``. Por isso este seed roda em
+    modo "somente leitura" quando o RBAC já está completo (checksum barato por
+    COUNT), reescrevendo apenas quando uma nova permissão for adicionada.
+    """
+    if conn.execute("SELECT COUNT(*) FROM permissions").fetchone()[0] >= len(
+        _ALL_PERMISSIONS
+    ):
+        # Já semeado: nenhuma escrita (não adquire write-lock a cada request).
+        return
     for name in sorted(_ALL_PERMISSIONS):
         conn.execute(
             "INSERT OR IGNORE INTO permissions (name) VALUES (?)", (name,)

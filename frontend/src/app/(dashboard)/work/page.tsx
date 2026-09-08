@@ -32,7 +32,7 @@ function Workbox() {
   const [delegate, setDelegate] = useState<{ fingerprints: string[]; workItemIds: Record<string, string> } | null>(null);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
-  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200&include_rankability_v2=true${source ? `&source=${source}` : ""}`), refetchInterval: 30_000 });
+  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200${source ? `&source=${source}` : ""}`), refetchInterval: 30_000 });
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params.toString());
