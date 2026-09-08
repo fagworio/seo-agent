@@ -353,14 +353,20 @@ class ControlPlaneService:
 
     def page_intelligence(self, url: str) -> dict[str, Any]:
         """Inteligência V2 de uma página (Summary do Page Workspace): métricas +
-        Topic Authority/Headroom/Opportunity do cluster da página."""
+        Topic Authority/Headroom/Opportunity + Search Intelligence (F3) +
+        Semantic Coverage (F4)."""
         try:
             from ..report.opportunity_v2 import page_rankability_v2
+            from ..report.page_intelligence import search_intelligence, semantic_coverage
             metrics = self._page_metrics(url)
             v2 = page_rankability_v2(self.storage, url)
+            entity = (v2 or {}).get("signals", {}).get("entity")
+            ta_score = (v2 or {}).get("topic_authority", {}).get("score")
             return {"metrics": metrics,
                     "index_state": self._index_state(url, None),
-                    "rankability_v2": v2}
+                    "rankability_v2": v2,
+                    "search": search_intelligence(self.storage, url, ta_score),
+                    "semantic": semantic_coverage(self.storage, url, entity)}
         except Exception:  # noqa: BLE001 — inteligência é enriquecimento opcional
             return {"metrics": self._page_metrics(url), "rankability_v2": None}
 

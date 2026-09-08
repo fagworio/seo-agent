@@ -7,7 +7,7 @@ import { api, ApiError, PageHistoryEntry } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { Card } from "@/design-system/card";
-import { ScoreBar, ConfidenceBadge, MissingData, TechnicalEligibility } from "@/features/intelligence";
+import { ScoreBar, ConfidenceBadge, MissingData, TechnicalEligibility, QueryDistribution, SemanticCoverage, TrendIndicator } from "@/features/intelligence";
 
 const TABS = ["Summary", "Search", "Content", "Links", "Technical", "History"] as const;
 
@@ -26,7 +26,7 @@ export default function PageWorkspace() {
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["page-history", url],
-    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[]; intelligence?: { index_state?: string; metrics?: { position?: number | null; clicks?: number; impressions?: number; ctr?: number | null }; rankability_v2?: { topic_authority?: { score?: number; label?: string }; headroom?: { score?: number }; opportunity?: { score?: number; label?: string }; confidence?: { score?: number; label?: string }; signals?: { posts?: number; momentum_delta_pct?: number | null } } } }>(`/pages/history?url=${encodeURIComponent(url)}`),
+    queryFn: () => api.get<{ url: string; history: PageHistoryEntry[]; intelligence?: { index_state?: string; metrics?: { position?: number | null; clicks?: number; impressions?: number; ctr?: number | null }; rankability_v2?: { topic_authority?: { score?: number; label?: string }; headroom?: { score?: number }; opportunity?: { score?: number; label?: string }; confidence?: { score?: number; label?: string }; signals?: { posts?: number; momentum_delta_pct?: number | null } }; search?: { window?: string; summary?: { clicks?: number; impressions?: number; avg_position?: number | null; impr_delta_pct?: number | null }; distribution?: { top3?: number; top10?: number; top20?: number; top50?: number; rest?: number }; queries?: { query: string; clicks: number; impressions: number; ctr?: number | null; position?: number | null; delta_position?: number | null; trend?: string; headroom?: number; rankability?: number | null }[] }; semantic?: { coverage?: number; components?: Record<string, number>; covered?: string[]; gaps?: string[] } } }>(`/pages/history?url=${encodeURIComponent(url)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
@@ -124,8 +124,8 @@ export default function PageWorkspace() {
         </Card>
       )}
 
-      {tab === "Search" && <Card title="Search"><p className="text-sm">{latest?.gsc ? summary(latest.gsc) : "Search Console não forneceu dados nesta captura; isso não representa zero."}</p></Card>}
-      {tab === "Content" && <Card title="Conteúdo"><dl className="space-y-2 text-sm"><Row label="Título" value={latest?.title || "não capturado"} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /><Row label="Hash de conteúdo" value={latest?.content_hash || "não capturado"} /></dl></Card>}
+      {tab === "Search" && <Card title="Search Intelligence (F3)"><SearchIntelligence search={intelligence?.search} /></Card>}
+      {tab === "Content" && <Card title="Cobertura semântica (F4)"><SemanticCoverageUI semantic={intelligence?.semantic} /></Card>}
       {tab === "Links" && <Card title="Links — Internal Authority"><InternalAuthority v2={v2} /></Card>}
       {tab === "Technical" && <Card title="SEO técnico"><TechnicalEligibility checks={technicalChecks(intelligence, latest)} /><dl className="mt-3 space-y-2 text-sm"><Row label="Status HTTP" value={String(latest?.status_code ?? "não capturado")} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /></dl></Card>}
     </div>
@@ -151,6 +151,41 @@ function InternalAuthority({ v2 }: { v2?: { topic_authority?: { score?: number; 
     </div>
   );
 }
+function SearchIntelligence({ search }: { search?: { window?: string; summary?: { clicks?: number; impressions?: number; avg_position?: number | null; impr_delta_pct?: number | null }; distribution?: { top3?: number; top10?: number; top20?: number; top50?: number; rest?: number }; queries?: { query: string; clicks: number; impressions: number; ctr?: number | null; position?: number | null; delta_position?: number | null; trend?: string; headroom?: number; rankability?: number | null }[] } }) {
+  if (!search || !search.summary) return <MissingData label="Dados de busca indisponíveis" detail="O Search Console não forneceu dados para esta página nesta janela; isso não representa zero." />;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Metric label="Cliques" value={String(search.summary.clicks ?? "—")} />
+        <Metric label="Impressões" value={String(search.summary.impressions ?? "—")} />
+        <Metric label="Pos. média" value={String(search.summary.avg_position ?? "—")} />
+        <Metric label="Δ Impressões" value={search.summary.impr_delta_pct != null ? `${search.summary.impr_delta_pct}%` : "—"} />
+      </div>
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Distribuição de posições</h3>
+        <QueryDistribution buckets={search.distribution} />
+      </div>
+      {search.queries && search.queries.length > 0 && (
+        <div className="overflow-x-auto rounded-[9px] border border-[var(--border)]">
+          <table className="w-full text-xs">
+            <thead className="bg-[var(--surface-raised)] text-left text-[var(--muted)]"><tr><th className="px-3 py-2">Query</th><th className="px-3 py-2">Impr.</th><th className="px-3 py-2">Pos.</th><th className="px-3 py-2">Δ Pos</th><th className="px-3 py-2">Headroom</th><th className="px-3 py-2">Tendência</th></tr></thead>
+            <tbody>{search.queries.slice(0, 20).map((q) => <tr key={q.query} className="border-t border-[var(--border)]"><td className="max-w-[18rem] truncate px-3 py-2">{q.query}</td><td className="px-3 py-2 tabular-nums">{q.impressions}</td><td className="px-3 py-2 tabular-nums">{q.position ?? "—"}</td><td className="px-3 py-2 tabular-nums">{q.delta_position != null ? (q.delta_position > 0 ? `↑${q.delta_position}` : `↓${Math.abs(q.delta_position)}`) : "—"}</td><td className="px-3 py-2 tabular-nums">{typeof q.headroom === "number" ? Math.round(q.headroom * 100) : "—"}</td><td className="px-3 py-2"><TrendIndicator deltaPct={q.delta_position ?? null} /></td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function SemanticCoverageUI({ semantic }: { semantic?: { coverage?: number; components?: Record<string, number>; covered?: string[]; gaps?: string[] } }) {
+  if (!semantic) return <MissingData label="Cobertura semântica indisponível" detail="Sem corpus/semântica para esta página." />;
+  return (
+    <div className="space-y-4">
+      <SemanticCoverage coverage={(semantic.coverage ?? 0) * 100} components={semantic.components} gaps={semantic.gaps} />
+      {semantic.covered && semantic.covered.length > 0 && <div><h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Coberto</h3><div className="mt-1 flex flex-wrap gap-1">{semantic.covered.map((c) => <Badge key={c} tone="success">✓ {c}</Badge>)}</div></div>}
+    </div>
+  );
+}
+function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3"><span className="text-xs text-[var(--muted)]">{label}</span><div className="mt-1 text-lg font-semibold tabular-nums">{value}</div></div>; }
 function technicalChecks(intelligence?: { index_state?: string } | null, latest?: { status_code?: number | null; meta_robots?: string; canonical?: string; cwv?: Record<string, unknown> | null } | undefined) {
   const robots = (latest?.meta_robots ?? "").toLowerCase();
   const cwv = latest?.cwv as { lcp?: number } | undefined;

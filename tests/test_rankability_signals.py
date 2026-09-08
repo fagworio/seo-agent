@@ -193,3 +193,17 @@ def test_page_intelligence_and_history_integration():
     hist = cp.page_history("https://x.com/a/")
     assert len(hist) == 1
     s.close()
+
+
+def test_page_intelligence_search_and_semantic():
+    from hermes_seo_agent.report.page_intelligence import search_intelligence, semantic_coverage
+    s = Storage(":memory:")
+    _seed(s)
+    search = search_intelligence(s, "https://x.com/a/")
+    assert search["summary"]["impressions"] > 0
+    assert search["distribution"]["top10"] >= 0
+    assert len(search["queries"]) >= 1
+    sem = semantic_coverage(s, "https://x.com/a/", "dragon ball")
+    assert 0 <= sem["coverage"] <= 1
+    assert "entity" in sem["components"]
+    s.close()
