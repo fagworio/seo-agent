@@ -131,6 +131,7 @@ export default function TechnicalPage() {
               <th className="px-3 py-2">Google</th>
               <th className="px-3 py-2">Potencial</th>
               <th className="px-3 py-2">Sev.</th>
+              <th className="px-3 py-2">Impacto SEO</th>
               <th className="px-3 py-2"><span className="sr-only">Ações</span></th>
             </tr>
           </thead>
@@ -176,11 +177,12 @@ export default function TechnicalPage() {
                   )}
                 </td>
                 <td className="px-3 py-2"><Badge tone={TONES[f.severity] ?? "neutral"}>{f.severity}</Badge></td>
+                <td className="px-3 py-2"><SeoImpact finding={f} /></td>
                 <td className="px-3 py-2 text-right"><Button size="sm" variant="secondary" onClick={() => setSelected(f)}>Ver detalhes</Button></td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-[var(--muted)]">Nenhum finding para os filtros.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-[var(--muted)]">Nenhum finding para os filtros.</td></tr>
             )}
           </tbody>
         </table>
@@ -487,3 +489,12 @@ function FieldCard({ title, value, field, tone }: { title: string; value: string
   );
 }
 function shortUrl(u: string) { const host = u.replace(/^https?:\/\//, ""); const path = host.includes("/") ? host.slice(host.indexOf("/")) : ""; return `${host.split("/")[0]}${path.length > 40 ? "…" + path.slice(-24) : path}`; }
+
+function SeoImpact({ finding }: { finding: TechnicalFinding }) {
+  const rk = /canonical|robots|noindex|index|status/i.test(`${finding.rule.rule_id} ${finding.rule.label}`);
+  const gap = finding.potential?.gap_clicks ?? 0;
+  if ((finding.severity === "high" || finding.severity === "critical") && rk) return <Badge tone="danger">BLOCKING</Badge>;
+  if (gap > 100) return <Badge tone="danger">ALTO</Badge>;
+  if (gap > 30) return <Badge tone="warning">MÉDIO</Badge>;
+  return <Badge tone="neutral">BAIXO</Badge>;
+}
