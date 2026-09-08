@@ -84,6 +84,12 @@ class AuthService:
         self._reauth_window = getattr(config, "reauth_window_seconds", 900)
         self._reset_window = getattr(config, "reset_token_seconds", 3600)
         self._mfa_issuer = getattr(config, "mfa_issuer", "SEO Agent")
+        # Intervalo mínimo entre `touch_session` por sessão (segundos). Reduz a
+        # dependência de WRITE em toda requisição autenticada: sem isso, até um
+        # GET de leitura faz UPDATE+commit na sessão a cada request — e, sob
+        # qualquer lock/retenção de escrita, TODAS as rotas param (database is
+        # locked / ECONNRESET). Com throttle, o touch ocorre <= 1x/interval.
+        self._touch_interval = getattr(config, "session_touch_interval_seconds", 300)
 
     # -- time helpers --------------------------------------------------------
     def _base_dt(self) -> datetime.datetime:
@@ -294,8 +300,23 @@ class AuthService:
         user = self.store.get_user(sess["user_id"])
         if user is None or not user["is_active"]:
             return None
-        # renova idle
-        self.store.touch_session(sess["id"], now, self._after(self._idle))
+        # renova idle (com throttle): evita WRITE a cada request. A sessão só é
+        # tocada quando está ativa há >= self._touch_interval desde o último
+        # touch, ou quando não conseguimos calcular a idade (renova por segurança).
+        try:
+            last_seen = datetime.datetime.fromisoformat(sess["last_seen_at"])
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=self._base_dt().tzinfo)
+            needs_touch = (self._base_dt() - last_seen).total_seconds() >= self._touch_interval
+        except Exception:
+            needs_touch = True
+        if needs_touch:
+            # touch é melhor-esforço: se a escrita falhar (ex.: lock/retenção),
+            # NÃO derruba uma rota de LEITURA — a sessão segue válida até o idle.
+            try:
+                self.store.touch_session(sess["id"], now, self._after(self._idle))
+            except Exception:  # noqa: BLE001 — renovar idle é não-crítico p/ leitura
+                pass
         roles = self.store.get_user_roles(sess["user_id"])
         perms = self._permissions_for_roles(roles)
         return SessionInfo(

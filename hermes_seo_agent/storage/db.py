@@ -594,9 +594,19 @@ class Storage:
             self.conn.execute("PRAGMA synchronous=NORMAL")
         except Exception:
             pass
-        self.conn.executescript(_SCHEMA)
-        self._migrate()
-        self.conn.commit()
+        try:
+            self.conn.executescript(_SCHEMA)
+            self._migrate()
+            self.conn.commit()
+        except Exception:
+            # Se a inicialização falhar (ex.: `database is locked` no commit),
+            # NÃO deixar a conexão vazada — uma conexão aberta com transação
+            # pendente segura o write-lock e trava o banco para todos.
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            raise
 
     def _migrate(self) -> None:
         """Add columns to pre-existing databases (CREATE TABLE is a no-op there)."""

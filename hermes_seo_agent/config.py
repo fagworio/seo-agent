@@ -74,6 +74,7 @@ class Config:
     session_absolute_seconds: int = 7 * 24 * 3600  # absolute timeout
     session_cookie_name: str = "__Host-seo_session"
     session_cookie_secure: bool = True
+    session_touch_interval_seconds: int = 300   # intervalo min. entre touch de sessão (read-only em GETs)
     auth_max_attempts: int = 5                  # janela de brute-force
     auth_attempt_window_seconds: int = 900      # por email/IP
     csrf_header: str = "X-CSRF-Token"
@@ -234,6 +235,9 @@ def load_config() -> Config:
         session_idle_seconds=_int("SESSION_IDLE_SECONDS", 8 * 3600, 60, 30 * 24 * 3600),
         session_absolute_seconds=_int(
             "SESSION_ABSOLUTE_SECONDS", 7 * 24 * 3600, 60, 365 * 24 * 3600
+        ),
+        session_touch_interval_seconds=_int(
+            "SESSION_TOUCH_INTERVAL_SECONDS", 300, 0, 86400
         ),
         session_cookie_name=_env("SESSION_COOKIE_NAME", "__Host-seo_session"),
         session_cookie_secure=_bool("SESSION_COOKIE_SECURE", True),

@@ -138,6 +138,35 @@ def test_session_absolute_expiry(tmp_path):
     storage.close()
 
 
+def test_session_touch_is_throttled(tmp_path):
+    """Regressão: validação de sessão NÃO pode escrever a cada request.
+
+    Sem throttle, `validate_session` fazia UPDATE+commit (touch_session) em TODA
+    requisição autenticada — até um GET de leitura dependia de WRITE. Sob
+    qualquer lock/retenção de escrita, todas as rotas paravam (database is
+    locked / ECONNRESET / 500). O touch agora ocorre apenas quando a sessão
+    está ativa há >= session_touch_interval_seconds (default 300).
+    """
+    storage, svc, clock = _make(tmp_path / "touch.db")
+    svc.create_user("v@x.com", "V", "senha-bem-longa-12345", ["viewer"])
+    token = svc.login("v@x.com", "senha-bem-longa-12345").session_token
+    sid = storage.conn.execute(
+        "SELECT id FROM sessions ORDER BY id DESC LIMIT 1").fetchone()[0]
+    last = lambda: storage.conn.execute(  # noqa: E731
+        "SELECT last_seen_at FROM sessions WHERE id = ?", (sid,)).fetchone()[0]
+    assert svc.validate_session(token) is not None
+    base = last()
+    # dentro do intervalo: NÃO deve tocar (sem write na sessão)
+    clock.advance(120)
+    assert svc.validate_session(token) is not None
+    assert last() == base, "touch não deveria ocorrer dentro do intervalo"
+    # passou do intervalo (300s): renova
+    clock.advance(300)
+    assert svc.validate_session(token) is not None
+    assert last() != base, "touch deveria renovar após o intervalo"
+    storage.close()
+
+
 def test_verify_mfa_wrong_code_rejected(tmp_path):
     storage, svc, _ = _make(tmp_path / "g.db")
     svc.create_admin("admin@x.com", "Admin", "senha123")
