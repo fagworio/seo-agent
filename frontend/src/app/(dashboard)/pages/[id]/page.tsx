@@ -126,7 +126,7 @@ export default function PageWorkspace() {
 
       {tab === "Search" && <Card title="Search"><p className="text-sm">{latest?.gsc ? summary(latest.gsc) : "Search Console não forneceu dados nesta captura; isso não representa zero."}</p></Card>}
       {tab === "Content" && <Card title="Conteúdo"><dl className="space-y-2 text-sm"><Row label="Título" value={latest?.title || "não capturado"} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /><Row label="Hash de conteúdo" value={latest?.content_hash || "não capturado"} /></dl></Card>}
-      {tab === "Links" && <Card title="Links"><p className="text-sm text-[var(--muted)]">Não há evidência de links associada a esta captura. Uma análise posterior poderá preencher esta área; ausência não equivale a ausência de links.</p></Card>}
+      {tab === "Links" && <Card title="Links — Internal Authority"><InternalAuthority v2={v2} /></Card>}
       {tab === "Technical" && <Card title="SEO técnico"><TechnicalEligibility checks={technicalChecks(intelligence, latest)} /><dl className="mt-3 space-y-2 text-sm"><Row label="Status HTTP" value={String(latest?.status_code ?? "não capturado")} /><Row label="Meta robots" value={latest?.meta_robots || "não capturado"} /><Row label="Canonical" value={latest?.canonical || "não capturado"} /></dl></Card>}
     </div>
   );
@@ -135,6 +135,22 @@ export default function PageWorkspace() {
 function summary(value: Record<string, unknown> | null | undefined) { return value ? Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join(" · ") : "não capturado"; }
 function Row({ label, value }: { label: string; value: string }) { return <div className="flex justify-between gap-4"><dt className="text-[var(--muted)]">{label}</dt><dd className="max-w-[60%] truncate">{value}</dd></div>; }
 function noindexGate(intelligence?: { index_state?: string } | null) { return intelligence?.index_state === "noindex"; }
+function InternalAuthority({ v2 }: { v2?: { topic_authority?: { score?: number; factors?: { internal_authority?: { score?: number; explanation?: string } } } } | null }) {
+  const f = v2?.topic_authority?.factors?.internal_authority;
+  return (
+    <div className="space-y-3 text-sm">
+      {f ? (
+        <>
+          <ScoreBar label="Autoridade interna" score={typeof f.score === "number" ? f.score * 100 : null} />
+          <p className="text-[var(--muted)]">{f.explanation || "Autoridade interna calculada pelo PageRank local do link graph."}</p>
+        </>
+      ) : (
+        <MissingData label="Autoridade interna indisponível" detail="O link graph interno ainda não cobre o cluster desta página." />
+      )}
+      <p className="text-xs text-[var(--muted)]">A autoridade interna é calculada localmente (PageRank sobre internal_links), sem API externa.</p>
+    </div>
+  );
+}
 function technicalChecks(intelligence?: { index_state?: string } | null, latest?: { status_code?: number | null; meta_robots?: string; canonical?: string; cwv?: Record<string, unknown> | null } | undefined) {
   const robots = (latest?.meta_robots ?? "").toLowerCase();
   const cwv = latest?.cwv as { lcp?: number } | undefined;
