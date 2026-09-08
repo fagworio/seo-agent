@@ -112,6 +112,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ("rankability", "M5: topical rankability profile per cluster"),
         ("rankability-v2", "M5-V2: Topic Authority × Query Rankability + Opportunity V2 (R1–R5)"),
         ("calibrate", "M8-V2: R9 calibração de pesos pelos resultados medidos"),
+        ("competitor-crawl", "R7: crawler de sitemap/RSS de concorrentes (só metadados)"),
+        ("content-gap", "R8: Content Gap Engine (nosso topic graph × concorrentes)"),
         ("decide", "M6: opportunity decision engine (tree + 2 scores)"),
         ("brief", "M7: semantic research brief (human review)"),
         ("outcomes", "M8: opportunity outcomes, measurement and recalibration"),
@@ -289,6 +291,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="keyword específica p/ Query Rankability (opcional)")
             p.add_argument("--percent", action="store_true",
                            help="retorna scores 0..100 (default 0..1)")
+        if name == "competitor-crawl":
+            p.add_argument("--sites", default="",
+                           help="CSV de domínios (override COMPETITOR_SITES)")
+            p.add_argument("--domain", default="",
+                           help="raspa um único domínio de concorrente")
+        if name == "content-gap":
+            p.add_argument("--percent", action="store_true",
+                           help="retorna gap_score 0..100")
         if name == "decide":
             p.add_argument("keyword", help="intenção/keyword a decidir")
             p.add_argument("--impressions", type=float, default=None,
@@ -396,6 +406,10 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_rankability_v2)
         elif name == "calibrate":
             p.set_defaults(func=_cmd_calibrate)
+        elif name == "competitor-crawl":
+            p.set_defaults(func=_cmd_competitor_crawl)
+        elif name == "content-gap":
+            p.set_defaults(func=_cmd_content_gap)
         elif name == "decide":
             p.set_defaults(func=_cmd_decide)
         elif name == "brief":
@@ -3638,6 +3652,60 @@ def _cmd_calibrate(args: argparse.Namespace, config: Any) -> int:
         "findings": [], "safe_actions": [], "approval_required": [],
         "calibration": report,
         "adjusted_opportunity_weights": weights,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_competitor_crawl(args: argparse.Namespace, config: Any) -> int:
+    """R7: raspa sitemap/RSS de concorrentes (apenas metadados editoriais)."""
+    from .report.competitor import crawl_domain
+    from .report.topics import build_topic_graph
+    sites = (args.sites or config.competitor_sites or "").strip()
+    domains = [d.strip() for d in sites.split(",") if d.strip()]
+    if args.domain and args.domain.strip():
+        domains = [args.domain.strip()]
+    if not domains:
+        print(json.dumps({"status": "error",
+                          "error": "nenhum concorrente. Configure COMPETITOR_SITES ou --sites"},
+                         ensure_ascii=False))
+        return 2
+
+    with Storage(config.sqlite_path) as storage:
+        our_graph = build_topic_graph(storage, min_urls=1)
+        summary: dict[str, dict[str, Any]] = {}
+        for domain in domains:
+            try:
+                entries = crawl_domain(domain, our_graph)
+                n = storage.upsert_competitor_documents(entries)
+                summary[domain] = {"crawled": len(entries), "saved": n}
+            except Exception as exc:  # noqa: BLE001
+                summary[domain] = {"error": str(exc)[:200]}
+        total = storage.competitor_topic_coverage()
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "competitor-crawl", "domains": summary,
+                    "competitor_topics": len(total)},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        "coverage": {k: {"competitors_covering": len(v), "articles": sum(v.values())}
+                     for k, v in total.items()},
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_content_gap(args: argparse.Namespace, config: Any) -> int:
+    """R8: Content Gap Engine (nosso topic graph × concorrentes)."""
+    from .report.content_gap import content_gaps
+    with Storage(config.sqlite_path) as storage:
+        report = content_gaps(storage, as_percent=bool(getattr(args, "percent", False)))
+    result = {
+        "status": "ok",
+        "summary": {"command": "content-gap", **{k: v for k, v in report.items()
+                                                 if k != "gaps"}},
+        "findings": [], "safe_actions": [], "approval_required": [],
+        **report,
     }
     _emit(result, force_json=True)
     return 0

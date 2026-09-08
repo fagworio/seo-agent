@@ -1803,6 +1803,10 @@ export interface components {
              * @default
              */
             limitations: string;
+            /** Rankability V2 */
+            rankability_v2?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ExperimentsEnvelope */
         ExperimentsEnvelope: {
@@ -2216,6 +2220,10 @@ export interface components {
             lifecycle_updated_at: string;
             /** Lifecycle Detail */
             lifecycle_detail?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rankability V2 */
+            rankability_v2?: {
                 [key: string]: unknown;
             } | null;
         };
@@ -3090,6 +3098,7 @@ export interface operations {
                 source?: string | null;
                 status?: string | null;
                 limit?: number;
+                include_rankability_v2?: boolean;
             };
             header?: never;
             path?: never;
@@ -3731,6 +3740,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                include_rankability_v2?: boolean;
             };
             header?: never;
             path?: never;

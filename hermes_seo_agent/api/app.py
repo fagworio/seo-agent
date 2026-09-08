@@ -203,8 +203,11 @@ def read_routers() -> list[APIRouter]:
     def work_items(services: Services = Depends(get_services),
                    session=Depends(authenticated("opportunity.read")),
                    source: str | None = None, status: str | None = None,
-                   limit: int = Query(200, ge=1, le=500)) -> dict[str, Any]:
-        return {"work_items": services.control.work_items(source=source, status=status, limit=limit)}
+                   limit: int = Query(200, ge=1, le=500),
+                   include_rankability_v2: bool = Query(False)) -> dict[str, Any]:
+        return {"work_items": services.control.work_items(
+            source=source, status=status, limit=limit,
+            include_rankability_v2=include_rankability_v2)}
     for action in ("approve", "reject", "snooze"):
         def _decision(action: str = action):
             def _d(item_id: str, body: WorkItemDecisionModel,

@@ -213,6 +213,14 @@ export interface Opportunity {
     google_benefits?: string[]; site_benefits?: string[]; verification_steps?: string[];
   };
   data_freshness?: Record<string, string>;
+  // M6-V2 — enriquecimento opcional (Topic Authority × Query Rankability + OpportunityScore)
+  rankability_v2?: {
+    topic_authority?: { score?: number; label?: string };
+    query_rankability?: { score?: number; label?: string };
+    opportunity?: { score?: number; label?: string };
+    confidence?: { score?: number; label?: string };
+    signals?: Record<string, unknown>;
+  } | null;
   // lifecycle canônico (Caixa = fila de decisão): new | approved | delegated |
   // executing | implemented | measured | rejected | snoozed
   lifecycle?: string;

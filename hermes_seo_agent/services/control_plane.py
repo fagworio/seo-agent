@@ -515,13 +515,15 @@ class ControlPlaneService:
 
     # -- Caixa de Trabalho ---------------------------------------------------
     def work_items(self, *, source: str | None = None, status: str | None = None,
-                   limit: int = 200) -> list[dict[str, Any]]:
+                   limit: int = 200, include_rankability_v2: bool = False
+                   ) -> list[dict[str, Any]]:
         """Caixa de trabalho = SOMENTE decisão humana pendente.
 
         Enriquece cada item com o lifecycle canônico (item 3/9) e remove os que já
         têm destino (approved/delegated/executing/implemented/measured/rejected),
         para não exibir trabalho que não exige mais decisão. Itens sem lifecycle
-        são novos -> entram na fila de decisão.
+        são novos -> entram na fila de decisão. Quando ``include_rankability_v2``
+        é True, cruza os sinais e anexa o pacote V2 (opcional, para não pesar).
         """
         items = self.opportunities.feed(source=source, status=status, limit=limit)
         out: list[dict[str, Any]] = []
@@ -539,6 +541,15 @@ class ControlPlaneService:
             it["lifecycle_detail"] = lc or None
             if self._caixa_excludes(canonical) or self._caixa_excludes(it.get("status", "")):
                 continue
+            if include_rankability_v2:
+                keyword = it.get("recommendation") or it.get("title") or it.get("url") or ""
+                if keyword:
+                    try:
+                        from ..report.opportunity_v2 import compute_opportunity_v2
+                        it["rankability_v2"] = compute_opportunity_v2(
+                            self.storage, keyword, as_percent=True)
+                    except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
+                        it["rankability_v2"] = None
             out.append(it)
         return out
 

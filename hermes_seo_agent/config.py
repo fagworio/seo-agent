@@ -28,6 +28,8 @@ class Config:
     # Static published site (what Google crawls)
     static_site_url: str = "https://www.unicorniohater.com.br"
     sitemap_url: str = "https://www.unicorniohater.com.br/sitemap_index.xml"
+    # R7 — concorrentes (sites para o Competitor Corpus; apenas metadados/sinais)
+    competitor_sites: str = ""          # CSV de domínios (ex.: omelete.com.br,jovemnerd.com.br)
 
     # Google (Phase 2/3)
     gsc_site_url: str = "https://www.unicorniohater.com.br/"
@@ -197,6 +199,7 @@ def load_config() -> Config:
         app_password=app_password,
         static_site_url=static_site_url,
         sitemap_url=sitemap_url,
+        competitor_sites=_env("COMPETITOR_SITES", ""),
         gsc_site_url=_validate_site_url(
             "GSC_SITE_URL", _env("GSC_SITE_URL", "https://www.unicorniohater.com.br/")
         ),

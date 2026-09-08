@@ -108,6 +108,8 @@ class OpportunityModel(BaseModel):
     lifecycle: str = "new"
     lifecycle_updated_at: str = ""
     lifecycle_detail: dict[str, Any] | None = None
+    # M6-V2 — enriquecimento opcional
+    rankability_v2: dict[str, Any] | None = None
 
 
 class OrganicSummaryModel(BaseModel):

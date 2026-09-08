@@ -136,3 +136,21 @@ def test_experiments_enriched_with_rankability_v2():
     assert enriched.get("rankability_v2"), "V2 deve ser anexado quando solicitado"
     assert "opportunity" in enriched["rankability_v2"]
     s.close()
+
+
+def test_work_items_with_rankability_v2():
+    s = Storage(":memory:")
+    _seed(s)
+    # item da Caixa (checklist) com título que resolve para o cluster
+    s.conn.execute(
+        "INSERT INTO improvement_checklist (url, item, action, reason, status, created_at) "
+        "VALUES ('https://x.com/a/', 'title_meta', 'Atualizar título', 'CTR', 'pending', '2026-02-01')")
+    s.conn.commit()
+    cp = ControlPlaneService(s, SimpleNamespace())
+    items = cp.work_items(source="checklist", include_rankability_v2=True)
+    target = next((i for i in items if i.get("id") == "checklist:1"), None)
+    assert target is not None
+    assert target.get("lifecycle") == "new"
+    assert target.get("rankability_v2"), "rankability_v2 deve ser anexado"
+    assert "opportunity" in target["rankability_v2"]
+    s.close()

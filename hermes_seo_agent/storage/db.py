@@ -329,6 +329,20 @@ CREATE TABLE IF NOT EXISTS opportunity_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_outcomes_keyword ON opportunity_outcomes(keyword);
 CREATE INDEX IF NOT EXISTS idx_outcomes_verdict ON opportunity_outcomes(verdict);
+
+-- R7: corpus de concorrentes (apenas metadados/sinais editoriais — SEM conteúdo).
+-- Alimenta o Content Gap Engine (R8) comparando nosso topic graph com o deles.
+CREATE TABLE IF NOT EXISTS competitor_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
+    title TEXT,
+    published_at TEXT,
+    entities_json TEXT,                -- topic keys (resolvidas p/ nosso topic graph)
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_competitor_domain ON competitor_documents(domain);
+CREATE INDEX IF NOT EXISTS idx_competitor_url ON competitor_documents(url);
 CREATE TABLE IF NOT EXISTS corpus_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     status TEXT NOT NULL,               -- running | ok | partial | failed
@@ -2401,6 +2415,52 @@ class Storage:
                       "interseção exata fila×corpus"),
         }
 
+
+    # -- R7: corpus de concorrentes ------------------------------------------
+
+    def upsert_competitor_documents(self, entries: list[dict[str, Any]]) -> int:
+        """Grava documento de concorrente (URL única; só metadados editoriais)."""
+        now = _now()
+        n = 0
+        for e in entries:
+            url = (e.get("url") or "").strip()
+            domain = (e.get("domain") or "").strip()
+            if not url or not domain:
+                continue
+            self.conn.execute(
+                "INSERT INTO competitor_documents (domain, url, title, published_at, "
+                "entities_json, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(url) DO UPDATE SET title = excluded.title, "
+                "published_at = excluded.published_at, entities_json = excluded.entities_json",
+                (domain, url, e.get("title") or "", e.get("published_at") or "",
+                 json.dumps(e.get("entities") or [], ensure_ascii=False), now))
+            n += 1
+        self.conn.commit()
+        return n
+
+    def list_competitor_documents(self, *, domain: str | None = None,
+                                  limit: int = 50_000) -> list[dict[str, Any]]:
+        sql = "SELECT id, domain, url, title, published_at, entities_json " \
+              "FROM competitor_documents"
+        params: list[Any] = []
+        if domain:
+            sql += " WHERE domain = ?"
+            params.append(domain)
+        sql += " ORDER BY published_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [{"id": r[0], "domain": r[1], "url": r[2], "title": r[3] or "",
+                 "published_at": r[4] or "", "entities": json.loads(r[5]) or []}
+                for r in rows]
+
+    def competitor_topic_coverage(self) -> dict[str, dict[str, int]]:
+        """topic -> {domain: n_articles} (cobertura por concorrente)."""
+        out: dict[str, dict[str, int]] = {}
+        for doc in self.list_competitor_documents():
+            for topic in doc["entities"]:
+                bucket = out.setdefault(topic, {})
+                bucket[doc["domain"]] = bucket.get(doc["domain"], 0) + 1
+        return out
 
     # -- M8: opportunity outcomes e aprendizado ------------------------------
 

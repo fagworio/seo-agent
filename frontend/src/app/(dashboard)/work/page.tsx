@@ -31,7 +31,7 @@ function Workbox() {
   const [delegate, setDelegate] = useState<{ fingerprints: string[]; workItemIds: Record<string, string> } | null>(null);
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
-  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200${source ? `&source=${source}` : ""}`), refetchInterval: 30_000 });
+  const query = useQuery({ queryKey: ["work-items", source], queryFn: () => api.get<{ work_items: Opportunity[] }>(`/work-items?limit=200&include_rankability_v2=true${source ? `&source=${source}` : ""}`), refetchInterval: 30_000 });
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params.toString());
@@ -104,7 +104,7 @@ function Workbox() {
               <td className="px-3 py-2">{lifecycleDone(item) ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} />}</td>
               <td className="max-w-2xl px-3 py-2"><button onClick={() => setParam("item", item.id)} className="block max-w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span><span className="mt-0.5 block line-clamp-1 font-medium">{displayTitle(item)}</span><span className="mt-0.5 block line-clamp-1 text-xs font-normal text-[var(--muted)]">{view.detail}</span></button></td>
               <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--muted)]">{opportunityEvidenceSummary(item)}</td>
-              <td className="px-3 py-2"><ActionBadge value={item.action_class} /></td>
+              <td className="px-3 py-2"><ActionBadge value={item.action_class} /><span className="ml-1"><V2Badge item={item} /></span></td>
               <td className="px-3 py-2 tabular-nums">{formatPriority(item.score)}</td>
             </tr>;
           })}
@@ -130,7 +130,10 @@ function Workbox() {
                 <button onClick={() => setParam("item", item.id)} className="block max-w-full text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]">{displayTitle(item)}</button>
                 <span className="mt-0.5 block text-xs text-[var(--muted)]">{view.detail}</span>
               </div>
-              <ActionBadge value={item.action_class} />
+              <div className="flex flex-col items-end gap-1">
+                <ActionBadge value={item.action_class} />
+                <V2Badge item={item} />
+              </div>
             </div>
             <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]">
               <span>{opportunityEvidenceSummary(item)}</span>
@@ -158,6 +161,12 @@ function Detail({ item, canReview, pending, error, close, decide }: { item: Oppo
 function ActionBadge({ value }: { value: Opportunity["action_class"] }) { const content = value === "safe_fix" ? ["Correção segura", "success"] : value === "observe" ? ["Observar", "info"] : ["Requer aprovação", "warning"]; return <Badge tone={content[1] as "success" | "info" | "warning"}>{content[0]}</Badge>; }
 function lifecycleDone(item: Opportunity) { const lc = item.lifecycle ?? item.status ?? ""; return ["implemented", "measured", "rejected", "done", "approved", "delegated", "executing", "snoozed", "superseded", "expired", "cancelled"].includes(lc); }
 function LifecycleBadge({ item }: { item: Opportunity }) { return <StatusBadge status={item.lifecycle ?? item.status} />; }
+function V2Badge({ item }: { item: Opportunity }) {
+  const opp = item.rankability_v2?.opportunity;
+  if (!opp?.score) return null;
+  const tone = opp.score >= 70 ? "success" : opp.score >= 40 ? "warning" : "danger";
+  return <Badge tone={tone} title={`Oportunidade V2: ${Math.round(opp.score)}/100`}>Oport V2 {Math.round(opp.score)}</Badge>;
+}
 function formatPriority(value: number | null) { if (value === null) return "—"; return value <= 1 ? `${Math.round(value * 100)}%` : value.toLocaleString("pt-BR", { maximumFractionDigits: 1 }); }
 function cleanTitle(value: string) { return value.replace(/\s+[—|-]\s+UnicornioHater$/i, "").trim(); }
 function displayTitle(item: Opportunity) {
