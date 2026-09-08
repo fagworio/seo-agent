@@ -85,6 +85,19 @@ export default function IntegrationsPage() {
                 {typeof s.global_coverage_pct === "number" && <Row k="Cobertura" v={`${s.global_coverage_pct}%`} />}
                 {typeof s.provider === "string" && <Row k="Provedor" v={s.provider} />}
               </dl>
+              {s.used_by && s.used_by.length > 0 && (
+                <div className="mt-3 border-t border-[var(--border)] pt-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Usado por</div>
+                  <div className="flex flex-wrap gap-1">
+                    {s.used_by.map((u) => (
+                      <Badge key={u} tone={s.data_status === "available" ? "success" : "neutral"}>{s.data_status === "available" ? "✓" : "△"} {u}</Badge>
+                    ))}
+                  </div>
+                  {s.data_status !== "available" && (
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">Fonte indisponível: os scores acima ficam menos confiáveis.</p>
+                  )}
+                </div>
+              )}
               {isStale(s) && (
                 <p className="mt-2 text-xs text-[var(--warning)]">⚠ Dados desatualizados</p>
               )}

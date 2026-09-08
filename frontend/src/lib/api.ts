@@ -284,6 +284,8 @@ export interface IntegrationSource {
   limitations: string;
   // ação de recuperação sugerida (determinística); vazia quando available
   recovery: string;
+  // F13 — quais modelos de inteligência usam esta fonte
+  used_by?: string[];
   // extras (coverage, documentos, provider, etc.) projetados pelo backend
   [key: string]: unknown;
 }

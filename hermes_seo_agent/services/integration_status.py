@@ -28,6 +28,16 @@ RECOVERY_HINTS: dict[str, str] = {
     "external": "configure o provedor externo (M4): credenciais, quota e custo.",
 }
 
+# F13 — quais scores (modelos de inteligência) dependem de cada fonte. Determinístico.
+SOURCE_USED_BY: dict[str, list[str]] = {
+    "gsc": ["Topic Authority", "Query Rankability", "Headroom", "Opportunity Score"],
+    "ga4": ["Engagement", "Opportunity evidence", "Momentum"],
+    "wordpress": ["Technical Eligibility", "Content Coverage"],
+    "corpus": ["Semantic Coverage", "Topic Coverage", "Content Coverage"],
+    "sitemap": ["Technical Eligibility", "Cobertura"],
+    "crux": ["Core Web Vitals (Technical Eligibility)"],
+}
+
 
 @dataclass
 class SourceStatus:
@@ -52,6 +62,7 @@ class SourceStatus:
             "rows": self.rows,
             "limitations": self.limitations,
             "recovery": self.recovery(),
+            "used_by": SOURCE_USED_BY.get(self.source, []),
             **self.extras,
         }
 
