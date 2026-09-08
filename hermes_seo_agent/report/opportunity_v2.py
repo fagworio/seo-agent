@@ -8,6 +8,7 @@ CLI. Determinístico, zero API externa.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 from .rankability_signals import (build_cluster_signals, build_query_signals,
                                   resolve_cluster_entity)
@@ -83,3 +84,61 @@ def compute_opportunity_v2(storage: Any, keyword: str, *,
             "cluster_urls": signals.get("urls", []),
         },
     }
+
+
+def page_rankability_v2(storage: Any, url: str, *,
+                        as_percent: bool = True) -> dict[str, Any] | None:
+    """V2 por página (UI-2 Page Explorer): Topic Authority do cluster da página +
+    Headroom (posição/CTR) + Opportunity. Retorna None se a página não resolver
+    para um cluster do nosso topic graph (sem sinal de autoridade do assunto)."""
+    url = (url or "").strip()
+    if not url:
+        return None
+    slug = urlparse(url).path.rstrip("/")
+    slug = " ".join(part for part in slug.split("/")[-1].replace("-", " ").split()
+                    if part)[:4] or slug
+    try:
+        # resolve o cluster a partir da própria URL (a página é um doc do corpus)
+        from .topics import build_topic_graph
+        graph = build_topic_graph(storage, min_urls=1)
+        entity = next((c["entity"] for c in graph if url in c.get("urls", [])), None)
+        if not entity:
+            entity = resolve_cluster_entity(storage, slug)
+        signals, _cov = build_cluster_signals(storage, entity)
+        if not signals.get("posts"):
+            return None
+        topic = topic_authority(signals, as_percent=as_percent)
+        # posição/CTR da própria página (para headroom) — seo_expectations
+        row = storage.conn.execute(
+            "SELECT position, clicks, impressions, ctr FROM seo_expectations "
+            "WHERE url = ? ORDER BY computed_at DESC LIMIT 1", (url,)).fetchone()
+        position = float(row[0]) if row and row[0] is not None else None
+        ctr = float(row[3]) if row and row[3] is not None else None
+        room, _ = headroom(position, ctr, 0.06)
+        sig_momentum = signals.get("momentum_delta_pct")
+        momentum = (min(sig_momentum / 50, 1.0) if isinstance(sig_momentum, (int, float))
+                    else 0.5)
+        conf = confidence_v2({
+            "gsc_sample": 0.7 if position is not None else 0.2,
+            "windows": 0.8 if sig_momentum is not None else 0.4,
+            "ga4_available": 0.5 if signals.get("ga4_engagement_rate") else 0.0,
+            "corpus_available": 1.0 if signals.get("posts") else 0.0,
+            "semantic_evidence": 0.7,
+            "query_stability": 0.6,
+            "technical_known": 0.7,
+        })
+        opp = opportunity_engine({
+            "query_rankability": topic["score"],
+            "demand": momentum,
+            "headroom": room,
+            "momentum": momentum,
+            "strategic_fit": 1.0 if signals.get("entities") else 0.5,
+            "confidence": conf,
+        }, as_percent=as_percent)
+        return {"topic_authority": topic, "headroom": {"score": room},
+                "confidence": conf, "opportunity": opp,
+                "signals": {"entity": signals.get("entity"), "posts": signals.get("posts"),
+                            "position": position, "ctr": ctr,
+                            "momentum_delta_pct": sig_momentum}}
+    except Exception:
+        return None

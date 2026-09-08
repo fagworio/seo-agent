@@ -154,3 +154,23 @@ def test_work_items_with_rankability_v2():
     assert target.get("rankability_v2"), "rankability_v2 deve ser anexado"
     assert "opportunity" in target["rankability_v2"]
     s.close()
+
+
+def test_pages_includes_rankability_v2_when_requested():
+    s = Storage(":memory:")
+    _seed(s)
+    # snapshot + expectativa da página para o explorer de páginas
+    s.conn.execute(
+        "INSERT INTO page_snapshots (url, captured_at, title, status_code, content_hash) "
+        "VALUES ('https://x.com/a/', '2026-02-01T00:00:00+00:00', 'Dragon Ball', 200, 'h')")
+    s.conn.execute(
+        "INSERT INTO seo_expectations (url, position, clicks, impressions, ctr, computed_at) "
+        "VALUES ('https://x.com/a/', 11.4, 3500, 127000, 0.0275, '2026-02-01')")
+    s.conn.commit()
+    cp = ControlPlaneService(s, SimpleNamespace())
+    res = cp.pages(include_rankability_v2=True)
+    target = next((p for p in res["items"] if p["url"] == "https://x.com/a/"), None)
+    assert target is not None
+    assert target.get("rankability_v2"), "/pages deve anexar rankability_v2 quando solicitado"
+    assert "opportunity" in target["rankability_v2"]
+    s.close()

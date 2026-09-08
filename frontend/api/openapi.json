@@ -500,6 +500,16 @@
               ],
               "title": "Index"
             }
+          },
+          {
+            "name": "include_rankability_v2",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Rankability V2"
+            }
           }
         ],
         "responses": {
@@ -5189,6 +5199,18 @@
             "type": "string",
             "title": "Primary Opportunity",
             "default": ""
+          },
+          "rankability_v2": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rankability V2"
           }
         },
         "type": "object",

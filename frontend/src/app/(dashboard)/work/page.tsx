@@ -12,6 +12,7 @@ import { Drawer } from "@/design-system/drawer";
 import { Pagination, pageSlice } from "@/components/pagination";
 import { DelegateCampaignModal } from "@/components/delegate-campaign-modal";
 import { StatusBadge } from "@/components/status-badge";
+import { ScoreBar, ConfidenceBadge } from "@/features/intelligence";
 
 const filters = [["", "Todas"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["interlink", "Links internos"]] as const;
 const pageSize = 10;
@@ -155,7 +156,7 @@ function Detail({ item, canReview, pending, error, close, decide }: { item: Oppo
   const view = presentOpportunity(item);
   const extras = item.related_recommendations ?? [];
   const heading = item.source === "interlink" && item.link_context?.target_title ? `Adicionar link para ${cleanTitle(item.link_context.target_title)}` : displayTitle(item);
-  return <Drawer title="Decisão de melhoria" onClose={close}><div className="mb-5 flex justify-between gap-3"><div className="min-w-0"><ActionBadge value={item.action_class} /><p className="mt-2 text-sm font-medium text-[var(--primary)]">{view.label}</p><h2 className="mt-1 text-xl font-bold leading-snug">{heading}</h2><p className="mt-2 text-sm font-normal leading-6 text-[var(--muted)]">{view.detail}</p></div><Button variant="ghost" size="sm" onClick={close}>Fechar</Button></div><DecisionInsight item={item} /><section className="mt-5 text-sm" aria-labelledby="action-title"><h3 id="action-title" className="font-semibold">Escopo da melhoria</h3>{extras.length > 0 && <><h4 className="mt-3 font-medium">Ações complementares</h4><ul className="mt-1 list-disc space-y-1 pl-5">{extras.map((value) => <li key={value}>{value}</li>)}</ul></>}<div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3"><strong>URL:</strong> <span className="break-all">{item.url || "a definir"}</span></div></section><div className="sticky bottom-0 -mx-6 mt-6 border-t border-[var(--border)] bg-[var(--surface)] px-6 pt-4"><p className="mb-3 text-xs text-[var(--muted)]">{canReview ? "Aprovar registra o plano; implementação e medição continuam rastreadas separadamente." : "Você não possui permissão para decidir esta oportunidade."}</p><div className="flex flex-wrap justify-end gap-2"><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("reject")}>Rejeitar</Button><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("snooze")}>Adiar</Button><Button disabled={!canReview || pending} onClick={() => decide("approve")}>{pending ? "Registrando…" : "Aprovar plano"}</Button></div>{error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}</div></Drawer>;
+  return <Drawer title="Decisão de melhoria" onClose={close}><div className="mb-5 flex justify-between gap-3"><div className="min-w-0"><ActionBadge value={item.action_class} /><p className="mt-2 text-sm font-medium text-[var(--primary)]">{view.label}</p><h2 className="mt-1 text-xl font-bold leading-snug">{heading}</h2><p className="mt-2 text-sm font-normal leading-6 text-[var(--muted)]">{view.detail}</p></div><Button variant="ghost" size="sm" onClick={close}>Fechar</Button></div><OpportunityIntelligence item={item} /><DecisionInsight item={item} /><section className="mt-5 text-sm" aria-labelledby="action-title"><h3 id="action-title" className="font-semibold">Escopo da melhoria</h3>{extras.length > 0 && <><h4 className="mt-3 font-medium">Ações complementares</h4><ul className="mt-1 list-disc space-y-1 pl-5">{extras.map((value) => <li key={value}>{value}</li>)}</ul></>}<div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3"><strong>URL:</strong> <span className="break-all">{item.url || "a definir"}</span></div></section><div className="sticky bottom-0 -mx-6 mt-6 border-t border-[var(--border)] bg-[var(--surface)] px-6 pt-4"><p className="mb-3 text-xs text-[var(--muted)]">{canReview ? "Aprovar registra o plano; implementação e medição continuam rastreadas separadamente." : "Você não possui permissão para decidir esta oportunidade."}</p><div className="flex flex-wrap justify-end gap-2"><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("reject")}>Rejeitar</Button><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("snooze")}>Adiar</Button><Button disabled={!canReview || pending} onClick={() => decide("approve")}>{pending ? "Registrando…" : "Aprovar plano"}</Button></div>{error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}</div></Drawer>;
 }
 
 function ActionBadge({ value }: { value: Opportunity["action_class"] }) { const content = value === "safe_fix" ? ["Correção segura", "success"] : value === "observe" ? ["Observar", "info"] : ["Requer aprovação", "warning"]; return <Badge tone={content[1] as "success" | "info" | "warning"}>{content[0]}</Badge>; }
@@ -166,6 +167,21 @@ function V2Badge({ item }: { item: Opportunity }) {
   if (!opp?.score) return null;
   const tone = opp.score >= 70 ? "success" : opp.score >= 40 ? "warning" : "danger";
   return <Badge tone={tone} title={`Oportunidade V2: ${Math.round(opp.score)}/100`}>Oport V2 {Math.round(opp.score)}</Badge>;
+}
+function OpportunityIntelligence({ item }: { item: Opportunity }) {
+  const v2 = item.rankability_v2;
+  if (!v2) return null;
+  return (
+    <section className="mt-4 rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4 text-sm" aria-label="Inteligência V2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Inteligência (V2)</h3>
+      <div className="mt-3 space-y-1.5">
+        {typeof v2.topic_authority?.score === "number" && <ScoreBar label="Topic Authority" score={v2.topic_authority.score} level={v2.topic_authority.label} />}
+        {typeof v2.query_rankability?.score === "number" && <ScoreBar label="Rankability" score={v2.query_rankability.score} level={v2.query_rankability.label} />}
+        {v2.opportunity && typeof v2.opportunity.score === "number" && <ScoreBar label="Oportunidade" score={v2.opportunity.score} level={v2.opportunity.label} />}
+        {v2.confidence && <div className="pt-1"><ConfidenceBadge score={v2.confidence.score} label={v2.confidence.label} /></div>}
+      </div>
+    </section>
+  );
 }
 function formatPriority(value: number | null) { if (value === null) return "—"; return value <= 1 ? `${Math.round(value * 100)}%` : value.toLocaleString("pt-BR", { maximumFractionDigits: 1 }); }
 function cleanTitle(value: string) { return value.replace(/\s+[—|-]\s+UnicornioHater$/i, "").trim(); }

@@ -260,9 +260,11 @@ def read_routers() -> list[APIRouter]:
               q: str = "", limit: int = Query(100, ge=1, le=500),
               offset: int = Query(0, ge=0),
               sort: str = "captured", health: str | None = None,
-              index: str | None = None) -> dict[str, Any]:
+              index: str | None = None,
+              include_rankability_v2: bool = Query(False)) -> dict[str, Any]:
         res = services.control.pages(query=q, limit=limit, offset=offset,
-                                     sort=sort, health=health, index=index)
+                                     sort=sort, health=health, index=index,
+                                     include_rankability_v2=include_rankability_v2)
         return {"pages": res["items"], "total": res["total"]}
     @pg.get("/history", operation_id="pages_history")
     def page_history(url: str = Query(...), services: Services = Depends(get_services),

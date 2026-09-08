@@ -324,6 +324,13 @@ export interface PageSummary {
   primary_opportunity: string;
   captured_at: string;
   word_count: number;
+  rankability_v2?: {
+    topic_authority?: { score?: number; label?: string };
+    headroom?: { score?: number };
+    opportunity?: { score?: number; label?: string };
+    confidence?: { score?: number; label?: string };
+    signals?: { momentum_delta_pct?: number | null; posts?: number; position?: number | null };
+  } | null;
 }
 
 export interface PageHistoryEntry {

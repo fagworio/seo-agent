@@ -265,6 +265,8 @@ class PageSummaryModel(BaseModel):
     captured_at: str = ""
     metrics: dict[str, Any] = {}
     primary_opportunity: str = ""
+    # M6-V2 — enriquecimento opcional (Topic Authority + Headroom + Opportunity)
+    rankability_v2: dict[str, Any] | None = None
 
 
 class ActivityEntryModel(BaseModel):

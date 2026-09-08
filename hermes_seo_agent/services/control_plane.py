@@ -272,7 +272,8 @@ class ControlPlaneService:
     # -- Páginas (F8) --------------------------------------------------------
     def pages(self, *, query: str = "", limit: int = 100, offset: int = 0,
               sort: str = "captured", health: str | None = None,
-              index: str | None = None) -> dict[str, Any]:
+              index: str | None = None,
+              include_rankability_v2: bool = False) -> dict[str, Any]:
         """Explorer de páginas: snapshot mais recente por URL + métricas.
 
         Paginação/filtro/ordenação no SERVIDOR. Ordenação por métricas
@@ -297,7 +298,7 @@ class ControlPlaneService:
         out = []
         for r in rows:
             url = r[1]
-            out.append({
+            item: dict[str, Any] = {
                 "url": url,
                 "title": r[2] or "",
                 "health": self._page_health(r[3], r[5]),
@@ -306,7 +307,14 @@ class ControlPlaneService:
                 "primary_opportunity": labels.get(url, ""),
                 "captured_at": r[4],
                 "word_count": r[7] or 0,
-            })
+            }
+            if include_rankability_v2:
+                try:
+                    from ..report.opportunity_v2 import page_rankability_v2
+                    item["rankability_v2"] = page_rankability_v2(self.storage, url)
+                except Exception:  # noqa: BLE001 — upstream V2 é enriquecimento opcional
+                    item["rankability_v2"] = None
+            out.append(item)
         if health:
             out = [p for p in out if p["health"] == health]
         if index:

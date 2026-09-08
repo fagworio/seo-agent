@@ -2326,6 +2326,10 @@ export interface components {
              * @default
              */
             primary_opportunity: string;
+            /** Rankability V2 */
+            rankability_v2?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** PagesEnvelope */
         PagesEnvelope: {
@@ -3308,6 +3312,7 @@ export interface operations {
                 sort?: string;
                 health?: string | null;
                 index?: string | null;
+                include_rankability_v2?: boolean;
             };
             header?: never;
             path?: never;
