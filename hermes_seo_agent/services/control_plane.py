@@ -295,6 +295,11 @@ class ControlPlaneService:
         # carregar o feed por cada URL) — feed é determinístico, então o mapa
         # é idêntico ao que um loop por linha produziria.
         labels = self._primary_opportunity_labels()
+        # P3: índice do topic graph construído UMA vez (evita build_topic_graph por página).
+        cluster_index = None
+        if include_rankability_v2:
+            from ..report.topics import build_cluster_index
+            cluster_index = build_cluster_index(self.storage)
         out = []
         for r in rows:
             url = r[1]
@@ -311,7 +316,7 @@ class ControlPlaneService:
             if include_rankability_v2:
                 try:
                     from ..report.opportunity_v2 import page_rankability_v2
-                    item["rankability_v2"] = page_rankability_v2(self.storage, url)
+                    item["rankability_v2"] = page_rankability_v2(self.storage, url, index=cluster_index)
                 except Exception:  # noqa: BLE001 — upstream V2 é enriquecimento opcional
                     item["rankability_v2"] = None
             out.append(item)
@@ -356,8 +361,10 @@ class ControlPlaneService:
         try:
             from ..report.opportunity_v2 import page_rankability_v2
             from ..report.page_intelligence import search_intelligence, semantic_coverage
+            from ..report.topics import build_cluster_index
+            index = build_cluster_index(self.storage)
             metrics = self._page_metrics(url)
-            v2 = page_rankability_v2(self.storage, url)
+            v2 = page_rankability_v2(self.storage, url, index=index)
             entity = (v2 or {}).get("signals", {}).get("entity")
             ta_score = (v2 or {}).get("topic_authority", {}).get("score")
             return {"metrics": metrics,
@@ -373,12 +380,15 @@ class ControlPlaneService:
         """Topic Explorer: authority + cobertura + momentum por tópico (cluster)."""
         from ..report.rankability_signals import build_cluster_signals
         from ..report.rankability_v2 import query_distribution, topic_authority
-        from ..report.topics import build_topic_graph
-        graph = build_topic_graph(self.storage, min_urls=1)[:limit]
+        from ..report.topics import build_cluster_index, build_topic_graph
+        # P3: índices do corpus/GSC construídos UMA vez por request (as queries de
+        # cluster passam a ser batch; reconstruir o grafo por cluster era O(N×M)).
+        index = build_cluster_index(self.storage)
+        graph = build_topic_graph(self.storage, min_urls=1, index=index)[:limit]
         out: list[dict[str, Any]] = []
         for c in graph:
             try:
-                signals, _cov = build_cluster_signals(self.storage, c["entity"])
+                signals, _cov = build_cluster_signals(self.storage, c["entity"], index=index)
                 if not signals.get("posts"):
                     continue
                 ta = topic_authority(signals, as_percent=True)
@@ -401,7 +411,9 @@ class ControlPlaneService:
         """Detalhe de um tópico: authority breakdown + páginas fortes + queries emergentes."""
         from ..report.rankability_signals import build_cluster_signals
         from ..report.rankability_v2 import query_distribution, topic_authority
-        signals, _cov = build_cluster_signals(self.storage, entity)
+        from ..report.topics import build_cluster_index
+        index = build_cluster_index(self.storage)
+        signals, _cov = build_cluster_signals(self.storage, entity, index=index)
         if not signals.get("posts"):
             return None
         ta = topic_authority(signals, as_percent=True)
@@ -543,6 +555,11 @@ class ControlPlaneService:
         except Exception:
             return []
         revalidations = {item["id"]: item for item in self._revalidations(limit=limit)}
+        # P3: índice do topic graph construído UMA vez (evita build_topic_graph por item).
+        index = None
+        if include_rankability_v2:
+            from ..report.topics import build_cluster_index
+            index = build_cluster_index(self.storage)
         out = []
         for outcome in outcomes:
             baseline = outcome.get("baseline") or {}
@@ -584,7 +601,7 @@ class ControlPlaneService:
                 try:
                     from ..report.opportunity_v2 import compute_opportunity_v2
                     item["rankability_v2"] = compute_opportunity_v2(
-                        self.storage, outcome["keyword"], as_percent=True)
+                        self.storage, outcome["keyword"], as_percent=True, index=index)
                 except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
                     item["rankability_v2"] = None
             out.append(item)
@@ -619,6 +636,11 @@ class ControlPlaneService:
         é True, cruza os sinais e anexa o pacote V2 (opcional, para não pesar).
         """
         items = self.opportunities.feed(source=source, status=status, limit=limit)
+        # P3: índice do topic graph construído UMA vez (evita build_topic_graph por item).
+        index = None
+        if include_rankability_v2:
+            from ..report.topics import build_cluster_index
+            index = build_cluster_index(self.storage)
         out: list[dict[str, Any]] = []
         for it in items:
             if it.get("source") == "backlog":
@@ -640,7 +662,7 @@ class ControlPlaneService:
                     try:
                         from ..report.opportunity_v2 import compute_opportunity_v2
                         it["rankability_v2"] = compute_opportunity_v2(
-                            self.storage, keyword, as_percent=True)
+                            self.storage, keyword, as_percent=True, index=index)
                     except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
                         it["rankability_v2"] = None
             out.append(it)
@@ -743,24 +765,26 @@ class ControlPlaneService:
         # UMA vez (0.8s) e momentum por cluster consultado em lote único, sem
         # compute_opportunity_v2 por item (que era o gargalo — 3.8s cada).
         try:
-            from ..report.rankability_v2 import query_distribution
-            from ..report.topics import build_topic_graph
-            graph = build_topic_graph(self.storage, min_urls=1)
+            from ..report.topics import build_cluster_index, build_topic_graph
+            # P3/P4: índice do topic graph 1x + janela única; momentum por cluster
+            # consultado em lote (2 janelas mais recentes), sem V2 por item.
+            index = build_cluster_index(self.storage)
+            graph = build_topic_graph(self.storage, min_urls=1, index=index)
+            ws = index["window"]
             entity_scores: dict[str, dict[str, Any]] = {}
             for c in graph[:300]:
                 urls = c.get("urls", [])
-                ws = self.storage.latest_window_start()
-                moments: list[str] = []
-                if urls and ws:
-                    ph = ",".join("?" * len(urls))
-                    rows = self.storage.conn.execute(
-                        f"SELECT window_start, SUM(impressions) FROM query_pages "
-                        f"WHERE url IN ({ph}) AND window_start >= ? GROUP BY window_start "
-                        f"ORDER BY window_start LIMIT 2", (*urls, ws)
-                    ).fetchall()
-                    if len(rows) == 2 and rows[0][1]:
-                        prev, cur = float(rows[0][1]), float(rows[1][1])
-                        entity_scores[c["entity"]] = {"momentum": round((cur - prev) / prev * 100, 1) if prev else None}
+                if not urls or not ws:
+                    continue
+                ph = ",".join("?" * len(urls))
+                rows = self.storage.conn.execute(
+                    f"SELECT window_start, SUM(impressions) FROM query_pages "
+                    f"WHERE url IN ({ph}) AND window_start <= ? GROUP BY window_start "
+                    f"ORDER BY window_start DESC LIMIT 2", (*urls, ws)
+                ).fetchall()
+                if len(rows) == 2 and rows[1][1]:
+                    prev, cur = float(rows[1][1]), float(rows[0][1])
+                    entity_scores[c["entity"]] = {"momentum": round((cur - prev) / prev * 100, 1) if prev else None}
             emerging = sorted([e for e in entity_scores.items() if (e[1].get("momentum") or 0) > 15],
                               key=lambda e: -e[1]["momentum"])[:5]
             declining = sorted([e for e in entity_scores.items() if (e[1].get("momentum") or 0) < -10],

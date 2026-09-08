@@ -62,23 +62,37 @@ def _internal_edges(storage: Any, urls: list[str]) -> list[tuple[str, str]]:
     return edges
 
 
-def _cluster_counts(storage: Any, entity: str, urls: list[str]) -> dict[str, int]:
+def _cluster_counts(storage: Any, entity: str, urls: list[str],
+                    entity_counts: dict[str, int] | None = None) -> dict[str, int]:
+    """Contagens do cluster (P2): entities via mapa pré-construído (GROUP BY de
+    entidades distintas, não 100k+ linhas por cluster) e sections/questions via
+    leitura em lote (IN) das seções do cluster."""
     key = canonical_entity(entity)
-    entities = sum(
-        1 for r in storage.conn.execute(
-            "SELECT entity FROM corpus_entities").fetchall()
-        if canonical_entity(r[0]) == key)
+    if entity_counts is not None:
+        entities = entity_counts.get(key, 0)
+    else:
+        entities = sum(
+            1 for r in storage.conn.execute(
+                "SELECT entity FROM corpus_entities").fetchall()
+            if canonical_entity(r[0]) == key)
     sections = 0
     questions = 0
     if urls:
         placeholders = ",".join("?" * len(urls))
-        for row in storage.conn.execute(
-            f"SELECT heading FROM corpus_sections WHERE url IN ({placeholders})",
-            urls).fetchall():
-            sections += 1
-            heading = normalize_entity(row[0] or "")
-            if "?" in (row[0] or "") or any(w in heading for w in ("quantos", "quantas", "quem", "como", "qual", "quais", "quando", "onde")):
-                questions += 1
+        row = storage.conn.execute(
+            f"SELECT COUNT(*) FROM corpus_sections WHERE url IN ({placeholders})",
+            urls).fetchone()
+        sections = int(row[0] or 0)
+        # Perguntas via SQL (LIKE no heading) — evita baixar/normalizar dezenas
+        # de milhares de headings por cluster (corpus_sections tem 100k+ linhas).
+        q = storage.conn.execute(
+            f"SELECT COUNT(*) FROM corpus_sections WHERE url IN ({placeholders}) "
+            "AND (heading LIKE '%?%' OR heading LIKE '%quem%' "
+            "OR heading LIKE '%quantos%' OR heading LIKE '%quantas%' "
+            "OR heading LIKE '%como%' OR heading LIKE '%qual%' "
+            "OR heading LIKE '%quais%' OR heading LIKE '%quando%' "
+            "OR heading LIKE '%onde%')", urls).fetchone()
+        questions = int(q[0] or 0)
     return {"entities": entities, "sections": sections, "questions": questions}
 
 
@@ -120,17 +134,24 @@ def _technical(storage: Any, urls: list[str], indexable_urls: int,
 
 
 def build_cluster_signals(storage: Any, entity: str, *, window_start: str | None = None,
-                          ) -> dict[str, Any]:
-    """Sinais do cluster (R2/R3/R4) a partir do storage."""
-    cov = cluster_coverage(storage, entity, window_start=window_start)
+                          index: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Sinais do cluster (R2/R3/R4) a partir do storage.
+
+    `index` (de :func:`hermes_seo_agent.report.topics.build_cluster_index`)
+    permite reaproveitar os índices construídos uma vez por request (P3),
+    evitando reconstruí-los a cada cluster.
+    """
+    cov = cluster_coverage(storage, entity, window_start=window_start, index=index)
     urls = cov["urls"]
     ws = cov["window_start"]
     prev_ws = _previous_window(storage, ws) if ws else None
-    positions = _cluster_positions(storage, urls, entity, ws)
-    counts = _cluster_counts(storage, entity, urls)
+    # P1: cluster_coverage já leu posições/impressões/cliques em lote — reutiliza.
+    positions = cov.get("positions", [])
+    edge_counts = (index or {}).get("entity_counts")
+    counts = _cluster_counts(storage, entity, urls, entity_counts=edge_counts)
     edges = _internal_edges(storage, urls)
 
-    cur_imp = _window_impressions(storage, urls, entity, ws)
+    cur_imp = cov.get("impressions") or 0.0
     momentum = None
     if prev_ws:
         prev_imp = _window_impressions(storage, urls, entity, prev_ws)
@@ -230,10 +251,13 @@ def _question_score(heading: str) -> bool:
                                            "qual", "quais", "quando", "onde"))
 
 
-def resolve_cluster_entity(storage: Any, keyword: str) -> str:
+def resolve_cluster_entity(storage: Any, keyword: str,
+                           index: dict[str, Any] | None = None) -> str:
     """Resolve uma keyword para a ENTIDADE do cluster mais próximo (por tokens).
 
     Ex.: "dragon ball daima temporada 2" -> "dragon ball". Determinístico.
+    `index` (de :func:`hermes_seo_agent.report.topics.build_cluster_index`)
+    evita reconstruir o topic graph a cada chamada (P3).
     """
     from .topics import build_topic_graph
     kw_terms = set(normalize_entity(keyword).split())
@@ -241,7 +265,7 @@ def resolve_cluster_entity(storage: Any, keyword: str) -> str:
         return canonical_entity(keyword)
     best, best_score = canonical_entity(keyword), 0
     try:
-        graph = build_topic_graph(storage, min_urls=1)
+        graph = build_topic_graph(storage, min_urls=1, index=index)
         for c in graph:
             ent_terms = set(normalize_entity(c["entity"]).split())
             overlap = len(kw_terms & ent_terms)

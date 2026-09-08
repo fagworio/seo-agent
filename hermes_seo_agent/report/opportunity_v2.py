@@ -19,13 +19,20 @@ from .rankability_v2 import (confidence_v2, headroom, opportunity_engine,
 
 def compute_opportunity_v2(storage: Any, keyword: str, *,
                            window_start: str | None = None,
-                           as_percent: bool = False) -> dict[str, Any]:
-    """Calcula o pacote V2 completo para uma keyword/intenção."""
+                           as_percent: bool = False,
+                           index: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Calcula o pacote V2 completo para uma keyword/intenção.
+
+    `index` opcional (de :func:`hermes_seo_agent.report.topics.build_cluster_index`)
+    evita reconstruir o topic graph por item quando várias keywords são avaliadas
+    na mesma request (P3).
+    """
     keyword = (keyword or "").strip()
     if not keyword:
         return {"error": "keyword vazia"}
-    entity = resolve_cluster_entity(storage, keyword)
-    signals, cov = build_cluster_signals(storage, entity, window_start=window_start)
+    entity = resolve_cluster_entity(storage, keyword, index=index)
+    signals, cov = build_cluster_signals(storage, entity, window_start=window_start,
+                                         index=index)
     dist = query_distribution(signals["positions"])
     topic = topic_authority(signals, as_percent=as_percent)
 
@@ -87,10 +94,15 @@ def compute_opportunity_v2(storage: Any, keyword: str, *,
 
 
 def page_rankability_v2(storage: Any, url: str, *,
-                        as_percent: bool = True) -> dict[str, Any] | None:
+                        as_percent: bool = True,
+                        index: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """V2 por página (UI-2 Page Explorer): Topic Authority do cluster da página +
     Headroom (posição/CTR) + Opportunity. Retorna None se a página não resolver
-    para um cluster do nosso topic graph (sem sinal de autoridade do assunto)."""
+    para um cluster do nosso topic graph (sem sinal de autoridade do assunto).
+
+    `index` opcional (de :func:`hermes_seo_agent.report.topics.build_cluster_index`)
+    evita reconstruir o topic graph por página (P3).
+    """
     url = (url or "").strip()
     if not url:
         return None
@@ -100,11 +112,11 @@ def page_rankability_v2(storage: Any, url: str, *,
     try:
         # resolve o cluster a partir da própria URL (a página é um doc do corpus)
         from .topics import build_topic_graph
-        graph = build_topic_graph(storage, min_urls=1)
+        graph = build_topic_graph(storage, min_urls=1, index=index)
         entity = next((c["entity"] for c in graph if url in c.get("urls", [])), None)
         if not entity:
-            entity = resolve_cluster_entity(storage, slug)
-        signals, _cov = build_cluster_signals(storage, entity)
+            entity = resolve_cluster_entity(storage, slug, index=index)
+        signals, _cov = build_cluster_signals(storage, entity, index=index)
         if not signals.get("posts"):
             return None
         topic = topic_authority(signals, as_percent=as_percent)

@@ -96,13 +96,49 @@ def _build_gsc_entity_index(storage: Any) -> dict[str, set[str]]:
     return index
 
 
-def build_topic_graph(storage: Any, *, min_urls: int = 1) -> list[dict[str, Any]]:
+def _build_corpus_entity_counts(storage: Any) -> dict[str, int]:
+    """entidade canônica -> nº total de linhas de corpus_entities (P2).
+
+    Canonicaliza apenas as entidades DISTINTAS (GROUP BY), não as 100k+ linhas,
+    e é construída 1x por request (P3). Mantém a semântica de `_cluster_counts`.
+    """
+    counts: dict[str, int] = {}
+    for entity, cnt in storage.conn.execute(
+        "SELECT entity, COUNT(*) FROM corpus_entities GROUP BY entity").fetchall():
+        key = canonical_entity(entity)
+        counts[key] = counts.get(key, 0) + int(cnt)
+    return counts
+
+
+def build_cluster_index(storage: Any) -> dict[str, Any]:
+    """Índices do topic graph construídos UMA vez por request (P3).
+
+    Evita reconstruir os índices de corpus/GSC (100k+ linhas) a cada cluster e
+    evita refazer `latest_window_start`/`latest_ga4_window` por chamada.
+    """
+    return {
+        "corpus_index": _build_corpus_entity_index(storage),
+        "entity_counts": _build_corpus_entity_counts(storage),
+        "gsc_index": _build_gsc_entity_index(storage),
+        "window": storage.latest_window_start(),
+        "ga4_window": storage.latest_ga4_window(),
+    }
+
+
+def build_topic_graph(storage: Any, *, min_urls: int = 1,
+                      index: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Clusters (entidade canônica) com URLs, origem da evidência e sinais.
 
     Combina corpus (entidades explícitas) + GSC (queries que citam a entidade).
+    `index` opcional (de :func:`build_cluster_index`) permite reaproveitar os
+    índices construídos uma vez (P3), evitando refazer a varredura do corpus.
     """
-    corpus_index = _build_corpus_entity_index(storage)
-    gsc_index = _build_gsc_entity_index(storage)
+    if index is not None:
+        corpus_index = index["corpus_index"]
+        gsc_index = index["gsc_index"]
+    else:
+        corpus_index = _build_corpus_entity_index(storage)
+        gsc_index = _build_gsc_entity_index(storage)
     all_keys = set(corpus_index) | set(gsc_index)
     clusters: list[dict[str, Any]] = []
     for key in sorted(all_keys):
@@ -125,13 +161,21 @@ def build_topic_graph(storage: Any, *, min_urls: int = 1) -> list[dict[str, Any]
     return clusters
 
 
-def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = None) -> dict[str, Any]:
-    """Cobertura completa de um cluster (critério M3)."""
-    key = canonical_entity(entity)
-    ws = window_start or storage.latest_window_start()
+def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = None,
+                     index: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Cobertura completa de um cluster (critério M3).
 
-    corpus_index = _build_corpus_entity_index(storage)
-    gsc_index = _build_gsc_entity_index(storage)
+    Batch por cluster (P1): em vez de 8-10 queries POR URL, faz ~5 queries
+    agregadas (IN) + uma passada Python leve. `index` (de
+    :func:`build_cluster_index`) evita reconstruir os índices de corpus/GSC e
+    refazer latest_window/latest_ga4_window por chamada (P3).
+    """
+    key = canonical_entity(entity)
+    ws = window_start or (index or {}).get("window") or storage.latest_window_start()
+    if index is None:
+        index = build_cluster_index(storage)
+    corpus_index = index["corpus_index"]
+    gsc_index = index["gsc_index"]
     urls = sorted((corpus_index.get(key, set()) | gsc_index.get(key, set())))
 
     posts = len(urls)
@@ -139,62 +183,77 @@ def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = No
     internal_links = 0
     impressions = clicks = 0.0
     top3 = top10 = 0
+    positions: list[float] = []
     ga4_sessions = None
     ga4_status = "missing"
     freshest = ""
 
-    for url in urls:
-        # indexabilidade: corpus_documents (fonte do M2) com fallback inventory
-        row = storage.conn.execute(
-            "SELECT is_noindex FROM corpus_documents WHERE url = ?", (url,)
-        ).fetchone()
-        if row is None:
-            row = storage.conn.execute(
-                "SELECT is_noindex FROM editorial_inventory WHERE url = ?", (url,)
-            ).fetchone()
-        if row and not row[0]:
-            indexable += 1
-        # links internos: arestas dentro do cluster
-        for r in storage.conn.execute(
-            "SELECT COUNT(*) FROM internal_links WHERE source_url = ? "
-            "AND target_url IN (%s)" % ",".join("?" * len(urls)),
-            (url, *urls),
-        ).fetchall():
-            internal_links += r[0]
-        # GSC: queries da URL que citam a entidade
+    if urls:
+        ph = ",".join("?" * len(urls))
+
+        # indexabilidade + frescor (P1): corpus_documents com fallback
+        # editorial_inventory, em uma leitura por tabela — sem N+1. O frescor
+        # repete a preferência do original (corpus built_at, senão inventory
+        # crawled_at) por URL, para não sobrevalorizar quando a URL está em ambos.
+        doc_meta: dict[str, tuple[Any, Any]] = {
+            r[0]: (r[1], r[2]) for r in storage.conn.execute(
+                f"SELECT url, is_noindex, built_at FROM corpus_documents "
+                f"WHERE url IN ({ph})", urls).fetchall()}
+        inv_meta: dict[str, tuple[Any, Any]] = {
+            r[0]: (r[1], r[2]) for r in storage.conn.execute(
+                f"SELECT url, is_noindex, crawled_at FROM editorial_inventory "
+                f"WHERE url IN ({ph})", urls).fetchall()}
+        for url in urls:
+            row = doc_meta.get(url)
+            if row is None:
+                row = inv_meta.get(url)
+            if row is not None and not row[0]:
+                indexable += 1
+            ts = (row[1] if row is not None else None) or ""
+            if ts and ts > freshest:
+                freshest = ts
+
+        # links internos: arestas dentro do cluster.
+        # CUIDADO: `source_url IN (...) AND target_url IN (...)` com listas
+        # grandes faz o SQLite expandir em um loop aninhado O(n²) no autoindex
+        # (93M probes p/ 9667 URLs) — medido 34s numa tabela de 546 linhas.
+        # Faz-se uma leitura indexada por target_url (idx_il_target) e filtra o
+        # source em Python (pouquíssimas linhas).
+        uset = set(urls)
+        rows = storage.conn.execute(
+            f"SELECT source_url FROM internal_links WHERE target_url IN ({ph})",
+            urls).fetchall()
+        internal_links = sum(1 for (src,) in rows if src in uset)
+
+        # GSC: impressões/cliques e posições do cluster na janela (uma query cada)
         if ws:
-            for r in storage.conn.execute(
-                "SELECT SUM(impressions), SUM(clicks) FROM query_pages "
-                "WHERE url = ? AND window_start = ? AND query LIKE ?",
-                (url, ws, f"%{entity}%"),
-            ).fetchall():
-                impressions += r[0] or 0
-                clicks += r[1] or 0
-            for r in storage.conn.execute(
-                "SELECT position FROM query_pages WHERE url = ? "
-                "AND window_start = ? AND query LIKE ?",
-                (url, ws, f"%{entity}%"),
-            ).fetchall():
-                if r[0] is not None:
-                    if r[0] <= 3:
+            row = storage.conn.execute(
+                f"SELECT SUM(impressions), SUM(clicks) FROM query_pages "
+                f"WHERE url IN ({ph}) AND window_start = ? AND query LIKE ?",
+                (*urls, ws, f"%{entity}%")).fetchone()
+            impressions = float(row[0] or 0)
+            clicks = float(row[1] or 0)
+            for (pos,) in storage.conn.execute(
+                f"SELECT position FROM query_pages WHERE url IN ({ph}) "
+                "AND window_start = ? AND query LIKE ? AND position IS NOT NULL",
+                (*urls, ws, f"%{entity}%")).fetchall():
+                if pos is not None:
+                    positions.append(float(pos))
+                    if pos <= 3:
                         top3 += 1
-                    if r[0] <= 10:
+                    if pos <= 10:
                         top10 += 1
-        # frescor
-        cr = storage.conn.execute(
-            "SELECT built_at FROM corpus_documents WHERE url = ?", (url,)
-        ).fetchone()
-        if cr is None:
-            cr = storage.conn.execute(
-                "SELECT crawled_at FROM editorial_inventory WHERE url = ?", (url,)
-            ).fetchone()
-        if cr and cr[0] and cr[0] > freshest:
-            freshest = cr[0]
-        # GA4 (janela mais recente)
-        ga4 = storage.ga4_metrics_for_url(url)
-        if ga4 and ga4.get("measurement_status") == "available":
-            ga4_sessions = (ga4_sessions or 0) + (ga4.get("sessions") or 0)
-            ga4_status = "available"
+
+        # GA4 (janela mais recente) — uma única leitura para o cluster
+        ga4_ws = (index or {}).get("ga4_window") or storage.latest_ga4_window()
+        if ga4_ws:
+            for u, status_, sessions_ in storage.conn.execute(
+                f"SELECT url, measurement_status, sessions FROM ga4_page_metrics "
+                f"WHERE url IN ({ph}) AND window_start = ? AND source_scope = "
+                "'organic_landing'", (*urls, ga4_ws)).fetchall():
+                if status_ == "available":
+                    ga4_sessions = (ga4_sessions or 0) + (sessions_ or 0)
+                    ga4_status = "available"
 
     return {
         "entity": key,
@@ -210,4 +269,5 @@ def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = No
         "ga4_status": ga4_status,
         "window_start": ws or "",
         "urls": urls,
+        "positions": positions,
     }

@@ -71,6 +71,26 @@ curl -k https://$SEO_AGENT_HOST/api/v1/health             # {"status":"ok"}
 cd frontend && npm run build && npm run test && npm run test:e2e
 ```
 
+## 7) Verificação de latência (pós-fix P1–P4)
+> Incidente 2026-09-08: endpoints V2 computavam sinais O(N×M) por request
+> (cluster_coverage com ~8-10 queries POR URL; índice do corpus reconstruído por
+> cluster) → minutos por request → 500 no nginx (timeout 60s) + CPU presa.
+> Após o fix, cluster_coverage faz queries em LOTE e o índice do topic graph é
+> construído 1x por request (P1/P2/P3). Confirme as latências abaixo no banco real:
+```bash
+cd /www/wwwroot/hermes/seo-agent
+sqlite3 state/seo_agent.db "ANALYZE;" 2>/dev/null || true   # opcional
+time curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" \
+  "https://$SEO_AGENT_HOST/api/v1/topics?limit=200"        # esperado < 15s (antes: minutos)
+time curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" \
+  "https://$SEO_AGENT_HOST/api/v1/dashboard/today"          # esperado < 2s
+time curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" \
+  "https://$SEO_AGENT_HOST/api/v1/pages?limit=100"          # esperado < 0.5s (sem V2 na lista)
+```
+- Se algum endpoint passar de ~15s, o nginx corta em 60s e devolve 500 → investigar
+  antes de deixar no ar (e medir `top`/`py-spy` no worker se a CPU subir).
+- `topics` processa os clusters maiores por tamanho; `limit` menor reduz o custo linearmente.
+
 ## Critérios de aceite (persistência + análise corretas — como a auditoria)
 - [ ] Nenhuma ação `executed` sem `opportunity_outcome` (0 órfãs).
 - [ ] Nenhum item executado/implementado aparece na Caixa (lifecycle).
