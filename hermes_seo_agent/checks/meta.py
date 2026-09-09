@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import re
+
 from ..connectors.static_site import PageSnapshot
+
+# Sufixo de site name que o template do Eleventy adiciona ao <title> renderizado
+# ("<título> — UnicornioHater"). Ele NAO faz parte do titulo editavel
+# (rank_math_title) — medir o <title> cru gerava title_too_long fantasma em
+# todo post cujo rank_math <=65 chars (59 + sufixo 17 = 76 > 65). O Google
+# usa o rank_math_title como titulo SERP e exibe o site name em separado.
+_SITE_NAME_SUFFIX = re.compile(r"\s*[—–-]\s*UnicornioHater\s*$", re.IGNORECASE)
+
+
+def _strip_site_name(title: str) -> str:
+    return _SITE_NAME_SUFFIX.sub("", (title or "")).strip()
 
 
 def canonical_findings(page: PageSnapshot, *, expected_canonical: str = "") -> list[dict[str, str]]:
@@ -28,11 +41,12 @@ def canonical_findings(page: PageSnapshot, *, expected_canonical: str = "") -> l
 def meta_findings(page: PageSnapshot) -> list[dict[str, str]]:
     """Return title/meta-description findings for one page."""
     findings: list[dict[str, str]] = []
-    if not page.title:
+    title = _strip_site_name(page.title)
+    if not title:
         findings.append({"rule_id": "title_missing", "detail": "page has no <title>"})
-    elif len(page.title) > 65:
+    elif len(title) > 65:
         findings.append(
-            {"rule_id": "title_too_long", "detail": f"title has {len(page.title)} chars (> 65)"}
+            {"rule_id": "title_too_long", "detail": f"title has {len(title)} chars (> 65)"}
         )
 
     if not page.meta_description:
