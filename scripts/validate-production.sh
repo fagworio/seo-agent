@@ -54,10 +54,15 @@ check("lifecycle implementado/medido com ação pendente", q(
     "WHERE l.canonical_status IN ('implemented','measured') AND l.action_fingerprint IS NOT NULL "
     "AND EXISTS (SELECT 1 FROM actions a WHERE a.fingerprint=l.action_fingerprint AND a.status='pending')"))
 
-# 5) mesmo fingerprint em mais de 1 campanha (duplicação) -> 0
-check("fingerprint repetido em campanhas", q(
-    "SELECT COUNT(*) FROM (SELECT action_fingerprint FROM improvement_campaign_items "
-    "GROUP BY action_fingerprint HAVING COUNT(*)>1)"))
+# 5) mesmo fingerprint em mais de 1 campanha EXECUTÁVEL (duplicação ativa) -> 0.
+#    Itens de campanhas canceladas são histórico inerte (ex.: campanhas zumbis
+#    de título canceladas em 2026-09-09) e NÃO contam: não geram execução dupla
+#    e guardam before/after_json de auditoria (rollback da campaign-1).
+check("fingerprint repetido em campanhas ativas", q(
+    "SELECT COUNT(*) FROM (SELECT ci.action_fingerprint FROM improvement_campaign_items ci "
+    "JOIN improvement_campaigns c ON c.id = ci.campaign_id "
+    "WHERE c.status != 'cancelled' "
+    "GROUP BY ci.action_fingerprint HAVING COUNT(*)>1)"))
 
 # 6) tabelas essenciais acessíveis (health leve)
 for t in ("improvement_checklist","opportunity_outcomes","work_item_lifecycle","corpus_documents"):

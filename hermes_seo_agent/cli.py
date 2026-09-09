@@ -1163,10 +1163,19 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
     import contextlib, io
     from .services.run_context import RunContext
     ctx = RunContext(config)
-    stages = [("refresh-data", _cmd_refresh_data, _ns(sources="wordpress,sitemap", json=True)),
+    # Contrato dos produtores diários da Caixa (verificado 2026-09-04), agora
+    # num único processo: refresh-data R3 completo (wordpress/sitemap/gsc/ga4/
+    # crux/corpus) + R5 reconcile -> demand --store -> title-opportunities COM
+    # --persist (B4 alimenta a Caixa) -> content-brief --store --limit 20 (E2)
+    # -> editorial-backlog (E3). _ns espelha os DEFAULTS do parser de cada
+    # subcomando (ex.: content-brief lê args.single_url direto; sem ele, a
+    # etapa morre com AttributeError).
+    stages = [("refresh-data", _cmd_refresh_data, _ns(sources="", json=True)),
               ("demand", _cmd_demand, _ns(store=True, min_impressions=0)),
-              ("title-opportunities", _cmd_opportunities, _ns(json=True)),
-              ("content-brief", _cmd_content_brief, _ns(store=True, limit=20, json=True)),
+              ("title-opportunities", _cmd_title_opportunities,
+               _ns(persist=True, limit=0, min_impressions=500, max_ctr=0.02)),
+              ("content-brief", _cmd_content_brief,
+               _ns(single_url="", store=True, limit=20, json=True)),
               ("editorial-backlog", _cmd_editorial_backlog, _ns(json=True))]
     errors, completed = [], []
     try:

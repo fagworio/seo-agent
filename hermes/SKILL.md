@@ -83,6 +83,7 @@ browser tool. The CLI does the mechanics; you interpret and report.
     acquisition (GSC) + engagement (GA4) + combined verdict; no causality.
 20. Report **JSON outcomes** to the pipeline (status, summary, findings,
     safe_actions, approval_required). Keep `approval_required` untouched.
+
 ## Fluxo de melhorias (manual-first, verificado depois)
 
 1. `post-audit --limit 20` → lista de posts com estimativas de ganho.
@@ -143,6 +144,43 @@ browser tool. The CLI does the mechanics; you interpret and report.
   completa e deriva verdict de GSC+GA4; recalibrate só SUGERE ajustes (pesos
   ficam fixos até haver volume suficiente).
 
+## Produtores da Caixa (decisões humanas) — verificado 2026-09-04
+
+A Caixa (/work no painel) só mostra itens se os produtores rodarem. Audit
+isolado NÃO alimenta a Caixa (grava só findings/JSON). Ordem verificada (tudo
+somente-leitura no site; escrita só no SQLite local):
+
+1. `refresh-data` — coleta R3 (wordpress/sitemap/gsc/ga4/crux/corpus) + R5
+   reconcile; grava wp_post_state; valida GSC/GA4 (se 401 → service account
+   sem acesso à propriedade).
+2. `demand --store` — persiste query_pages (base de url_demand; filtro
+   --min-impressions, default 10).
+3. `title-opportunities --persist` — B4: candidatos de título viram actions
+   pending + improvement_checklist (TAB Melhorias SEO). SEM `--persist` só
+   grava title-opportunities-fixes.json e a Caixa fica vazia (gargalo real
+   visto 2026-09-04: 437 opportunities/run presas).
+4. `content-brief --store --limit N` — itens intent/question_gap/
+   query_title_alignment/title_meta no improvement_checklist.
+5. `editorial-backlog` — gera pautas (editorial_backlog, status proposed) →
+   TAB Editorial da Caixa (idempotente por evidência).
+6. `content_briefs` (tab "Planos de conteúdo") NÃO tem produtor ligado:
+   storage.save_content_brief não tem callers — gap conhecido.
+
+Pitfall: `title-opportunities` sem `--persist` = decisões invisíveis. Rodar
+como www com cwd no repo (`.env` local). Dedupe por fingerprint/hypothesis_key:
+rejeitado não volta; pendente é atualizado.
+
+Automação (desde 2026-09-04; consolidada em `producers-cycle` no pull de
+2026-09-09): cron Hermes `SEO Caixa produtores diarios` (no_agent, 06:20,
+telegram) roda o corpo em `<repo>/scripts/seo-caixa-producers.sh`, que executa
+`producers-cycle --json` — refresh-data (R3 completo) → demand --store →
+title-opportunities --persist → content-brief --store --limit 20 →
+editorial-backlog, num único processo (RunContext com cache HTTP condicional;
+watchdog: stdout vazio = tick silencioso, log em `state/caixa-producers.log`).
+Cron exige script em `~/.hermes/scripts/`, mas `/root` é 700 — por isso lá
+mora só um wrapper que re-executa o corpo via
+`exec sudo -u www bash <repo>/scripts/...`.
+
 ## Output contract
 
 ```json
@@ -151,11 +189,57 @@ browser tool. The CLI does the mechanics; you interpret and report.
 
 ## Operational pitfalls
 
+- **title_too_long conta o sufixo da marca** (desde o template estático
+  dab9569, 2026-09-01): `<title>` = rank_math_title + " — UnicornioHater"
+  (17–18 chars). O audit mede o `<title>` completo → QUALQUER página com rm
+  > ~47 chars vira finding `title_too_long`, mesmo com rm curto. Ciclos de
+  audit mostram ~420+ findings low "title_too_long" que são em grande parte
+  GHOSTS. Conferir sempre o rm real (REST) antes de gerar/aplicar fix. O
+  gerador estratégico e interlinks.py já fazem strip do sufixo; a checagem
+  (checks/meta.py) não — candidato a fix de 1 linha (strip antes do len).
+- **build_title_fixes.py usa corpus_documents.title (post_title do WP)**, que
+  pode estar STALE vs rank_math_title atual → propõe o mesmo encurtamento já
+  aplicado (churn) → apply pula como idempotente. Antes de aplicar em massa:
+  filtrar fingerprints já executados E conferir o rm ao vivo (REST); se todos
+  os pendentes já têm rm ≤65 no WP, o backlog de títulos está CONVERGIDO e o
+  trabalho real vira propagação (touch) dos aplicados sem touch.
+- **Campanha de títulos (improvement_campaigns) pode executar sem aprovação**
+  (campaign-1 em 2026-09-05: status queued, approved_by None, gerador antigo
+  pré-3ea2cea escreveu títulos-fragmento de query: 'Gojo', 'Highie' — 9 posts
+  regredidos). Sempre conferir `approved_by`/`before_json` da actions table e
+  o estado atual do rm ao vivo. Rollback = apply com arquivo wp_post_meta
+  usando o before_json (registra e verifica via REST) + TOUCH depois (o POST
+  do rollback re-renderiza com o payload velho = título ruim; ver pitfall na
+  skill unicorniohater-static-site).
+- Livro-caixa de títulos tem 3 camadas com status que dessincronizam:
+  work_item_lifecycle é a fonte das decisões (implemented/rejected); actions
+  fica stale como `pending` e improvement_campaigns.pending_items não reflete
+  itens descartados (zumbi: queued/85 pendentes sem itens reais — dashboard
+  mostra fila fantasma). Limpeza segura (2026-09-09): backup do DB, depois
+  ImprovementCampaignService._recount(cid) + cancel(cid, actor=...) p/ campanhas
+  mortas, e UPDATE actions SET status='executed'|'rejected' conforme o lifecycle
+  (implemented→executed; rejected→rejected). Só rodar apply/executor sobre
+  status='pending' — nunca executar proposta com lifecycle rejected. O
+  `scripts/validate-production.sh` (check #5) conta duplicação de fingerprint
+  apenas entre campanhas EXECUTÁVEIS (status != cancelled): itens de campanhas
+  canceladas são histórico inerte (guardam before/after_json de auditoria) e
+  não devem ser deletados.
+- Após `git pull` no repo, o processo da API NÃO recarrega sozinho: rotas novas
+  devolvem 404 até `systemctl restart seo-agent-api` (visto 2026-09-09 com
+  `/dashboard/title-impact`; sintoma no journal: 404 no endpoint novo enquanto
+  `/dashboard/today` segue 200). Frontend: rebuild + restart do next-server.
 - CLI lê env direto: `set -a && . ./.env && set +a && .venv/bin/hermes-seo-agent …`
   (install.sh + monitor já fazem isso).
 - URLs: WordPress host (ex.: wordpress.dvl.to:8080) ≠ static host
   (www.unicorniohater.com.br). O `inventory` normaliza por path — não confie
   no host cru ao comparar.
+- `apply` verifies via REST re-read (unverified = failure) but does NOT
+  propagate to the static www: WP REST writes meta AFTER save_post fires, so
+  the WSE webhook payload carries the OLD title. After every successful
+  apply, touch each affected post (no-op REST POST with the same
+  rank_math_title) so the static site quick-renders the new title, then
+  verify `<title>` in `_site/<slug>/index.html` (see skill
+  unicorniohater-static-site; batch recipe verified 2026-09-02 for 26 posts).
 - `report` grava em `SQLITE_PATH` (default `state/seo_agent.db`); se falhar,
   o audit continua (aviso em `warnings`).
 - Sitemap bloqueado no robots.txt é regra `sitemap_blocked` (high) — reporte,
