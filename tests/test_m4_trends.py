@@ -11,6 +11,7 @@ from hermes_seo_agent.services.market_intelligence import (
     NoopProvider,
     TrendsProvider,
     TrendsScrapeProvider,
+    _PersistentCacheProvider,
     _parse_timeline,
     get_provider,
 )
@@ -106,10 +107,14 @@ def test_trends_http_error_becomes_missing_not_zero():
 
 
 def test_get_provider_uses_trends_when_key_set():
-    # com chave, o default é scrape (sem depender da allowlist)
-    assert isinstance(get_provider(_config("k")), TrendsScrapeProvider)
-    # sem chave também: scrape é o default (frontend público)
-    assert isinstance(get_provider(Config(wordpress_url="http://x")), TrendsScrapeProvider)
+    # com chave, o default é scrape (sem depender da allowlist), cacheado
+    p = get_provider(_config("k"))
+    assert isinstance(p, _PersistentCacheProvider)
+    assert isinstance(p.inner, TrendsScrapeProvider)
+    # sem chave também: scrape é o default (frontend público), cacheado
+    p2 = get_provider(Config(wordpress_url="http://x"))
+    assert isinstance(p2, _PersistentCacheProvider)
+    assert isinstance(p2.inner, TrendsScrapeProvider)
     # TRENDS_MODE=none desliga explicitamente
     assert isinstance(get_provider(Config(wordpress_url="http://x", trends_mode="none")),
                       NoopProvider)
@@ -170,8 +175,12 @@ def test_scrape_provider_degrades_when_explore_blocked():
 
 def test_get_provider_mode_scrape_default():
     cfg = Config(wordpress_url="http://x", trends_api_key="k")
-    assert isinstance(get_provider(cfg), TrendsScrapeProvider)  # default scrape
+    p = get_provider(cfg)
+    assert isinstance(p, _PersistentCacheProvider)      # default -> cacheado
+    assert isinstance(p.inner, TrendsScrapeProvider)    # scrape por padrão
     cfg2 = Config(wordpress_url="http://x", trends_api_key="k", trends_mode="api")
-    assert isinstance(get_provider(cfg2), TrendsProvider)       # api explícito
+    p2 = get_provider(cfg2)
+    assert isinstance(p2, _PersistentCacheProvider)
+    assert isinstance(p2.inner, TrendsProvider)          # api explícito
     assert isinstance(get_provider(Config(wordpress_url="http://x", trends_mode="none")),
                       NoopProvider)

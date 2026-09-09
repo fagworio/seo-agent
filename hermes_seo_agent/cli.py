@@ -553,6 +553,26 @@ def _record_agent_run(config: Any, result: dict[str, Any], *, cycle_id: str,
             pass
 
 
+def _audit_content_fingerprint(sitemap_entries: list[tuple[str, str]],
+                               posts: list[dict[str, Any]]) -> str:
+    """Fingerprint de CONTEÚDO do acervo (não apenas da lista de URLs).
+
+    Inclui: URLs do sitemap + lastmod (sinal de conteúdo/template) + `modified`
+    dos posts WordPress. Assim uma alteração em uma URL que continua no sitemap
+    (ex.: um post editado) muda o fingerprint e força o audit — o fingerprint
+    anterior (só a lista de URLs) deixava essas alterações sem auditoria.
+    """
+    parts: list[str] = []
+    for url, lastmod in sorted(sitemap_entries, key=lambda e: e[0]):
+        parts.append(f"url|{url}|{lastmod or ''}")
+    for post in posts:
+        link = post.get("link") or post.get("url") or ""
+        mod = post.get("modified") or ""
+        if link:
+            parts.append(f"post|{link}|{mod}")
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     limit = args.limit or config.max_urls_per_run
     started = _now()
@@ -565,15 +585,26 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         clients = RunContext(config)
     wp, static = clients.wordpress(), clients.static()
     posts = clients.posts()
-    sitemap_urls = clients.sitemap_urls()
+    sitemap_entries = clients.sitemap_entries()
+    sitemap_urls = [loc for loc, _ in sitemap_entries]
+    audit_fp = ""
     if getattr(args, "_incremental", False):
-        fingerprint = hashlib.sha256("\n".join(sitemap_urls).encode()).hexdigest()
+        audit_fp = _audit_content_fingerprint(sitemap_entries, posts)
+        ttl = getattr(config, "audit_full_ttl_seconds", 7 * 24 * 3600)
         with Storage(config.sqlite_path) as checkpoint:
-            previous = checkpoint.get_setting("audit:sitemap_fingerprint", "")
-            checkpoint.set_setting("audit:sitemap_fingerprint", fingerprint)
-        if previous and previous == fingerprint:
+            previous = checkpoint.get_setting("audit:content_fingerprint", "")
+            last_ok = checkpoint.get_setting("audit:last_success_at", "")
+        # TTL de full audit: força auditar mesmo sem mudança detectada.
+        due_ttl = True
+        if last_ok:
+            try:
+                due_ttl = (datetime.datetime.fromisoformat(_now()) -
+                           datetime.datetime.fromisoformat(last_ok)).total_seconds() >= ttl
+            except Exception:
+                due_ttl = True
+        if previous and previous == audit_fp and not due_ttl:
             result = {"status": "skipped", "summary": {"command": "audit",
-                       "reason": "sitemap unchanged", "audited_urls": 0, "findings": 0},
+                       "reason": "content unchanged", "audited_urls": 0, "findings": 0},
                       "findings": [], "safe_actions": [], "approval_required": []}
             _emit(result, force_json=args.json)
             if shared is None:
@@ -596,9 +627,10 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     pages = [static.fetch_page(url) for url in sample]
 
     # Local history: every analyzed page gets a snapshot (before/after basis).
+    # Em lote (uma transação) — evita 1 COMMIT por página (foi um gargalo).
+    snapshots = [_page_snapshot_dict(p, cycle_id=cycle_id, source="audit") for p in pages]
     with Storage(config.sqlite_path) as snap_storage:
-        for page in pages:
-            _save_page_snapshot(snap_storage, page, cycle_id=cycle_id, source="audit")
+        snap_storage.save_page_snapshots_batch(snapshots)
 
     # HTTP health pass reuses the page fetch above (one GET per URL).
     # Redirect-chain details require an extra request and are intentionally
@@ -704,6 +736,16 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     }
 
     _record_agent_run(config, result, cycle_id=cycle_id, started=started)
+
+    # Checkpoint SOMENTE após sucesso: se o audit falhar antes daqui, não
+    # gravamos o fingerprint — a próxima execução não achará "já processado".
+    if getattr(args, "_incremental", False) and audit_fp:
+        try:
+            with Storage(config.sqlite_path) as checkpoint:
+                checkpoint.set_setting("audit:content_fingerprint", audit_fp)
+                checkpoint.set_setting("audit:last_success_at", _now())
+        except Exception:  # checkpoint é best-effort; nunca quebrar o audit
+            pass
 
     if getattr(args, "markdown", False) or args.command in {"report", "cycle"}:
         # Persist a cycle snapshot for later diffs.
@@ -1196,7 +1238,10 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
               "summary": {"command": "producers-cycle", "stages": completed, "errors": errors},
               "findings": [], "safe_actions": [], "approval_required": []}
     _emit(result, force_json=True)
-    return 1 if errors and not completed else 0
+    # Continuar executando todas as etapas é correto; mas uma execução PARCIAL
+    # (alguma etapa falhou) deve sinalizar falha no exit code, senão o shell
+    # registra como OK mesmo com erros.
+    return 1 if errors else 0
 
 
 def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
@@ -1417,6 +1462,26 @@ def _cmd_trends(args: argparse.Namespace, config: Any) -> int:
     return 0
 
 
+def _page_snapshot_dict(page: Any, *, cycle_id: str, source: str,
+                        linked_action: str = "") -> dict[str, Any]:
+    """Build the SEO-relevant snapshot dict for one page."""
+    return {
+        "url": page.url,
+        "captured_at": _now(),
+        "cycle_id": cycle_id,
+        "source": source,
+        "linked_action": linked_action,
+        "status_code": page.status_code,
+        "title": page.title,
+        "meta_description": page.meta_description,
+        "canonical": page.canonical,
+        "meta_robots": page.meta_robots,
+        "h1": " | ".join(page.h1),
+        "word_count": _word_count(page.body_text or page.html),
+        "content_hash": _content_hash(page),
+    }
+
+
 def _save_page_snapshot(
     storage: Storage,
     page: Any,
@@ -1427,19 +1492,8 @@ def _save_page_snapshot(
 ) -> None:
     """Persist one page's SEO-relevant state into the local history."""
     storage.save_snapshot(
-        url=page.url,
-        captured_at=_now(),
-        cycle_id=cycle_id,
-        source=source,
-        linked_action=linked_action,
-        status_code=page.status_code,
-        title=page.title,
-        meta_description=page.meta_description,
-        canonical=page.canonical,
-        meta_robots=page.meta_robots,
-        h1=" | ".join(page.h1),
-        word_count=_word_count(page.body_text or page.html),
-        content_hash=_content_hash(page),
+        **_page_snapshot_dict(page, cycle_id=cycle_id, source=source,
+                              linked_action=linked_action),
     )
 
 

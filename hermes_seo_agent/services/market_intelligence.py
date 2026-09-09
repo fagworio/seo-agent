@@ -170,39 +170,12 @@ def get_provider(config: Any) -> MarketIntelligenceProvider:
         trends_key = getattr(config, "trends_api_key", "") or getattr(
             config, "pagespeed_api_key", "") or ""
         if trends_key:
-            return _attach_persistent_cache(TrendsProvider(config), config)
+            # Cache persistente p/ TODOS os métodos (não só trend_signal).
+            return _PersistentCacheProvider(TrendsProvider(config), config)
         return NoopProvider(config)
     if mode == "scrape":
-        return _attach_persistent_cache(TrendsScrapeProvider(config), config)
+        return _PersistentCacheProvider(TrendsScrapeProvider(config), config)
     return NoopProvider(config)
-
-
-def _attach_persistent_cache(provider: MarketIntelligenceProvider, config: Any):
-    import types
-    original = provider.trend_signal
-    cache = {}
-    def cached(self, keyword):
-        import json, time
-        from ..storage.db import Storage
-        key = f"trends:{provider.name}:trend_signal:{keyword}"
-        try:
-            with Storage(config.sqlite_path) as db:
-                raw = db.get_setting(key, "")
-            if raw:
-                item = json.loads(raw)
-                if time.time() - float(item.get("ts", 0)) < 86400:
-                    return item.get("value")
-        except Exception:
-            pass
-        value = original(keyword)
-        try:
-            with Storage(config.sqlite_path) as db:
-                db.set_setting(key, json.dumps({"ts": time.time(), "value": value}))
-        except Exception:
-            pass
-        return value
-    provider.trend_signal = types.MethodType(cached, provider)
-    return provider
 
 
 class _PersistentCacheProvider(MarketIntelligenceProvider):

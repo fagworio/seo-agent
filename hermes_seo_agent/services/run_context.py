@@ -1,7 +1,11 @@
 """Shared per-cycle connector context.
 
-Connectors and expensive inventories are created/loaded once per scheduler
-cycle and reused by commands that participate in that cycle.
+Connectors, the SQLite handle and expensive inventories are created/loaded once
+per scheduler cycle and reused by commands that participate in that cycle. This
+is what makes "every external dataset is collected at most once per cycle" work:
+``posts()``/``sitemap_urls()`` return the same in-memory list, and the connectors
+share a single ``Storage`` (instead of each HTTP request opening its own
+``Storage`` + schema + migration, which was a large overhead).
 """
 from __future__ import annotations
 
@@ -9,14 +13,22 @@ from typing import Any
 
 
 class RunContext:
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, storage: Any | None = None):
         self.config = config
+        self._storage = storage
         self._wp = None
         self._static = None
         self._gsc = None
         self._ga4 = None
         self._posts = None
         self._sitemap_urls = None
+        self._sitemap_entries = None
+
+    def storage(self):
+        if self._storage is None:
+            from ..storage.db import Storage
+            self._storage = Storage(self.config.sqlite_path)
+        return self._storage
 
     def wordpress(self):
         if self._wp is None:
@@ -27,7 +39,9 @@ class RunContext:
     def static(self):
         if self._static is None:
             from ..connectors.static_site import StaticSiteClient
-            self._static = StaticSiteClient(self.config)
+            # Passa o Storage compartilhado: _cached_get deixa de abrir um
+            # Storage (schema+migração+commit) por request HTTP.
+            self._static = StaticSiteClient(self.config, cache_store=self.storage())
         return self._static
 
     def search_console(self):
@@ -47,15 +61,23 @@ class RunContext:
             self._posts = self.wordpress().list_posts(status="publish")
         return self._posts
 
+    def sitemap_entries(self):
+        if self._sitemap_entries is None:
+            self._sitemap_entries = self.static().all_sitemap_entries()
+        return self._sitemap_entries
+
     def sitemap_urls(self):
         if self._sitemap_urls is None:
-            self._sitemap_urls = self.static().all_sitemap_urls()
+            self._sitemap_urls = [loc for loc, _ in self.sitemap_entries()]
         return self._sitemap_urls
 
     def close(self):
         for client in (self._wp, self._static, self._gsc, self._ga4):
             if client is not None and hasattr(client, "close"):
                 client.close()
+        if self._storage is not None:
+            self._storage.close()
+            self._storage = None
 
     def __enter__(self):
         return self

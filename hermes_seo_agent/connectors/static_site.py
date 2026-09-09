@@ -139,9 +139,15 @@ class _PageParser(HTMLParser):
 
 
 class StaticSiteClient:
-    def __init__(self, config: Config, http: HttpClient | None = None):
+    def __init__(self, config: Config, http: HttpClient | None = None,
+                 cache_store: Any | None = None):
         self.config = config
         self.http = http or HttpClient(timeout=config.http_timeout)
+        # cache_store compartilhado (RunContext.storage()): evita abrir um
+        # Storage + schema + migração + commit por request HTTP. Se ausente,
+        # o client é dono de uma conexão lazily criada (e fechada em close()).
+        self.cache_store = cache_store
+        self._own_store = None
 
     # -- sitemap -------------------------------------------------------------
 
@@ -160,35 +166,57 @@ class StaticSiteClient:
             raise ConnectorError(f"sitemap {url} returned HTTP {response.status_code}")
         return _parse_sitemap_urls(response.text, is_index=False)
 
+    def all_sitemap_entries(self, sitemap_url: str | None = None) -> list[tuple[str, str]]:
+        """Resolve the sitemap tree into (url, lastmod) entries.
+
+        `lastmod` ("" quando ausente) é o sinal de mudança de CONTEÚDO do sitemap:
+        permite ao audit incremental detectar alterações em URLs que continuam
+        presentes na lista (a lista de URLs sozinha não captura isso).
+        """
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        index_url = sitemap_url or self.config.sitemap_url
+        for child in self.fetch_sitemap_index(index_url):
+            resolved = urljoin(index_url, child)
+            for loc, lastmod in self._fetch_sitemap_entries(resolved):
+                if loc not in seen:
+                    seen.add(loc)
+                    entries.append((loc, lastmod))
+        return entries
+
+    def _fetch_sitemap_entries(self, url: str) -> list[tuple[str, str]]:
+        response = self._cached_get(url)
+        if response.status_code != 200:
+            raise ConnectorError(f"sitemap {url} returned HTTP {response.status_code}")
+        return _parse_sitemap_entries(response.text, is_index=False)
+
+    def _get_store(self):
+        """Storage do cache: o compartilhado (RunContext) ou um próprio lazily."""
+        if self.cache_store is not None:
+            return self.cache_store
+        if self._own_store is None:
+            from ..storage.db import Storage
+            self._own_store = Storage(self.config.sqlite_path)
+        return self._own_store
+
     def _cached_get(self, url: str):
-        from ..storage.db import Storage
-        with Storage(self.config.sqlite_path) as db:
-            cached = db.get_http_cache(url)
+        store = self._get_store()
+        cached = store.get_http_cache(url)
         response = self.http.get_conditional(url, etag=(cached or {}).get("etag", ""),
                                              last_modified=(cached or {}).get("last_modified", ""))
         if response.status_code == 304 and cached and cached.get("body") is not None:
             response = type(response)(status_code=200, headers=response.headers,
                                       content=gzip.decompress(cached["body"]))
         elif response.status_code == 200:
-            with Storage(self.config.sqlite_path) as db:
-                db.save_http_cache(url, etag=response.headers.get("etag", ""),
-                                   last_modified=response.headers.get("last-modified", ""),
-                                   status_code=200, body=gzip.compress(response.content),
-                                   content_hash=hashlib.sha256(response.content).hexdigest())
+            store.save_http_cache(url, etag=response.headers.get("etag", ""),
+                                  last_modified=response.headers.get("last-modified", ""),
+                                  status_code=200, body=gzip.compress(response.content),
+                                  content_hash=hashlib.sha256(response.content).hexdigest())
         return response
 
     def all_sitemap_urls(self, sitemap_url: str | None = None) -> list[str]:
         """Resolve the whole sitemap tree into the final URL list."""
-        urls: list[str] = []
-        index_url = sitemap_url or self.config.sitemap_url
-        seen: set[str] = set()
-        for child in self.fetch_sitemap_index(index_url):
-            resolved = urljoin(index_url, child)
-            for url in self.fetch_sitemap(resolved):
-                if url not in seen:
-                    seen.add(url)
-                    urls.append(url)
-        return urls
+        return [loc for loc, _ in self.all_sitemap_entries(sitemap_url)]
 
     # -- pages ---------------------------------------------------------------
 
@@ -225,6 +253,9 @@ class StaticSiteClient:
 
     def close(self) -> None:
         self.http.close()
+        if self._own_store is not None:
+            self._own_store.close()
+            self._own_store = None
 
     def __enter__(self) -> "StaticSiteClient":
         return self
@@ -270,14 +301,20 @@ class RobotsRules:
 
 
 def _parse_sitemap_urls(xml_text: str, *, is_index: bool) -> list[str]:
+    return [loc for loc, _ in _parse_sitemap_entries(xml_text, is_index=is_index)]
+
+
+def _parse_sitemap_entries(xml_text: str, *, is_index: bool) -> list[tuple[str, str]]:
+    """Retorna (loc, lastmod) de um <sitemapindex> ou <urlset>."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
         raise ConnectorError(f"invalid sitemap XML: {exc}") from exc
     tag = f"{_SITEMAP_NS}sitemap" if is_index else f"{_SITEMAP_NS}url"
-    urls: list[str] = []
+    entries: list[tuple[str, str]] = []
     for node in root.iter(tag):
         loc = node.find(f"{_SITEMAP_NS}loc")
+        lastmod = node.find(f"{_SITEMAP_NS}lastmod")
         if loc is not None and loc.text and loc.text.strip():
-            urls.append(loc.text.strip())
-    return urls
+            entries.append((loc.text.strip(), (lastmod.text or "").strip() if lastmod is not None else ""))
+    return entries

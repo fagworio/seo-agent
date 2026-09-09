@@ -188,6 +188,9 @@ CREATE TABLE IF NOT EXISTS query_pages (
     UNIQUE(query, url, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_qp_query ON query_pages(query, window_start);
+-- consultas frequentes por URL/performance de página (content-brief, rankability,
+-- agregações por página usam WHERE url = ? AND window_start = ?).
+CREATE INDEX IF NOT EXISTS idx_qp_url_window ON query_pages(url, window_start);
 CREATE TABLE IF NOT EXISTS content_briefs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     url TEXT NOT NULL,
@@ -1279,6 +1282,37 @@ class Storage:
             ),
         )
         self.conn.commit()
+
+    def save_page_snapshots_batch(self, snapshots: list[dict[str, Any]]) -> int:
+        """Inserir vários snapshots em UMA transação (evita 1 COMMIT por página).
+
+        `snapshots` é uma lista de dicts com as mesmas chaves de
+        :meth:`save_snapshot` (url, captured_at, cycle_id, source, linked_action,
+        status_code, title, meta_description, canonical, meta_robots, h1,
+        word_count, content_hash, cwv, gsc). Retorna a quantidade gravada.
+        """
+        if not snapshots:
+            return 0
+        rows = [
+            (
+                s.get("url", ""), s.get("captured_at", _now()), s.get("cycle_id", ""),
+                s.get("source", "manual"), s.get("linked_action", ""),
+                s.get("status_code"), s.get("title", ""), s.get("meta_description", ""),
+                s.get("canonical", ""), s.get("meta_robots", ""), s.get("h1", ""),
+                s.get("word_count"), s.get("content_hash", ""),
+                json.dumps(s.get("cwv"), ensure_ascii=False) if s.get("cwv") else None,
+                json.dumps(s.get("gsc"), ensure_ascii=False) if s.get("gsc") else None,
+            )
+            for s in snapshots
+        ]
+        self.conn.executemany(
+            "INSERT INTO page_snapshots (url, captured_at, cycle_id, source, linked_action, "
+            "status_code, title, meta_description, canonical, meta_robots, h1, word_count, "
+            "content_hash, cwv_json, gsc_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
 
     def page_snapshots(self, url: str, *, limit: int = 50) -> list[dict[str, Any]]:
         """Chronological snapshots for one URL (oldest first)."""
