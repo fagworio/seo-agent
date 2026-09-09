@@ -57,3 +57,36 @@ def test_run_context_caches_different_windows_separately(monkeypatch):
     assert ctx._gsc_query_pages.keys() >= {("2026-01-01", "2026-01-28", 25_000),
                                            ("2026-02-01", "2026-02-28", 25_000)}
     ctx.close()
+
+
+def test_run_context_budget_stats_are_json_serializable(monkeypatch):
+    """Regressão: telemetria do ciclo (budget.stats()) vai no summary_json do run."""
+    import json
+
+    class FakeGSC:
+        def __init__(self, config, budget=None):
+            self.calls = 0
+
+        def search_analytics_query_page(self, *, start_date, end_date, row_limit=25_000):
+            self.calls += 1
+            return [{"keys": ["q", "u"], "impressions": 5}]
+
+        def search_analytics_by_page(self, *, start_date, end_date, row_limit=25_000):
+            self.calls += 1
+            return [{"keys": ["u"], "impressions": 5}]
+
+    monkeypatch.setattr(
+        "hermes_seo_agent.connectors.search_console.SearchConsoleClient", FakeGSC)
+
+    cfg = SimpleNamespace(google_credentials="x", ga4_property_id="",
+                          sqlite_path=":memory:", max_external_calls=50)
+    ctx = RunContext(cfg)
+    assert ctx.budget is not None
+    ctx.gsc_query_pages("2026-01-01", "2026-01-28")     # 1ª (miss)
+    ctx.gsc_query_pages("2026-01-01", "2026-01-28")     # 2ª (cache hit)
+    stats = ctx.budget.stats()
+    # o cache hit é registrado; o payload completo é JSON-serializável
+    assert stats["cache_hits"] >= 1
+    assert "calls" in stats and "by_kind" in stats
+    json.dumps(stats)
+    ctx.close()

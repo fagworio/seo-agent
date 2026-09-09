@@ -1240,6 +1240,7 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
                _ns(single_url="", store=True, limit=20, json=True)),
               ("editorial-backlog", _cmd_editorial_backlog, _ns(json=True))]
     errors, completed = [], []
+    telemetry: dict[str, Any] = {}
     try:
         for name, func, stage_args in stages:
             setattr(stage_args, "_run_context", ctx)
@@ -1253,9 +1254,26 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
     finally:
+        # Telemetria agregada do ciclo (chamadas externas, cache hits, ...).
+        telemetry = ctx.budget.stats() if ctx.budget is not None else {}
         ctx.close()
+    # run leve de observabilidade (telemetria) para o painel; nunca quebra o ciclo.
+    try:
+        from .services.agent_runs import AgentRunService
+        with Storage(config.sqlite_path) as run_storage:
+            svc = AgentRunService(run_storage)
+            run_id = svc.start_run(
+                "hermes-seo-agent", trigger="manual", intent="producers_cycle",
+                mode="analyze", started_by=getattr(config, "app_user", "") or "system",
+                sources=["producers-cycle"])
+            svc.complete(run_id, status="partial" if errors else "success",
+                         summary={"stages": completed, "errors": errors,
+                                  "telemetry": telemetry})
+    except Exception:
+        pass
     result = {"status": "partial" if errors else "ok",
-              "summary": {"command": "producers-cycle", "stages": completed, "errors": errors},
+              "summary": {"command": "producers-cycle", "stages": completed,
+                          "errors": errors, "telemetry": telemetry},
               "findings": [], "safe_actions": [], "approval_required": []}
     _emit(result, force_json=True)
     # Continuar executando todas as etapas é correto; mas uma execução PARCIAL
@@ -1324,31 +1342,40 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
     # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
     #     refresh_data). Não há um segundo motor de coleta.
-    run_silently(_cmd_refresh_data, args=_ns(sources="wordpress,sitemap", json=True),
-                 config=config)
+    run_silently(_cmd_refresh_data,
+                 args=_ns(sources="wordpress,sitemap", json=True,
+                          _run_context=run_context), config=config)
     steps.append("refresh-wp-sitemap")
 
     # 2) Daily GSC inspect window.
     inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
     if now.hour in inspect_hours:
-        run_silently(_cmd_inspect, args=_ns(budget=0, dry_run=False, json=True), config=config)
+        run_silently(_cmd_inspect,
+                     args=_ns(budget=0, dry_run=False, json=True,
+                              _run_context=run_context), config=config)
         if config.google_credentials:
-            run_silently(_cmd_demand, args=_ns(store=True, min_impressions=0), config=config)
-            run_silently(_cmd_outcomes, args=_ns(action="revalidate-due", limit=200),
-                         config=config)
+            run_silently(_cmd_demand,
+                         args=_ns(store=True, min_impressions=0,
+                                  _run_context=run_context), config=config)
+            run_silently(_cmd_outcomes,
+                         args=_ns(action="revalidate-due", limit=200,
+                                  _run_context=run_context), config=config)
             steps.append("gsc-demand")
             steps.append("revalidate-7d")
         # Background: mantém a fila de melhorias crescendo diariamente.
-        run_silently(_cmd_post_audit, args=_ns(limit=20, min_impressions=50,
-                                               write=False, json=True), config=config)
+        run_silently(_cmd_post_audit,
+                     args=_ns(limit=20, min_impressions=50, write=False, json=True,
+                              _run_context=run_context), config=config)
         steps.append("inspect")
         steps.append("post-audit")
 
     # 3) Weekly deep report + opportunities + deep post-audit.
     if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_opportunities, args=_ns(json=True), config=config)
-        run_silently(_cmd_post_audit, args=_ns(limit=50, min_impressions=50,
-                                               write=True, json=True), config=config)
+        run_silently(_cmd_opportunities,
+                     args=_ns(json=True, _run_context=run_context), config=config)
+        run_silently(_cmd_post_audit,
+                     args=_ns(limit=50, min_impressions=50, write=True, json=True,
+                              _run_context=run_context), config=config)
         steps.append("deep_report")
         steps.append("post-audit-deep")
 
@@ -1356,8 +1383,9 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     #    silêncio quando GA4_PROPERTY_ID não está configurado.
     if config.ga4_property_id and now.weekday() == args.deep_weekday \
             and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_ga4, args=_ns(action="collect", days=28, store=True),
-                     config=config)
+        run_silently(_cmd_ga4,
+                     args=_ns(action="collect", days=28, store=True,
+                              _run_context=run_context), config=config)
         steps.append("ga4-collect")
 
     # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
@@ -1367,7 +1395,8 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
     #    com um run parcial apenas retoma e drena a fila até finalizar.
     if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0),
+        run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0,
+                                           _run_context=run_context),
                      config=config)
         steps.append("corpus-rebuild")
 
@@ -1394,11 +1423,15 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             csvc.run(c["id"], actor="system")
             steps.append(f"campaign-{c['id']}")
 
+    # Telemetria do ciclo: chamadas externas, cache hits, bytes, retries, duração
+    # (agregadas no RunContext/budget compartilhado pelas etapas).
+    telemetry = run_context.budget.stats() if run_context.budget is not None else {}
     run_context.close()
     result = {
         "status": "partial" if errors else "ok",
         "summary": {"command": "schedule", "steps": steps,
-                    "hour": now.hour, "weekday": now.weekday(), "errors": errors},
+                    "hour": now.hour, "weekday": now.weekday(), "errors": errors,
+                    "telemetry": telemetry},
         "findings": [],
         "safe_actions": [],
         "approval_required": [],
@@ -1406,7 +1439,8 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     with Storage(config.sqlite_path) as run_storage:
         AgentRunService(run_storage).complete(
             scheduled_run_id, status="partial" if errors else "success", **totals,
-            summary={"steps": steps, "revalidation_window_days": 7},
+            summary={"steps": steps, "revalidation_window_days": 7,
+                     "telemetry": telemetry},
         )
     _emit(result, force_json=True)
     return 0
