@@ -184,6 +184,85 @@ class ImprovementSummaryModel(BaseModel):
     ready: int = 0
 
 
+class ChangeSummaryModel(BaseModel):
+    """Alterações realmente executadas pelo agente no período atual."""
+    total: int = 0
+    pages_touched: int = 0
+    titles: int = 0
+    meta_descriptions: int = 0
+    internal_links: int = 0
+    technical: int = 0
+    previous_period_delta: int | None = None
+
+
+class TitleFunnelModel(BaseModel):
+    """Funil que só usa etapas que o storage consegue provar."""
+    opportunities: int = 0
+    approved: int = 0
+    changed: int = 0
+    measured: int = 0
+    improved: int = 0
+
+
+class ObservedImpactModel(BaseModel):
+    measured: int = 0
+    improved: int = 0
+    neutral: int = 0
+    worsened: int = 0
+    awaiting_data: int = 0
+    improvement_rate: float | None = None
+    median_ctr_delta_pp: float | None = None
+    median_clicks_pct: float | None = None
+    median_position_gain: float | None = None
+
+
+class MeasurementSummaryModel(BaseModel):
+    ready: int = 0
+    waiting_7d: int = 0
+    waiting_28d: int = 0
+    waiting_90d: int = 0
+    waiting_google: int = 0
+
+
+class NextExecutionModel(BaseModel):
+    campaign_id: int
+    name: str
+    action_type: str
+    next_run_at: str | None = None
+    batch_size: int = 0
+    pending_items: int = 0
+    total_items: int = 0
+    executed_items: int = 0
+    url_previews: list[str] = []
+
+
+class TitleImpactWindowModel(BaseModel):
+    days: int
+    measured_titles: int = 0
+    awaiting_measurement: int = 0
+    data_status: str = "missing"
+    observed: dict[str, Any] = {}
+    forecast: dict[str, Any] = {}
+    outcomes: dict[str, int | float | None] = {}
+    timeline: list[dict[str, Any]] = []
+    top_gains: list[dict[str, Any]] = []
+    limitations: str = ""
+
+
+class TitleImpactModel(BaseModel):
+    generated_at: str = ""
+    titles_modified_total: int = 0
+    titles_modified_period: int = 0
+    previous_period_delta: int | None = None
+    measurable_7d: int = 0
+    measurable_28d: int = 0
+    measurable_90d: int = 0
+    awaiting_measurement: int = 0
+    benchmark: dict[str, Any] = {}
+    windows: dict[str, TitleImpactWindowModel] = {}
+    modification_timeline: list[dict[str, Any]] = []
+
+
 class AgentRunModel(BaseModel):
     id: int
     agent: str
@@ -254,6 +333,11 @@ class TodayModel(BaseModel):
     top_searches: list[SearchQueryModel] = []
     revalidations: list[RevalidationModel] = []
     improvement_summary: ImprovementSummaryModel = ImprovementSummaryModel()
+    change_summary: ChangeSummaryModel = ChangeSummaryModel()
+    title_funnel: TitleFunnelModel = TitleFunnelModel()
+    observed_impact: ObservedImpactModel = ObservedImpactModel()
+    measurement_summary: MeasurementSummaryModel = MeasurementSummaryModel()
+    next_executions: list[NextExecutionModel] = []
 
 
 class PageSummaryModel(BaseModel):
@@ -512,6 +596,10 @@ class AgentModel(BaseModel):
 
 class TodayEnvelope(BaseModel):
     today: TodayModel
+
+
+class TitleImpactEnvelope(BaseModel):
+    title_impact: TitleImpactModel
 
 
 class WorkItemsEnvelope(BaseModel):

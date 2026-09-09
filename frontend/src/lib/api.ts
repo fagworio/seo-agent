@@ -109,6 +109,11 @@ export interface TodayResponse {
     top_searches: SearchQuerySummary[];
     revalidations: Revalidation[];
     improvement_summary: ImprovementSummary;
+    change_summary: ChangeSummary;
+    title_funnel: TitleFunnel;
+    observed_impact: ObservedImpact;
+    measurement_summary: MeasurementSummary;
+    next_executions: NextExecution[];
     // F10 — tópicos emergentes/em queda (momentum do topic graph)
     emerging_topics?: { topic: string; authority: number; momentum: number | null }[];
     declining_topics?: { topic: string; authority: number; momentum: number | null }[];
@@ -182,6 +187,92 @@ export interface ImprovementSummary {
   waiting_7d: number;
   waiting_google: number;
   ready: number;
+}
+
+/** Compact outcome projections returned by /dashboard/today. */
+export interface ChangeSummary {
+  total: number;
+  pages_touched: number;
+  titles: number;
+  meta_descriptions: number;
+  internal_links: number;
+  technical: number;
+  previous_period_delta: number | null;
+}
+
+export interface TitleFunnel {
+  opportunities: number;
+  approved: number;
+  changed: number;
+  measured: number;
+  improved: number;
+}
+
+export interface ObservedImpact {
+  measured: number;
+  improved: number;
+  neutral: number;
+  worsened: number;
+  awaiting_data: number;
+  improvement_rate: number | null;
+  median_ctr_delta_pp: number | null;
+  median_clicks_pct: number | null;
+  median_position_gain: number | null;
+}
+
+export interface MeasurementSummary {
+  ready: number;
+  waiting_7d: number;
+  waiting_28d: number;
+  waiting_90d: number;
+  waiting_google: number;
+}
+
+export interface NextExecution {
+  campaign_id: number;
+  name: string;
+  action_type: string;
+  next_run_at: string | null;
+  batch_size: number;
+  pending_items: number;
+  total_items: number;
+  executed_items: number;
+  url_previews: string[];
+}
+
+export interface ImpactMetric {
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+  delta_percent: number | null;
+  gain?: number | null;
+}
+
+export interface TitleImpactWindow {
+  days: number;
+  measured_titles: number;
+  awaiting_measurement: number;
+  data_status: string;
+  observed: Record<"clicks" | "impressions" | "ctr" | "position", ImpactMetric>;
+  forecast: { clicks_delta: number | null; clicks_delta_percent: number | null };
+  outcomes: { improved?: number; neutral?: number; worsened?: number; insufficient_data?: number; improvement_rate?: number | null };
+  timeline: Array<{ date: string; modified_titles: number; observed_index: number | null; forecast_index: number | null; benchmark_index: number | null; observed_clicks_delta?: number | null; forecast_clicks_delta?: number | null }>;
+  top_gains: Array<{ url: string; label: string; clicks_delta: number; ctr_delta_pp: number; position_gain: number }>;
+  limitations: string;
+}
+
+export interface TitleImpact {
+  generated_at: string;
+  titles_modified_total: number;
+  titles_modified_period: number;
+  previous_period_delta: number | null;
+  measurable_7d: number;
+  measurable_28d: number;
+  measurable_90d: number;
+  awaiting_measurement: number;
+  benchmark: { data_status: string; source: string; clicks_delta_percent: number | null; adjusted_click_delta_percent: number | null; limitation: string };
+  windows: Record<"7" | "28" | "90", TitleImpactWindow>;
+  modification_timeline: Array<{ date: string; titles_modified: number; titles_modified_cumulative: number }>;
 }
 
 export interface Opportunity {

@@ -115,6 +115,105 @@ def test_today_revalidation_states_require_elapsed_time_and_post_google_data(tmp
     storage.close()
 
 
+def test_today_projects_outcomes_and_next_campaign_batch(tmp_path):
+    """Hoje devolve um resumo pronto para a UI, sem reprocessar no browser."""
+    import json as _json
+
+    storage, cp = _seed(tmp_path / "outcome-summary.db")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    current = now.isoformat()
+    prior = (now - datetime.timedelta(days=35)).isoformat()
+    storage.conn.executemany(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, executed_at) "
+        "VALUES (?, ?, ?, 'safe_fix', 'executed', ?, ?)",
+        [("now", "title_opportunity", "https://x.com/title/", "title-current", current),
+         ("now", "internal_link", "https://x.com/link/", "link-current", current),
+         ("before", "meta_description", "https://x.com/meta/", "meta-prior", prior)],
+    )
+    storage.set_work_item_lifecycle("checklist:title", "implemented",
+                                    action_fingerprint="title-current")
+    outcome_id = storage.save_opportunity_outcome(
+        keyword="title", opportunity_type="title_opportunity", decision="title_opportunity",
+        human_decision="approved", implemented_action="novo título",
+        url="https://x.com/title/", implemented_at=current,
+    )
+    storage.set_outcome_verdict(outcome_id, verdict="improved", days=7, result={
+        "gsc_deltas": {"ctr_delta": .0084, "clicks_pct": 18.6, "position_delta": -2.7},
+    })
+    storage.conn.execute(
+        "INSERT INTO improvement_campaigns (name, action_type, status, max_actions_per_run, "
+        "total_items, pending_items, executed_items, created_at, next_run_at) "
+        "VALUES ('Títulos prioritários', 'title_opportunity', 'queued', 10, 12, 10, 2, ?, ?)",
+        (current, current),
+    )
+    campaign_id = storage.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    storage.conn.execute(
+        "INSERT INTO improvement_campaign_items (campaign_id, action_fingerprint, url, action_type, status) "
+        "VALUES (?, 'title-next', 'https://x.com/next/', 'title_opportunity', 'pending')",
+        (campaign_id,),
+    )
+    storage.conn.commit()
+
+    today = cp.today()
+    assert today["change_summary"]["total"] == 2
+    assert today["change_summary"]["titles"] == 1
+    assert today["change_summary"]["internal_links"] == 1
+    assert today["change_summary"]["previous_period_delta"] == 1
+    assert today["title_funnel"]["changed"] == 1
+    assert today["title_funnel"]["improved"] == 1
+    assert today["observed_impact"]["improvement_rate"] == 100.0
+    assert today["observed_impact"]["median_ctr_delta_pp"] == .84
+    assert today["observed_impact"]["median_position_gain"] == 2.7
+    assert today["next_executions"][0]["campaign_id"] == campaign_id
+    assert today["next_executions"][0]["url_previews"] == ["https://x.com/next/"]
+    storage.close()
+
+
+def test_title_impact_uses_only_equal_measurement_windows(tmp_path):
+    """O acumulado de títulos nunca mistura o resultado de 7d com 28d."""
+    storage, cp = _seed(tmp_path / "title-impact.db")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    implemented = (now - datetime.timedelta(days=10)).isoformat()
+    url = "https://x.com/title-impact/"
+    storage.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, executed_at) "
+        "VALUES ('c', 'title_opportunity', ?, 'safe_fix', 'executed', 'title-impact', ?)",
+        (url, implemented),
+    )
+    outcome_id = storage.save_opportunity_outcome(
+        keyword="Título testado", opportunity_type="title_opportunity", decision="title_opportunity",
+        human_decision="approved", implemented_action="novo título", url=url,
+        implemented_at=implemented,
+        baseline={"gsc": {"clicks": 100, "impressions": 1000, "ctr": .1, "position": 10}},
+    )
+    storage.set_outcome_verdict(outcome_id, verdict="improved", days=7, result={
+        "now_gsc": {"clicks": 125, "impressions": 1100, "ctr": 125 / 1100, "position": 8},
+        "gsc_deltas": {"clicks_delta": 25, "clicks_pct": 25, "impressions_delta": 100,
+                       "impressions_pct": 10, "ctr_delta": 125 / 1100 - .1,
+                       "position_delta": -2, "verdict": "improved"},
+    })
+    storage.save_expectation(
+        url=url, computed_at=implemented, expectation={"clicks": 100, "gap_clicks": 20},
+    )
+
+    impact = cp.title_impact()
+    week = impact["windows"]["7"]
+    month = impact["windows"]["28"]
+    assert impact["titles_modified_total"] == 1
+    assert week["measured_titles"] == 1
+    assert week["observed"]["clicks"] == {"before": 100.0, "after": 125.0,
+                                               "delta": 25.0, "delta_percent": 25.0}
+    assert week["forecast"]["clicks_delta_percent"] == 20.0
+    assert week["outcomes"]["improved"] == 1
+    assert week["timeline"][0]["observed_clicks_delta"] == 25.0
+    assert week["timeline"][0]["forecast_clicks_delta"] == 20.0
+    assert impact["modification_timeline"][0]["titles_modified_cumulative"] == 1
+    assert month["measured_titles"] == 0
+    assert month["observed"]["clicks"]["delta_percent"] is None
+    assert impact["benchmark"]["data_status"] == "unavailable"
+    storage.close()
+
+
 def test_work_items_returns_unified_feed(tmp_path):
     storage, cp = _seed(tmp_path / "w.db")
     items = cp.work_items()

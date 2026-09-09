@@ -64,6 +64,7 @@ from .schemas import (
     SessionModel,
     TechnicalFindingModel,
     TodayEnvelope,
+    TitleImpactEnvelope,
     UpdateProfileRequest,
     UpdateUserRequest,
     UserDetailModel,
@@ -196,6 +197,12 @@ def read_routers() -> list[APIRouter]:
               session=Depends(authenticated("dashboard.read")),
               limit: int = Query(10, ge=1, le=200)) -> dict[str, Any]:
         return {"today": services.control.today(limit=limit)}
+
+    @dash.get("/dashboard/title-impact", response_model=TitleImpactEnvelope,
+              operation_id="dashboard_title_impact")
+    def title_impact(services: Services = Depends(get_services),
+                     session=Depends(authenticated("dashboard.read"))) -> dict[str, Any]:
+        return {"title_impact": services.control.title_impact()}
     out.append(dash)
 
     wi = APIRouter(prefix="/work-items", tags=["work-items"])

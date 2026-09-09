@@ -10,11 +10,11 @@ const percent = new Intl.NumberFormat("pt-BR", { style: "percent", maximumFracti
 
 export function GoogleTrust({ data }: { data: GoogleDataSummary }) {
   const hasStoredData = data.data_status === "available";
-  return <Card title="Confiabilidade dos dados Google">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><Badge tone={hasStoredData ? "success" : "warning"}>{hasStoredData ? "Dados GSC disponíveis" : "Dados GSC ausentes"}</Badge><p className="mt-2 text-sm text-[var(--muted)]">{hasStoredData ? `Janela armazenada: ${data.gsc_window_start} a ${data.gsc_window_end}` : "Não há janela armazenada para sustentar análises de busca."}</p></div><Badge tone={data.connection_configured ? "success" : "warning"}>{data.connection_configured ? "Conexão configurada" : "Conexão não configurada"}</Badge></div>
-    <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><SmallMetric label="Linhas GSC" value={integer.format(data.gsc_rows)} /><SmallMetric label="Linhas GA4" value={integer.format(data.ga4_rows)} /><SmallMetric label="Com evidência Google" value={integer.format(data.opportunities_with_google)} /><SmallMetric label="Sem evidência Google" value={integer.format(data.opportunities_without_google)} /></div>
-    {!data.connection_configured && hasStoredData && <p className="mt-3 text-xs text-[var(--warning)]">Os dados armazenados continuam válidos para a janela indicada, mas uma nova coleta exige restabelecer a conexão Google.</p>}
-  </Card>;
+  const coverage = data.opportunities_total ? Math.round(data.opportunities_with_google / data.opportunities_total * 100) : null;
+  return <section aria-label="Saúde dos dados Google" className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm">
+    <div className="flex flex-wrap items-center gap-2"><Badge tone={hasStoredData ? "success" : "warning"}>{hasStoredData ? "Dados GSC disponíveis" : "Dados GSC ausentes"}</Badge><span className="text-[var(--muted)]">{hasStoredData ? `GSC atualizado: ${dateLabel(data.gsc_window_end)}` : "Não há janela armazenada para sustentar análises de busca."}</span></div>
+    <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]"><span>GA4 {data.ga4_window_end ? `atualizado: ${dateLabel(data.ga4_window_end)}` : "sem dados"}</span><span>{coverage === null ? "Cobertura não calculada" : `${data.opportunities_with_google}/${data.opportunities_total} oportunidades com evidência · ${coverage}%`}</span><Link href="/integrations" className="font-medium text-[var(--primary)] hover:underline">Ver fontes</Link></div>
+  </section>;
 }
 
 export function OrganicTrend({ points }: { points: SearchTrendPoint[] }) {
@@ -54,9 +54,7 @@ function momentumTone(value?: number): "success" | "warning" | "neutral" { if (v
 export function GoogleSignalsPanel({ signals }: { signals: Record<string, GoogleSignal> }) {
   const discover = signals.discover;
   const gsc = signals.gsc_web;
-  if (!discover && !gsc) {
-    return <Card title="Sinais Google — Discover e Busca"><Empty text="Ainda não há sinais persistidos. O próximo run do SEO agent grava aqui o volume do Google Discover, o total da busca (GSC) e a janela consultada." /></Card>;
-  }
+  if (!discover && !gsc) return <p className="rounded-[9px] border border-dashed border-[var(--border)] px-4 py-3 text-sm text-[var(--muted)]">Sinais Discover ainda não coletados. A próxima execução do agente registrará a janela disponível.</p>;
   return <Card title="Sinais Google — base estatística das decisões">
     <p className="mb-4 text-xs text-[var(--muted)]">Volumes site-wide consultados pelo gerador de títulos e oportunidades (Google Search Console web + Discover + Google Trends).</p>
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

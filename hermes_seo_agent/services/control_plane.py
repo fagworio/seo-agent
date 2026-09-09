@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import statistics
 from typing import Any
 
 from ..config import Config
@@ -760,6 +761,7 @@ class ControlPlaneService:
         warnings = [s for s in integrations if s["data_status"] != "available"]
 
         revalidations = self._revalidations(limit=max(limit, 8), minimum_days=7)
+        all_revalidations = self._revalidations(limit=500, minimum_days=7)
 
         # F10 — tópicos emergentes/em queda. Custo controlado: build_topic_graph
         # UMA vez (0.8s) e momentum por cluster consultado em lote único, sem
@@ -807,7 +809,14 @@ class ControlPlaneService:
             "search_trend": self._search_trend(),
             "top_searches": self._top_searches(limit=max(limit, 8)),
             "revalidations": revalidations,
-            "improvement_summary": self._improvement_summary(revalidations),
+            "improvement_summary": self._improvement_summary(all_revalidations),
+            # Outcomes are aggregated here, close to their evidence. The browser
+            # receives a compact product summary instead of rebuilding SEO logic.
+            "change_summary": self._change_summary(),
+            "title_funnel": self._title_funnel(),
+            "observed_impact": self._observed_impact(),
+            "measurement_summary": self._measurement_summary(all_revalidations),
+            "next_executions": self._next_executions(),
             "emerging_topics": emerging,
             "declining_topics": declining,
         }
@@ -1023,6 +1032,402 @@ class ControlPlaneService:
             "waiting_google": sum(r["state"] == "waiting_google" for r in revalidations),
             "ready": sum(r["state"] == "ready" for r in revalidations),
         }
+
+    # -- Outcome summary for Hoje ------------------------------------------
+    # These projections deliberately aggregate persisted actions/outcomes. They
+    # do not infer a causal result, and they never turn unavailable metrics into 0.
+
+    @staticmethod
+    def _action_bucket(rule_id: str) -> str:
+        value = (rule_id or "").lower()
+        if "title" in value:
+            return "titles"
+        if "meta" in value:
+            return "meta_descriptions"
+        if "link" in value:
+            return "internal_links"
+        return "technical"
+
+    @staticmethod
+    def _is_title_outcome(outcome: dict[str, Any]) -> bool:
+        return "title" in " ".join([
+            str(outcome.get("opportunity_type") or ""),
+            str(outcome.get("implemented_action") or ""),
+            str(outcome.get("decision") or ""),
+        ]).lower()
+
+    @staticmethod
+    def _as_date(value: Any) -> dt.datetime | None:
+        if not value:
+            return None
+        try:
+            return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _change_summary(self) -> dict[str, Any]:
+        now = dt.datetime.now(dt.timezone.utc)
+        current_start = now - dt.timedelta(days=28)
+        previous_start = now - dt.timedelta(days=56)
+        summary: dict[str, Any] = {
+            "total": 0, "pages_touched": 0, "titles": 0,
+            "meta_descriptions": 0, "internal_links": 0, "technical": 0,
+            "previous_period_delta": None,
+        }
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT rule_id, url, executed_at FROM actions "
+                "WHERE status = 'executed' AND executed_at IS NOT NULL"
+            ).fetchall()
+        except Exception:
+            return summary
+        current: list[tuple[str, str]] = []
+        previous = 0
+        for rule_id, url, executed_at in rows:
+            when = self._as_date(executed_at)
+            if when is None:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=dt.timezone.utc)
+            if when >= current_start:
+                current.append((rule_id or "", url or ""))
+            elif previous_start <= when < current_start:
+                previous += 1
+        summary["total"] = len(current)
+        summary["pages_touched"] = len({url for _, url in current if url})
+        for rule_id, _ in current:
+            summary[self._action_bucket(rule_id)] += 1
+        # Do not fabricate a comparison when the prior period has no recorded
+        # executions: "0" could mean no changes, or an older installation that
+        # did not persist action history yet.
+        if previous:
+            summary["previous_period_delta"] = len(current) - previous
+        return summary
+
+    def _title_funnel(self) -> dict[str, Any]:
+        result = {"opportunities": 0, "approved": 0, "changed": 0,
+                  "measured": 0, "improved": 0}
+        try:
+            action_rows = self.storage.conn.execute(
+                "SELECT fingerprint, status FROM actions WHERE lower(rule_id) LIKE '%title%'"
+            ).fetchall()
+            result["opportunities"] = len(action_rows)
+            result["changed"] = sum(row[1] == "executed" for row in action_rows)
+            fingerprints = [row[0] for row in action_rows if row[0]]
+            if fingerprints:
+                placeholders = ",".join("?" for _ in fingerprints)
+                result["approved"] = self.storage.conn.execute(
+                    "SELECT COUNT(*) FROM work_item_lifecycle "
+                    f"WHERE action_fingerprint IN ({placeholders}) "
+                    "AND canonical_status IN ('approved', 'delegated', 'executing', 'implemented', 'measured')",
+                    fingerprints,
+                ).fetchone()[0]
+        except Exception:
+            pass
+        for outcome in self.storage.list_opportunity_outcomes(limit=2000):
+            if not self._is_title_outcome(outcome):
+                continue
+            verdict = outcome.get("verdict") or ""
+            if verdict and verdict != "insufficient_data":
+                result["measured"] += 1
+            if verdict == "improved":
+                result["improved"] += 1
+        return result
+
+    @staticmethod
+    def _latest_gsc_deltas(outcome: dict[str, Any]) -> dict[str, Any]:
+        results = outcome.get("results") or {}
+        for window in ("90d", "56d", "28d", "7d"):
+            item = results.get(window)
+            if isinstance(item, dict) and isinstance(item.get("gsc_deltas"), dict):
+                return item["gsc_deltas"]
+        return {}
+
+    def _observed_impact(self) -> dict[str, Any]:
+        outcomes = [item for item in self.storage.list_opportunity_outcomes(limit=2000)
+                    if item.get("human_decision") == "approved"]
+        observed = [item for item in outcomes
+                    if item.get("verdict") in {"improved", "neutral", "worsened", "mixed"}]
+        improved = sum(item.get("verdict") == "improved" for item in observed)
+        neutral = sum(item.get("verdict") in {"neutral", "mixed"} for item in observed)
+        worsened = sum(item.get("verdict") == "worsened" for item in observed)
+        ctr_deltas: list[float] = []
+        clicks_pct: list[float] = []
+        position_gain: list[float] = []
+        for item in observed:
+            deltas = self._latest_gsc_deltas(item)
+            if isinstance(deltas.get("ctr_delta"), (int, float)):
+                ctr_deltas.append(float(deltas["ctr_delta"]) * 100)
+            if isinstance(deltas.get("clicks_pct"), (int, float)):
+                clicks_pct.append(float(deltas["clicks_pct"]))
+            if isinstance(deltas.get("position_delta"), (int, float)):
+                # A smaller average position is a gain for search visibility.
+                position_gain.append(-float(deltas["position_delta"]))
+        return {
+            "measured": len(observed), "improved": improved, "neutral": neutral,
+            "worsened": worsened, "awaiting_data": len(outcomes) - len(observed),
+            "improvement_rate": round(improved / len(observed) * 100, 1) if observed else None,
+            "median_ctr_delta_pp": round(statistics.median(ctr_deltas), 2) if ctr_deltas else None,
+            "median_clicks_pct": round(statistics.median(clicks_pct), 1) if clicks_pct else None,
+            "median_position_gain": round(statistics.median(position_gain), 1) if position_gain else None,
+        }
+
+    # -- Acumulado de títulos ----------------------------------------------
+    # A coorte é sempre calculada dentro da mesma janela armazenada em cada
+    # outcome (7d antes × 7d depois, e assim por diante). Não há tentativa de
+    # transformar o crescimento geral do site em causalidade da intervenção.
+
+    @staticmethod
+    def _number(value: Any) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    @staticmethod
+    def _title_metric(values: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+                      key: str) -> dict[str, float | None]:
+        before = [ControlPlaneService._number(item[0].get(key)) for item in values]
+        after = [ControlPlaneService._number(item[1].get(key)) for item in values]
+        before = [value for value in before if value is not None]
+        after = [value for value in after if value is not None]
+        delta_key = f"{key}_delta"
+        deltas = [ControlPlaneService._number(item[2].get(delta_key)) for item in values]
+        deltas = [value for value in deltas if value is not None]
+        if key in {"clicks", "impressions"}:
+            b, a = (sum(before), sum(after)) if before and after else (None, None)
+            delta = a - b if b is not None and a is not None else (sum(deltas) if deltas else None)
+            return {
+                "before": round(b, 2) if b is not None else None,
+                "after": round(a, 2) if a is not None else None,
+                "delta": round(delta, 2) if delta is not None else None,
+                "delta_percent": round((a - b) / b * 100, 1) if b not in (None, 0) and a is not None else None,
+            }
+        if key == "ctr":
+            # CTR agregado usa cliques/impressões quando disponíveis; média de
+            # páginas só é fallback para não misturar somas e percentuais.
+            before_clicks = [ControlPlaneService._number(item[0].get("clicks")) for item in values]
+            before_impressions = [ControlPlaneService._number(item[0].get("impressions")) for item in values]
+            after_clicks = [ControlPlaneService._number(item[1].get("clicks")) for item in values]
+            after_impressions = [ControlPlaneService._number(item[1].get("impressions")) for item in values]
+            if all(value is not None for value in before_clicks + before_impressions) and sum(before_impressions):
+                b = sum(before_clicks) / sum(before_impressions)
+            else:
+                b = statistics.mean(before) if before else None
+            if all(value is not None for value in after_clicks + after_impressions) and sum(after_impressions):
+                a = sum(after_clicks) / sum(after_impressions)
+            else:
+                a = statistics.mean(after) if after else None
+            delta = a - b if a is not None and b is not None else (statistics.median(deltas) if deltas else None)
+            return {"before": round(b, 4) if b is not None else None,
+                    "after": round(a, 4) if a is not None else None,
+                    "delta": round(delta, 4) if delta is not None else None,
+                    "delta_percent": round(delta / b * 100, 1) if b not in (None, 0) and delta is not None else None}
+        # Menor posição é melhor. O frontend recebe a variação bruta e também
+        # o ganho positivo, sem ocultar a direção da métrica original.
+        b = statistics.mean(before) if before else None
+        a = statistics.mean(after) if after else None
+        delta = a - b if a is not None and b is not None else (statistics.median(deltas) if deltas else None)
+        return {"before": round(b, 2) if b is not None else None,
+                "after": round(a, 2) if a is not None else None,
+                "delta": round(delta, 2) if delta is not None else None,
+                "gain": round(-delta, 2) if delta is not None else None,
+                "delta_percent": None}
+
+    def _title_window(self, outcomes: list[dict[str, Any]], days: int,
+                      forecasts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        from ..report.impact_ga4 import baseline_gsc
+
+        measured: list[dict[str, Any]] = []
+        for outcome in outcomes:
+            result = (outcome.get("results") or {}).get(f"{days}d")
+            if not isinstance(result, dict):
+                continue
+            deltas = result.get("gsc_deltas")
+            if not isinstance(deltas, dict):
+                continue
+            before = baseline_gsc(outcome.get("baseline") or {}) or {}
+            after = result.get("now_gsc") or {}
+            measured.append({"outcome": outcome, "before": before, "after": after,
+                             "deltas": deltas, "forecast": forecasts.get(outcome.get("url") or "", {})})
+
+        triples = [(item["before"], item["after"], item["deltas"]) for item in measured]
+        observed = {key: self._title_metric(triples, key)
+                    for key in ("clicks", "impressions", "ctr", "position")}
+        forecast_clicks = [self._number(item["forecast"].get("clicks")) for item in measured]
+        forecast_gap = [self._number(item["forecast"].get("gap_clicks")) for item in measured]
+        forecast_clicks = [value for value in forecast_clicks if value is not None]
+        forecast_gap = [value for value in forecast_gap if value is not None]
+        forecast = {
+            "clicks_delta": round(sum(forecast_gap), 2) if forecast_gap else None,
+            "clicks_delta_percent": round(sum(forecast_gap) / sum(forecast_clicks) * 100, 1)
+            if forecast_gap and forecast_clicks and sum(forecast_clicks) else None,
+        }
+        verdicts = {"improved": 0, "neutral": 0, "worsened": 0, "insufficient_data": 0}
+        top_gains = []
+        by_month: dict[str, list[dict[str, Any]]] = {}
+        for item in measured:
+            verdict = item["deltas"].get("verdict") or item["outcome"].get("verdict") or "insufficient_data"
+            verdict = "neutral" if verdict == "mixed" else verdict
+            verdicts[verdict if verdict in verdicts else "insufficient_data"] += 1
+            clicks_delta = self._number(item["deltas"].get("clicks_delta"))
+            if clicks_delta is not None:
+                top_gains.append({
+                    "url": item["outcome"].get("url") or "",
+                    "label": item["outcome"].get("keyword") or item["outcome"].get("url") or "Página sem nome",
+                    "clicks_delta": round(clicks_delta, 2),
+                    "ctr_delta_pp": round((self._number(item["deltas"].get("ctr_delta")) or 0) * 100, 2),
+                    "position_gain": round(-(self._number(item["deltas"].get("position_delta")) or 0), 2),
+                })
+            implemented = self._as_date(item["outcome"].get("implemented_at"))
+            if implemented:
+                by_month.setdefault(implemented.strftime("%Y-%m"), []).append(item)
+
+        timeline = []
+        for month, items in sorted(by_month.items()):
+            points = [(item["before"], item["after"], item["deltas"]) for item in items]
+            point_observed = self._title_metric(points, "clicks")
+            gaps = [self._number(item["forecast"].get("gap_clicks")) for item in items]
+            bases = [self._number(item["forecast"].get("clicks")) for item in items]
+            gaps = [value for value in gaps if value is not None]
+            bases = [value for value in bases if value is not None]
+            timeline.append({
+                "date": month,
+                "modified_titles": len(items),
+                "observed_index": round(100 + point_observed["delta_percent"], 1)
+                if point_observed["delta_percent"] is not None else None,
+                "forecast_index": round(100 + sum(gaps) / sum(bases) * 100, 1)
+                if gaps and bases and sum(bases) else None,
+                "benchmark_index": None,
+                # Deliberadamente separados dos índices: estes valores alimentam
+                # o acumulado de cliques sem transformar meses sem medição em zero.
+                "observed_clicks_delta": point_observed["delta"],
+                "forecast_clicks_delta": round(sum(gaps), 2) if gaps else None,
+            })
+
+        measured_n = len(measured)
+        comparable = verdicts["improved"] + verdicts["neutral"] + verdicts["worsened"]
+        verdicts["improvement_rate"] = round(verdicts["improved"] / comparable * 100, 1) if comparable else None
+        return {
+            "days": days, "measured_titles": measured_n,
+            "awaiting_measurement": max(0, len(outcomes) - measured_n),
+            "data_status": "available" if measured_n else "missing",
+            "observed": observed, "forecast": forecast, "outcomes": verdicts,
+            "timeline": timeline,
+            "top_gains": sorted(top_gains, key=lambda item: item["clicks_delta"], reverse=True)[:5],
+            "limitations": "Cada título usa uma comparação antes/depois de mesma duração; resultado observado não prova causalidade.",
+        }
+
+    def title_impact(self) -> dict[str, Any]:
+        """Agregado de títulos para a Home, pronto para consumo da UI.
+
+        Cada janela usa somente outcomes medidos naquela duração. A referência
+        externa permanece explicitamente indisponível até existir uma coorte de
+        controle comparável persistida pelo backend.
+        """
+        outcomes = [item for item in self.storage.list_opportunity_outcomes(limit=2000)
+                    if item.get("human_decision") == "approved" and self._is_title_outcome(item)]
+        forecasts: dict[str, dict[str, Any]] = {}
+        for outcome in outcomes:
+            url = outcome.get("url") or ""
+            if url and url not in forecasts:
+                rows = self.storage.expectations_for(url, limit=1)
+                forecasts[url] = rows[0] if rows else {}
+        windows = {str(days): self._title_window(outcomes, days, forecasts) for days in (7, 28, 90)}
+        try:
+            actions = self.storage.conn.execute(
+                "SELECT executed_at FROM actions WHERE status = 'executed' AND lower(rule_id) LIKE '%title%'"
+            ).fetchall()
+        except Exception:
+            actions = []
+        now = dt.datetime.now(dt.timezone.utc)
+        current_start, previous_start = now - dt.timedelta(days=28), now - dt.timedelta(days=56)
+        current, previous = 0, 0
+        for (executed_at,) in actions:
+            when = self._as_date(executed_at)
+            if when is None:
+                continue
+            when = when if when.tzinfo else when.replace(tzinfo=dt.timezone.utc)
+            if when >= current_start:
+                current += 1
+            elif previous_start <= when < current_start:
+                previous += 1
+        actions_by_month: dict[str, int] = {}
+        for (executed_at,) in actions:
+            when = self._as_date(executed_at)
+            if when:
+                actions_by_month[when.strftime("%Y-%m")] = actions_by_month.get(when.strftime("%Y-%m"), 0) + 1
+        cumulative_titles = 0
+        modification_timeline = []
+        for month, count in sorted(actions_by_month.items()):
+            cumulative_titles += count
+            modification_timeline.append({
+                "date": month,
+                "titles_modified": count,
+                "titles_modified_cumulative": cumulative_titles,
+            })
+        return {
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "titles_modified_total": len(actions), "titles_modified_period": current,
+            "previous_period_delta": current - previous if previous else None,
+            "measurable_7d": windows["7"]["measured_titles"],
+            "measurable_28d": windows["28"]["measured_titles"],
+            "measurable_90d": windows["90"]["measured_titles"],
+            "awaiting_measurement": max(0, len(outcomes) - windows["7"]["measured_titles"]),
+            "benchmark": {
+                "data_status": "unavailable", "source": "control_group",
+                "clicks_delta_percent": None, "adjusted_click_delta_percent": None,
+                "limitation": "Ainda não há grupo de controle comparável persistido; o impacto ajustado não será estimado.",
+            },
+            "windows": windows,
+            "modification_timeline": modification_timeline,
+        }
+
+    def _measurement_summary(self, revalidations: list[dict[str, Any]]) -> dict[str, Any]:
+        summary = {"ready": 0, "waiting_7d": 0, "waiting_28d": 0,
+                   "waiting_90d": 0, "waiting_google": 0}
+        today = dt.date.today()
+        for item in revalidations:
+            state = item.get("state")
+            if state == "ready":
+                summary["ready"] += 1
+            elif state == "waiting_google":
+                summary["waiting_google"] += 1
+            elif state == "waiting_7d":
+                summary["waiting_7d"] += 1
+            else:
+                continue
+            implemented = self._as_date(item.get("implemented_at"))
+            if implemented is None:
+                continue
+            age = (today - implemented.date()).days
+            if 7 <= age < 28:
+                summary["waiting_28d"] += 1
+            elif 28 <= age < 90:
+                summary["waiting_90d"] += 1
+        return summary
+
+    def _next_executions(self) -> list[dict[str, Any]]:
+        """Upcoming campaign batches plus a small, auditable URL preview."""
+        try:
+            rows = self.storage.conn.execute(
+                "SELECT id, name, action_type, next_run_at, max_actions_per_run, "
+                "pending_items, total_items, executed_items FROM improvement_campaigns "
+                "WHERE pending_items > 0 AND status IN ('approved', 'queued', 'running', 'partial') "
+                "ORDER BY next_run_at IS NULL, next_run_at ASC, id ASC LIMIT 4"
+            ).fetchall()
+        except Exception:
+            return []
+        executions = []
+        for row in rows:
+            urls = self.storage.conn.execute(
+                "SELECT url FROM improvement_campaign_items "
+                "WHERE campaign_id = ? AND status = 'pending' ORDER BY id LIMIT 3", (row[0],)
+            ).fetchall()
+            executions.append({
+                "campaign_id": row[0], "name": row[1], "action_type": row[2],
+                "next_run_at": row[3], "batch_size": min(row[4], row[5]),
+                "pending_items": row[5], "total_items": row[6], "executed_items": row[7],
+                "url_previews": [url[0] for url in urls if url[0]],
+            })
+        return executions
 
     # -- R7/R8: revalidação de melhorias -------------------------------------
     def revalidations(self, *, limit: int = 50) -> list[dict[str, Any]]:

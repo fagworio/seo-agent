@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { api, TodayResponse, ApiError, GoogleDataSummary, ImprovementSummary } from "@/lib/api";
+import { api, TodayResponse, ApiError, ChangeSummary, GoogleDataSummary, ImprovementSummary, MeasurementSummary, NextExecution, ObservedImpact, TitleFunnel } from "@/lib/api";
 import { presentOpportunity } from "@/lib/opportunity-presentation";
 import { opportunityEvidenceSummary } from "@/features/opportunities/decision-insight";
-import { GoogleTrust, GoogleSignalsPanel, ImprovementChart, OrganicTrend, RevalidationPanel, TopSearches } from "@/features/today/dashboard-insights";
+import { GoogleTrust, GoogleSignalsPanel, OrganicTrend, TopSearches } from "@/features/today/dashboard-insights";
+import { AutomationPanel, MeasurementPanel, ObservedImpactPanel, OutcomeKpis, TitleFunnelPanel } from "@/features/today/outcome-overview";
+import { TitleImpactWidget } from "@/features/today/title-impact-widget";
+import { DashboardWidgetLayout, type DashboardWidget } from "@/features/today/widget-layout";
 import { Card } from "@/design-system/card";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
@@ -35,6 +38,25 @@ export default function TodayPage() {
     opportunities_without_google: rawToday.top_opportunities?.length ?? 0,
     ...rawToday.google_data,
   };
+  const changeSummary: ChangeSummary = {
+    total: 0, pages_touched: 0, titles: 0, meta_descriptions: 0,
+    internal_links: 0, technical: 0, previous_period_delta: null,
+    ...rawToday.change_summary,
+  };
+  const titleFunnel: TitleFunnel = {
+    opportunities: 0, approved: 0, changed: 0, measured: 0, improved: 0,
+    ...rawToday.title_funnel,
+  };
+  const observedImpact: ObservedImpact = {
+    measured: 0, improved: 0, neutral: 0, worsened: 0, awaiting_data: 0,
+    improvement_rate: null, median_ctr_delta_pp: null, median_clicks_pct: null,
+    median_position_gain: null, ...rawToday.observed_impact,
+  };
+  const measurementSummary: MeasurementSummary = {
+    ready: 0, waiting_7d: 0, waiting_28d: 0, waiting_90d: 0, waiting_google: 0,
+    ...rawToday.measurement_summary,
+  };
+  const nextExecutions: NextExecution[] = rawToday.next_executions ?? [];
   const today = {
     ...rawToday,
     needs_attention: rawToday.needs_attention ?? 0,
@@ -48,29 +70,30 @@ export default function TodayPage() {
     revalidations: rawToday.revalidations ?? [],
     improvement_summary: improvementSummary,
   };
-  const revalidationAttention = improvementSummary.ready + improvementSummary.waiting_google;
+  const widgets: DashboardWidget[] = [
+    { id: "title-impact", label: "Impacto acumulado dos títulos", className: "xl:col-span-2", content: <TitleImpactWidget /> },
+    { id: "outcome-summary", label: "Resumo de resultados", className: "xl:col-span-2", content: <OutcomeKpis changes={changeSummary} impact={observedImpact} measurement={measurementSummary} executions={nextExecutions} /> },
+    { id: "google-trust", label: "Saúde dos dados Google", className: "xl:col-span-2", content: <GoogleTrust data={googleData} /> },
+    { id: "title-funnel", label: "Funil de otimização de títulos", content: <TitleFunnelPanel funnel={titleFunnel} /> },
+    { id: "automation", label: "Próximas execuções", content: <AutomationPanel executions={nextExecutions} /> },
+    { id: "observed-impact", label: "Impacto observado", content: <ObservedImpactPanel impact={observedImpact} /> },
+    { id: "measurement", label: "Em medição", content: <MeasurementPanel summary={measurementSummary} /> },
+    { id: "recent-activity", label: "Atividade recente", content: <RecentRuns runs={today.recent_runs} /> },
+    { id: "opportunities", label: "Decisões sustentadas por Google", content: <TopOpportunities opportunities={today.top_opportunities} /> },
+    { id: "organic-trend", label: "Desempenho orgânico", content: <OrganicTrend points={today.search_trend} /> },
+    { id: "source-warnings", label: "Fontes que precisam de atenção", content: <SourceWarnings warnings={today.integration_warnings} /> },
+    { id: "top-searches", label: "Buscas com visibilidade", className: "xl:col-span-2", content: <TopSearches searches={today.top_searches} /> },
+    { id: "google-signals", label: "Sinais Google", className: "xl:col-span-2", content: <GoogleSignalsPanel signals={rawToday.google_signals ?? {}} /> },
+    { id: "topic-movers", label: "Tópicos em movimento", className: "xl:col-span-2", content: <TopicMovers today={today} /> },
+  ];
   return <div className="space-y-6">
-    <header><h1 className="text-xl font-semibold">Hoje</h1><p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">O que precisa de decisão, quais dados sustentam as análises e quando medir as melhorias implementadas.</p></header>
-
-    <section aria-label="Resumo de atenção" className="grid grid-cols-2 gap-4 lg:grid-cols-4"><Kpi label="Decisões pendentes" value={today.needs_attention} detail="Caixa de trabalho" /><Kpi label="Revalidações exigindo dados" value={revalidationAttention} detail="Prazo atingido ou coleta pendente" /><Kpi label="Melhoras observadas" value={improvementSummary.improved} detail={`${improvementSummary.measured} intervenções medidas`} /><Kpi label="Cobertura Google" value={`${googleData.opportunities_with_google}/${googleData.opportunities_total}`} detail="oportunidades com evidência GSC" /></section>
-
-    <GoogleTrust data={googleData} />
-
-    <GoogleSignalsPanel signals={rawToday.google_signals ?? {}} />
-
-    <div className="grid gap-6 xl:grid-cols-2"><RecentRuns runs={today.recent_runs} /><RevalidationPanel items={today.revalidations} summary={improvementSummary} /></div>
-
-    <div className="grid gap-6 xl:grid-cols-2"><OrganicTrend points={today.search_trend} /><ImprovementChart summary={improvementSummary} /></div>
-
-    <TopSearches searches={today.top_searches} />
-
-    <div className="grid gap-6 xl:grid-cols-2"><TopOpportunities opportunities={today.top_opportunities} /><SourceWarnings warnings={today.integration_warnings} /></div>
-    <TopicMovers today={today} />
+    <header><h1 className="text-xl font-semibold">Hoje</h1><p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">O que o SEO Agent mudou, o que está sendo medido e qual lote será executado em seguida.</p></header>
+    <DashboardWidgetLayout widgets={widgets} />
   </div>;
 }
 
 function RecentRuns({ runs }: { runs: TodayResponse["today"]["recent_runs"] }) {
-  return <Card title="Execuções recentes">{runs.length ? <ul className="divide-y divide-[var(--border)]">{runs.map((run) => <li key={run.id} className="py-2 first:pt-0"><Link href={`/agents/runs/${run.id}`} className="flex items-center justify-between gap-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><div><p className="font-medium">{run.agent}</p><p className="text-xs text-[var(--muted)]">{run.intent || "Análise operacional"} · {run.urls_analyzed} URLs</p></div><Badge tone={runTone(run.status)}>{runLabel(run.status)}</Badge></Link></li>)}</ul> : <p className="text-sm text-[var(--muted)]">Nenhuma execução foi registrada. Métricas existentes podem ter sido coletadas por comandos anteriores sem rastreamento de run.</p>}<div className="mt-3"><Link href="/agents"><Button size="sm" variant="secondary">Ver agentes e execuções</Button></Link></div></Card>;
+  return <Card title="Atividade recente do SEO Agent">{runs.length ? <ul className="divide-y divide-[var(--border)]">{runs.map((run) => <li key={run.id} className="py-2 first:pt-0"><Link href={`/agents/runs/${run.id}`} className="flex items-center justify-between gap-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><div><p className="font-medium">{run.agent}</p><p className="text-xs text-[var(--muted)]">{run.intent || "Análise operacional"} · {run.urls_analyzed} URLs · {run.executed_changes_count} mudanças executadas</p></div><Badge tone={runTone(run.status)}>{runLabel(run.status)}</Badge></Link></li>)}</ul> : <p className="text-sm text-[var(--muted)]">Nenhuma execução foi registrada. Métricas existentes podem ter sido coletadas por comandos anteriores sem rastreamento de run.</p>}<div className="mt-3"><Link href="/agents"><Button size="sm" variant="secondary">Ver agentes e execuções</Button></Link></div></Card>;
 }
 
 function TopOpportunities({ opportunities }: { opportunities: TodayResponse["today"]["top_opportunities"] }) {
@@ -81,7 +104,6 @@ function SourceWarnings({ warnings }: { warnings: TodayResponse["today"]["integr
   return <Card title="Fontes que precisam de atenção"><ul className="space-y-2">{warnings.map((source) => <li key={source.source} className="flex items-start justify-between gap-3 text-sm"><div><p className="font-medium">{source.source}</p><p className="text-xs text-[var(--muted)]">{source.limitations || source.detail || "Fonte parcial ou indisponível."}</p></div><Badge tone="warning">{source.data_status}</Badge></li>)}{!warnings.length && <li className="text-sm text-[var(--muted)]">Todas as fontes configuradas estão disponíveis.</li>}</ul><div className="mt-3"><Link href="/integrations"><Button size="sm" variant="secondary">Ver fontes de dados</Button></Link></div></Card>;
 }
 
-function Kpi({ label, value, detail }: { label: string; value: number | string; detail: string }) { return <div className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4"><div className="text-2xl font-semibold tabular-nums">{value}</div><div className="mt-1 text-xs font-medium">{label}</div><div className="mt-0.5 text-xs text-[var(--muted)]">{detail}</div></div>; }
 function runLabel(status: string) { return ({ success: "Concluída", failed: "Falhou", partial: "Parcial", running: "Em execução" } as Record<string, string>)[status] ?? status; }
 function runTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" { if (status === "success") return "success"; if (status === "failed") return "danger"; if (status === "partial") return "warning"; if (status === "running") return "info"; return "neutral"; }
 

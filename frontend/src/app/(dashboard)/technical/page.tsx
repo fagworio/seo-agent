@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, Correction, TechnicalFinding } from "@/lib/api";
+import { api, ApiError, Correction, IntegrationSource, TechnicalFinding } from "@/lib/api";
 import { fmt, fmtNum, num, pct } from "@/lib/format";
 import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
@@ -41,6 +41,11 @@ export default function TechnicalPage() {
   const corrections = useQuery({
     queryKey: ["corrections"],
     queryFn: () => api.get<{ corrections: Correction[] }>("/actions?limit=200"),
+  });
+  const coverage = useQuery({
+    queryKey: ["integrations"],
+    queryFn: () => api.get<{ integrations: IntegrationSource[] }>("/integrations"),
+    retry: false,
   });
 
   const all = useMemo(() => data?.findings ?? [], [data?.findings]);
@@ -93,6 +98,7 @@ export default function TechnicalPage() {
         <Kpi label="Sem dados Google" value={summary.noGoogle} tone="warning" />
         <Kpi label="Correções disponíveis" value={summary.corrections} />
       </div>
+      <TechnicalCoverage source={coverage.data?.integrations.find((item) => item.source === "corpus")} loading={coverage.isLoading} error={coverage.error as ApiError | null} />
 
       {view === "problems" && (
         <>
@@ -450,6 +456,15 @@ function Scenario({ label, value }: { label: string; value: number | null }) {
 function Kpi({ label, value, tone }: { label: string; value: number; tone?: "success" | "warning" }) {
   return <div className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4"><div className="text-2xl font-semibold tabular-nums" style={{ color: tone ? `var(--${tone})` : "var(--foreground)" }}>{value}</div><div className="text-xs text-[var(--muted)]">{label}</div></div>;
 }
+function TechnicalCoverage({ source, loading, error }: { source?: IntegrationSource; loading: boolean; error: ApiError | null }) {
+  if (loading) return <div className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">Carregando cobertura de URLs…</div>;
+  const processed = numberExtra(source, "global_docs_in_sitemap");
+  const total = numberExtra(source, "global_sitemap_total");
+  if (processed === null || total === null || total <= 0) return <div className="rounded-[9px] border border-dashed border-[var(--border)] bg-[var(--surface)] p-4"><h2 className="font-medium">Cobertura técnica de URLs</h2><p className="mt-1 text-sm text-[var(--muted)]">{error ? "A cobertura não está disponível para esta permissão." : "Aparecerá após um crawl com sitemap completo; não exibimos zero como cobertura."}</p></div>;
+  const percentage = Math.max(0, Math.min(100, Math.round(processed / total * 100)));
+  return <section aria-label="Cobertura técnica de URLs" className="rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="font-medium">Cobertura técnica de URLs</h2><p className="mt-1 text-sm text-[var(--muted)]">Corpus indexado dentro do sitemap da última execução concluída.</p></div><div className="text-right"><strong className="text-xl tabular-nums">{fmtNum(processed)} / {fmtNum(total)} URLs</strong><p className="text-xs text-[var(--muted)]">{percentage}% cobertas</p></div></div><div className="mt-3 h-3 overflow-hidden rounded-full bg-[var(--surface-raised)]" role="progressbar" aria-label="Cobertura técnica de URLs" aria-valuemin={0} aria-valuemax={total} aria-valuenow={processed} aria-valuetext={`${fmtNum(processed)} de ${fmtNum(total)} URLs, ${percentage}%`}><div className="h-full rounded-full bg-[var(--primary)]" style={{ width: `${percentage}%` }} /></div></section>;
+}
+function numberExtra(source: IntegrationSource | undefined, key: string): number | null { const value = source?.[key]; return typeof value === "number" && Number.isFinite(value) ? value : null; }
 function layerLabel(layer: string) {
   const map: Record<string, string> = { wordpress: "WordPress / Rank Math", headless: "Pipeline Headless / publicação", both: "WordPress + Headless", external: "Fonte externa / infra", manual_review: "Revisão manual" };
   return map[layer] ?? layer;
