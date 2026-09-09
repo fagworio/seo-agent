@@ -29,11 +29,14 @@ class HttpClient:
         auth: tuple[str, str] | None = None,
         bearer: str | None = None,
         transport: Any | None = None,
+        budget: Any | None = None,
     ):
         self.timeout = timeout
         self.max_retries = max_retries
         self.auth = auth
         self.bearer = bearer
+        # orçamento/telemetria externa (opt-in via RunContext); None = sem limite.
+        self.budget = budget
         self.client = httpx.Client(
             timeout=timeout,
             follow_redirects=False,  # redirect logic lives in checks/redirects
@@ -74,11 +77,17 @@ class HttpClient:
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
+                if self.budget is not None:
+                    _t0 = time.perf_counter()
                 if method == "GET":
                     response = self.client.get(url, params=params, headers=headers, auth=self.auth)
                 else:
                     response = self.client.post(url, params=params, json=json_body,
                                                 headers=headers, auth=self.auth)
+                if self.budget is not None:
+                    self.budget.inc(method.lower(), bytes_=len(response.content),
+                                    retries=attempt - 1,
+                                    duration=time.perf_counter() - _t0)
                 if response.status_code in {429, 500, 502, 503, 504}:
                     raise _Transient(response.status_code)
                 return response

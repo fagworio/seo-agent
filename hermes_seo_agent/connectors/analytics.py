@@ -51,6 +51,7 @@ class AnalyticsClient:
         *,
         token_provider: Callable[[], str] | None = None,
         http: HttpClient | None = None,
+        budget: Any | None = None,
     ):
         self.config = config
         if not config.ga4_property_id:
@@ -61,7 +62,7 @@ class AnalyticsClient:
         self.token_provider = token_provider or _default_token_provider(
             config, scopes=[_SCOPE]
         )
-        self.http = http or HttpClient(timeout=config.http_timeout)
+        self.http = http or HttpClient(timeout=config.http_timeout, budget=budget)
 
     # -- low-level -----------------------------------------------------------
 

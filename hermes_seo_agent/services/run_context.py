@@ -16,6 +16,11 @@ class RunContext:
     def __init__(self, config: Any, storage: Any | None = None):
         self.config = config
         self._storage = storage
+        # Orçamento de execução externa compartilhado (opt-in): os conectores que
+        # o RunContext cria contam chamadas em um único ExecutionBudget (config
+        # max_external_calls) e bloqueiam ao atingir o limite (#8).
+        from .budget import make_budget
+        self.budget = make_budget(config)
         self._wp = None
         self._static = None
         self._gsc = None
@@ -38,7 +43,7 @@ class RunContext:
     def wordpress(self):
         if self._wp is None:
             from ..connectors.wordpress import WordPressClient
-            self._wp = WordPressClient(self.config)
+            self._wp = WordPressClient(self.config, budget=self.budget)
         return self._wp
 
     def static(self):
@@ -46,19 +51,20 @@ class RunContext:
             from ..connectors.static_site import StaticSiteClient
             # Passa o Storage compartilhado: _cached_get deixa de abrir um
             # Storage (schema+migração+commit) por request HTTP.
-            self._static = StaticSiteClient(self.config, cache_store=self.storage())
+            self._static = StaticSiteClient(self.config, cache_store=self.storage(),
+                                            budget=self.budget)
         return self._static
 
     def search_console(self):
         if self._gsc is None and self.config.google_credentials:
             from ..connectors.search_console import SearchConsoleClient
-            self._gsc = SearchConsoleClient(self.config)
+            self._gsc = SearchConsoleClient(self.config, budget=self.budget)
         return self._gsc
 
     def analytics(self):
         if self._ga4 is None and self.config.ga4_property_id:
             from ..connectors.analytics import AnalyticsClient
-            self._ga4 = AnalyticsClient(self.config)
+            self._ga4 = AnalyticsClient(self.config, budget=self.budget)
         return self._ga4
 
     def posts(self):
@@ -78,6 +84,10 @@ class RunContext:
 
     # -- cache de datasets GSC/GA4 por janela (P5) --------------------------
 
+    def _hit(self, kind: str) -> None:
+        if self.budget is not None:
+            self.budget.hit(kind)
+
     def gsc_by_page(self, start: str, end: str, row_limit: int = 25_000):
         key = (start, end, row_limit)
         if key not in self._gsc_by_page:
@@ -86,6 +96,8 @@ class RunContext:
                     start_date=start, end_date=end, row_limit=row_limit)
             else:
                 self._gsc_by_page[key] = []
+        else:
+            self._hit("dataset_cache_hit")
         return self._gsc_by_page[key]
 
     def gsc_query_pages(self, start: str, end: str, row_limit: int = 25_000):
@@ -96,6 +108,8 @@ class RunContext:
                     start_date=start, end_date=end, row_limit=row_limit)
             else:
                 self._gsc_query_pages[key] = []
+        else:
+            self._hit("dataset_cache_hit")
         return self._gsc_query_pages[key]
 
     def ga4_organic(self, start: str, end: str, *, row_limit: int = 25_000,
@@ -109,6 +123,8 @@ class RunContext:
             else:
                 self._ga4_organic[key] = {"rows": [], "row_count": 0,
                                           "unmatched": [], "quota": {}}
+        else:
+            self._hit("dataset_cache_hit")
         return self._ga4_organic[key]
 
     def close(self):

@@ -17,12 +17,14 @@ class SafetyError(RuntimeError):
 
 
 class WordPressClient:
-    def __init__(self, config: Config, http: HttpClient | None = None):
+    def __init__(self, config: Config, http: HttpClient | None = None,
+                 budget: Any | None = None):
         self.config = config
         self.base_url = f"{config.wordpress_url}{config.wordpress_api_base}"
         self.http = http or HttpClient(
             timeout=config.http_timeout,
             auth=(config.app_user, config.app_password) if config.app_user else None,
+            budget=budget,
         )
 
     # -- reads ---------------------------------------------------------------

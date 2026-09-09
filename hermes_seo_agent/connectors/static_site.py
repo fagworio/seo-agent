@@ -140,9 +140,9 @@ class _PageParser(HTMLParser):
 
 class StaticSiteClient:
     def __init__(self, config: Config, http: HttpClient | None = None,
-                 cache_store: Any | None = None):
+                 cache_store: Any | None = None, budget: Any | None = None):
         self.config = config
-        self.http = http or HttpClient(timeout=config.http_timeout)
+        self.http = http or HttpClient(timeout=config.http_timeout, budget=budget)
         # cache_store compartilhado (RunContext.storage()): evita abrir um
         # Storage + schema + migração + commit por request HTTP. Se ausente,
         # o client é dono de uma conexão lazily criada (e fechada em close()).
@@ -243,6 +243,8 @@ class StaticSiteClient:
             if body is not None:
                 response = type(response)(status_code=200, headers=response.headers,
                                           content=gzip.decompress(body))
+                if self.http.budget is not None:
+                    self.http.budget.hit("http_304")  # chamada de corpo EVITADA
             else:
                 # 304 sem corpo disponível (cache limpo): força um GET pleno.
                 response = self.http.get(url)

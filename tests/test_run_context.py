@@ -10,7 +10,7 @@ from hermes_seo_agent.services.run_context import RunContext
 
 def test_run_context_reuses_gsc_query_pages(monkeypatch):
     class FakeGSC:
-        def __init__(self, config):
+        def __init__(self, config, budget=None):
             self.calls = 0
 
         def search_analytics_query_page(self, *, start_date, end_date, row_limit=25_000):
@@ -36,7 +36,7 @@ def test_run_context_reuses_gsc_query_pages(monkeypatch):
 
 def test_run_context_caches_different_windows_separately(monkeypatch):
     class FakeGSC:
-        def __init__(self, config):
+        def __init__(self, config, budget=None):
             self.calls = 0
 
         def search_analytics_query_page(self, *, start_date, end_date, row_limit=25_000):
