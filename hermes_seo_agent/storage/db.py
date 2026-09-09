@@ -6,9 +6,14 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+# Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
+# PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
+_SCHEMA_VERSION = 1
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS http_cache (
@@ -609,19 +614,35 @@ class Storage:
             self.conn.execute("PRAGMA synchronous=NORMAL")
         except Exception:
             pass
-        try:
-            self.conn.executescript(_SCHEMA)
-            self._migrate()
-            self.conn.commit()
-        except Exception:
-            # Se a inicialização falhar (ex.: `database is locked` no commit),
-            # NÃO deixar a conexão vazada — uma conexão aberta com transação
-            # pendente segura o write-lock e trava o banco para todos.
+        # WAL é opt-in (produção: SQLITE_WAL=1 na .env) — testes mantêm delete-mode
+        # para não criar arquivos -wal/-shm ao lado dos .db temporários.
+        if os.environ.get("SQLITE_WAL", "0") == "1":
             try:
-                self.conn.close()
+                self.conn.execute("PRAGMA journal_mode=WAL")
             except Exception:
                 pass
-            raise
+        # Gating por user_version: schema + migração rodam 1x por banco, não a
+        # cada Storage() (evita executescript(_SCHEMA)+_migrate+commit por open).
+        ver = 0
+        try:
+            ver = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        except Exception:
+            ver = -1
+        if ver < _SCHEMA_VERSION:
+            try:
+                self.conn.executescript(_SCHEMA)
+                self._migrate()
+                self.conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+                self.conn.commit()
+            except Exception:
+                # Se a inicialização falhar (ex.: `database is locked` no commit),
+                # NÃO deixar a conexão vazada — uma conexão aberta com transação
+                # pendente segura o write-lock e trava o banco para todos.
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                raise
 
     def _migrate(self) -> None:
         """Add columns to pre-existing databases (CREATE TABLE is a no-op there)."""
