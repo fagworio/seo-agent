@@ -633,15 +633,25 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         snap_storage.save_page_snapshots_batch(snapshots)
 
     # HTTP health pass reuses the page fetch above (one GET per URL).
-    # Redirect-chain details require an extra request and are intentionally
-    # collected only by the dedicated HTTP check command.
+    # Segue a cadeia de redirect SOMENTE quando a página responde 3xx (200/404 =
+    # 1 request; 3xx = requests extras apenas nesse caso) — sem perda da regra.
     page_by_url = {p.url: p for p in pages}
     for url in sample:
         page = page_by_url.get(url)
-        state = {"status_code": page.status_code if page else 0,
-                 "final_url": page.url if page else url,
+        status = page.status_code if page else 0
+        state = {"status_code": status, "final_url": page.url if page else url,
                  "redirect_hops": 0, "redirect_loop": False,
                  "error": "page not fetched" if page is None else ""}
+        if status in {301, 302, 303, 307, 308}:
+            try:
+                info = check_http(static.http, url)
+                state = {"status_code": info.get("status_code", 0),
+                         "final_url": info.get("final_url", url),
+                         "redirect_hops": info.get("redirect_hops", 0),
+                         "redirect_loop": info.get("redirect_loop", False),
+                         "error": info.get("error", "")}
+            except Exception as exc:  # noqa: BLE001 — melhor reportar do que derrubar
+                state["error"] = str(exc)
         if state.get("redirect_loop"):
             findings.append({"rule_id": "redirect_loop", "url": url,
                              "severity": "critical", "detail": state.get("error", "loop")})
@@ -668,10 +678,20 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
                 page_by_url[expected] = page
             except Exception:
                 page = None
-        state = {"status_code": page.status_code if page else 0,
-                 "final_url": page.url if page else expected,
+        status = page.status_code if page else 0
+        state = {"status_code": status, "final_url": page.url if page else expected,
                  "redirect_hops": 0, "redirect_loop": False,
                  "error": "page not fetched" if page is None else ""}
+        if status in {301, 302, 303, 307, 308}:
+            try:
+                info = check_http(static.http, expected)
+                state = {"status_code": info.get("status_code", 0),
+                         "final_url": info.get("final_url", expected),
+                         "redirect_hops": info.get("redirect_hops", 0),
+                         "redirect_loop": info.get("redirect_loop", False),
+                         "error": info.get("error", "")}
+            except Exception as exc:  # noqa: BLE001
+                state["error"] = str(exc)
         if state.get("redirect_loop"):
             findings.append({"rule_id": "redirect_loop", "url": expected,
                              "severity": "critical", "detail": "loop on expected static URL"})
@@ -4494,24 +4514,37 @@ def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
         _emit({"status": "error", "error": f"fontes inválidas: {', '.join(invalid)}"},
               force_json=True)
         return 1
-    with Storage(config.sqlite_path) as storage:
-        svc = AgentRunService(storage)
-        run_id = svc.claim_queued_run("hermes-seo-agent", intent="refresh_data")
-        if run_id is None:
-            run_id = svc.start_run("hermes-seo-agent", trigger="manual",
-                                   intent="refresh_data", mode="analyze",
-                                   started_by=config.app_user or "system",
-                                   sources=sources)
-        run = run_refresh(storage, run_id, sources=sources,
-                          collectors=build_refresh_collectors(config, storage),
-                          reconcile=lambda: collect_reconcile(config))
-        summary = run.get("summary") or {}
-        _emit({"status": "ok",
-               "summary": {"command": "refresh-data", "run_id": run_id,
-                           "status": run.get("status"), "sources": sources,
-                           "results": summary.get("results", {})}},
-              force_json=bool(getattr(args, "json", False)))
-        return 0
+    # Reaproveita o RunContext do ciclo (producers-cycle) quando presente: posts/
+    # sitemap são coletados UMA vez por ciclo (não em refresh + reconcile).
+    shared = getattr(args, "_run_context", None)
+    ctx = shared if shared is not None else None
+    own_ctx = None
+    if ctx is None:
+        from .services.run_context import RunContext
+        own_ctx = RunContext(config)
+        ctx = own_ctx
+    try:
+        with Storage(config.sqlite_path) as storage:
+            svc = AgentRunService(storage)
+            run_id = svc.claim_queued_run("hermes-seo-agent", intent="refresh_data")
+            if run_id is None:
+                run_id = svc.start_run("hermes-seo-agent", trigger="manual",
+                                       intent="refresh_data", mode="analyze",
+                                       started_by=config.app_user or "system",
+                                       sources=sources)
+            run = run_refresh(storage, run_id, sources=sources,
+                              collectors=build_refresh_collectors(config, storage, context=ctx),
+                              reconcile=lambda: collect_reconcile(config, context=ctx))
+            summary = run.get("summary") or {}
+            _emit({"status": "ok",
+                   "summary": {"command": "refresh-data", "run_id": run_id,
+                               "status": run.get("status"), "sources": sources,
+                               "results": summary.get("results", {})}},
+                  force_json=bool(getattr(args, "json", False)))
+            return 0
+    finally:
+        if own_ctx is not None:
+            own_ctx.close()
 
 
 def _cmd_serve(args: argparse.Namespace, config: Any) -> int:

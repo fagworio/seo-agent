@@ -115,10 +115,10 @@ def run_refresh(
 
 # -- coletores reais (reutilizam os conectores existentes) -------------------
 
-def build_refresh_collectors(config: Config, storage: Storage) -> dict[str, Collector]:
+def build_refresh_collectors(config: Config, storage: Storage, context: Any = None) -> dict[str, Collector]:
     return {
-        "wordpress": lambda: _collect_wordpress(config, storage),
-        "sitemap": lambda: _collect_sitemap(config),
+        "wordpress": lambda: _collect_wordpress(config, storage, context=context),
+        "sitemap": lambda: _collect_sitemap(config, context=context),
         "gsc": lambda: _collect_gsc(config),
         "ga4": lambda: _collect_ga4(config),
         "crux": lambda: _collect_crux(config),
@@ -154,12 +154,16 @@ def diff_wp_posts(current: list[dict[str, Any]], previous: dict[int, str]) -> di
             "unchanged": unchanged, "removed": removed}
 
 
-def _collect_wordpress(config: Config, storage: Storage) -> StageResult:
+def _collect_wordpress(config: Config, storage: Storage, context: Any = None) -> StageResult:
     if not getattr(config, "wordpress_url", ""):
         return StageResult("wordpress", status="skipped", error="WORDPRESS_URL vazio")
-    from ..connectors.wordpress import WordPressClient
-    with WordPressClient(config) as wp:
-        posts = wp.list_posts(status="publish")
+    if context is not None:
+        # Reaproveita a coleta do ciclo (RunContext) — não refaz o full scan WP.
+        posts = context.posts()
+    else:
+        from ..connectors.wordpress import WordPressClient
+        with WordPressClient(config) as wp:
+            posts = wp.list_posts(status="publish")
     previous = storage.wp_post_state()
     diff = diff_wp_posts(posts, previous)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -171,12 +175,16 @@ def _collect_wordpress(config: Config, storage: Storage) -> StageResult:
                        data_window=max(modified) if modified else "", extra=diff)
 
 
-def _collect_sitemap(config: Config) -> StageResult:
+def _collect_sitemap(config: Config, context: Any = None) -> StageResult:
     if not getattr(config, "sitemap_url", "") and not getattr(config, "static_site_url", ""):
         return StageResult("sitemap", status="skipped", error="SITEMAP_URL/STATIC_SITE_URL vazio")
-    from ..connectors.static_site import StaticSiteClient
-    with StaticSiteClient(config) as static:
-        urls = static.all_sitemap_urls()
+    if context is not None:
+        # Reaproveita a coleta do ciclo (RunContext) — não rebaixa o sitemap.
+        urls = context.sitemap_urls()
+    else:
+        from ..connectors.static_site import StaticSiteClient
+        with StaticSiteClient(config) as static:
+            urls = static.all_sitemap_urls()
     return StageResult("sitemap", records_read=len(urls))
 
 
@@ -219,21 +227,26 @@ def _collect_corpus(storage: Storage) -> StageResult:
     return StageResult("corpus", records_read=stats.get("documents", 0))
 
 
-def collect_reconcile(config: Config) -> StageResult:
+def collect_reconcile(config: Config, context: Any = None) -> StageResult:
     """R5: reconciliação WordPress × sitemap (três vias) após a coleta.
 
     Detecta páginas ausentes no sitemap, órfãs no sitemap e mismatches
     WordPress×estático — modificações feitas FORA do SEO Agent.
+    `context` (RunContext) faz posts/sitemap serem reaproveitados do ciclo.
     """
     from urllib.parse import urlsplit
-    from ..connectors.static_site import StaticSiteClient
-    from ..connectors.wordpress import WordPressClient
     from ..inventory.reconcile import reconcile
 
     static_host = urlsplit(getattr(config, "static_site_url", "")).netloc or "www.unicorniohater.com.br"
-    with WordPressClient(config) as wp:
-        posts = wp.list_posts(status="publish")
-    with StaticSiteClient(config) as static:
-        sitemap_urls = static.all_sitemap_urls()
+    if context is not None:
+        posts = context.posts()
+        sitemap_urls = context.sitemap_urls()
+    else:
+        from ..connectors.static_site import StaticSiteClient
+        from ..connectors.wordpress import WordPressClient
+        with WordPressClient(config) as wp:
+            posts = wp.list_posts(status="publish")
+        with StaticSiteClient(config) as static:
+            sitemap_urls = static.all_sitemap_urls()
     report = reconcile(posts, sitemap_urls, static_host=static_host)
     return StageResult("reconcile", records_read=len(posts), extra=report.summary())
