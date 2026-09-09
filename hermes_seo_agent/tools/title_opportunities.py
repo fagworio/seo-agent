@@ -162,9 +162,22 @@ def shorten_title(
         return " ".join(out).rstrip("…,;:") + "…"
     budget = max_len - len(entity) - 2  # ": " prefix
     if budget < 10:
-        # Very long entity: fall back to the entity itself (still has the
-        # indexed identity) when it is meaningfully shorter.
-        return entity if len(entity) < len(base) and len(entity) > 0 else None
+        if len(entity) <= max_len - 1 and len(entity) + 2 >= len(base):
+            # Entity alone nearly IS the title (tiny description): dropping
+            # the description loses almost nothing.
+            return entity if entity != base else None
+        # Entity too long for a comfortable ": desc" split: truncate the
+        # WHOLE headline at a word boundary (keeps entity + start of desc).
+        words = re.findall(r"\S+", base)
+        out: list[str] = []
+        for word in words:
+            if len(" ".join(out + [word])) <= max_len - 1:
+                out.append(word)
+            else:
+                break
+        if not out or " ".join(out) == base:
+            return None
+        return " ".join(out).rstrip("…,;:") + "…"
     words = re.findall(r"\S+", rest)
     trimmed: list[str] = []
     for word in words:
