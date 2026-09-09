@@ -595,7 +595,10 @@ class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path), timeout=15)
+        # FastAPI may enter/exit sync dependencies on different thread-pool
+        # workers; the connection remains request-scoped and SQLite writes are
+        # serialized by the existing busy timeout/transactions.
+        self.conn = sqlite3.connect(str(self.path), timeout=15, check_same_thread=False)
         # Robustez para app long-running: busy_timeout evita "database is locked"
         # imediato sob carga (o singleton do get_services já reduz contenção).
         try:
