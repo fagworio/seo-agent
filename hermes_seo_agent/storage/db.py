@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS http_cache (
+    url TEXT PRIMARY KEY,
+    etag TEXT,
+    last_modified TEXT,
+    status_code INTEGER,
+    body BLOB,
+    content_hash TEXT,
+    fetched_at TEXT
+);
 CREATE TABLE IF NOT EXISTS cycles (
     id TEXT PRIMARY KEY,
     started_at TEXT,
@@ -749,6 +758,17 @@ class Storage:
             "updated_at = excluded.updated_at",
             (key, value, now or _now()),
         )
+        self.conn.commit()
+
+    def get_http_cache(self, url: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT url, etag, last_modified, status_code, body, content_hash, fetched_at FROM http_cache WHERE url = ?", (url,)).fetchone()
+        if not row:
+            return None
+        return dict(zip(("url", "etag", "last_modified", "status_code", "body", "content_hash", "fetched_at"), row))
+
+    def save_http_cache(self, url: str, *, etag: str = "", last_modified: str = "", status_code: int = 0,
+                        body: bytes | None = None, content_hash: str = "", fetched_at: str | None = None) -> None:
+        self.conn.execute("INSERT INTO http_cache(url,etag,last_modified,status_code,body,content_hash,fetched_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET etag=excluded.etag,last_modified=excluded.last_modified,status_code=excluded.status_code,body=excluded.body,content_hash=excluded.content_hash,fetched_at=excluded.fetched_at", (url, etag, last_modified, status_code, body, content_hash, fetched_at or _now()))
         self.conn.commit()
 
     # -- google signals (Discover / GSC web / Trends — contexto p/ o front) --

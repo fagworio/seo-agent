@@ -21,10 +21,4 @@ set -a
 source ./.env 2>/dev/null || true
 set +a
 
-out="$("$ROOT/.venv/bin/python" -m hermes_seo_agent.cli inventory --json 2>/dev/null)" || out="ERROR"
-if [ "$out" = "ERROR" ]; then
-  printf '%s\n' "ERROR"
-  exit 0
-fi
-sig="$(printf '%s' "$out" | "$ROOT/.venv/bin/python" -c 'import sys,json,hashlib; d=json.load(sys.stdin); s=d.get("summary",{}); print(hashlib.sha256(json.dumps(s,sort_keys=True).encode()).hexdigest()[:24])' 2>/dev/null)" || sig="ERROR"
-printf '%s\n' "${sig:-0}"
+exec "$ROOT/.venv/bin/python" "$ROOT/hermes/monitor_sqlite.py"

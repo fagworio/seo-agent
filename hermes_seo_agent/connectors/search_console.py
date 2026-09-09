@@ -214,7 +214,10 @@ def _default_token_provider(config: Config,
     token JWT carregue a permissão certa — um token GSC NÃO autoriza GA4.
     """
 
+    credentials = None
+
     def provide() -> str:
+        nonlocal credentials
         if not config.google_credentials:
             raise ConnectorError(
                 "GSC not configured: set GOOGLE_APPLICATION_CREDENTIALS to a "
@@ -227,10 +230,14 @@ def _default_token_provider(config: Config,
             raise ConnectorError(
                 "google-auth is required for GSC: pip install 'hermes-seo-agent[google]'"
             ) from exc
-        creds = service_account.Credentials.from_service_account_file(
-            config.google_credentials, scopes=scopes or [_SCOPE]
-        )
-        creds.refresh(Request())
-        return creds.token
+        if credentials is None:
+            credentials = service_account.Credentials.from_service_account_file(
+                config.google_credentials, scopes=scopes or [_SCOPE]
+            )
+        if (not getattr(credentials, "valid", False)
+                or getattr(credentials, "expired", False)
+                or not getattr(credentials, "token", None)):
+            credentials.refresh(Request())
+        return credentials.token or ""
 
     return provide

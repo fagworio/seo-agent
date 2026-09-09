@@ -8,6 +8,8 @@ this connector reads that surface.
 from __future__ import annotations
 
 import re
+import gzip
+import hashlib
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -146,30 +148,52 @@ class StaticSiteClient:
     def fetch_sitemap_index(self, url: str | None = None) -> list[str]:
         """Parse a <sitemapindex> and return the child sitemap URLs."""
         url = url or self.config.sitemap_url
-        response = self.http.get(url)
+        response = self._cached_get(url)
         if response.status_code != 200:
             raise ConnectorError(f"sitemap index {url} returned HTTP {response.status_code}")
         return _parse_sitemap_urls(response.text, is_index=True)
 
     def fetch_sitemap(self, url: str) -> list[str]:
         """Parse a <urlset> and return the <loc> URLs."""
-        response = self.http.get(url)
+        response = self._cached_get(url)
         if response.status_code != 200:
             raise ConnectorError(f"sitemap {url} returned HTTP {response.status_code}")
         return _parse_sitemap_urls(response.text, is_index=False)
 
+    def _cached_get(self, url: str):
+        from ..storage.db import Storage
+        with Storage(self.config.sqlite_path) as db:
+            cached = db.get_http_cache(url)
+        response = self.http.get_conditional(url, etag=(cached or {}).get("etag", ""),
+                                             last_modified=(cached or {}).get("last_modified", ""))
+        if response.status_code == 304 and cached and cached.get("body") is not None:
+            response = type(response)(status_code=200, headers=response.headers,
+                                      content=gzip.decompress(cached["body"]))
+        elif response.status_code == 200:
+            with Storage(self.config.sqlite_path) as db:
+                db.save_http_cache(url, etag=response.headers.get("etag", ""),
+                                   last_modified=response.headers.get("last-modified", ""),
+                                   status_code=200, body=gzip.compress(response.content),
+                                   content_hash=hashlib.sha256(response.content).hexdigest())
+        return response
+
     def all_sitemap_urls(self, sitemap_url: str | None = None) -> list[str]:
         """Resolve the whole sitemap tree into the final URL list."""
         urls: list[str] = []
-        for child in self.fetch_sitemap_index(sitemap_url):
-            resolved = urljoin(self.config.sitemap_url, child)
-            urls.extend(self.fetch_sitemap(resolved))
+        index_url = sitemap_url or self.config.sitemap_url
+        seen: set[str] = set()
+        for child in self.fetch_sitemap_index(index_url):
+            resolved = urljoin(index_url, child)
+            for url in self.fetch_sitemap(resolved):
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
         return urls
 
     # -- pages ---------------------------------------------------------------
 
     def fetch_page(self, url: str) -> PageSnapshot:
-        response = self.http.get(url)
+        response = self._cached_get(url)
         snapshot = PageSnapshot(url=url, status_code=response.status_code)
         if response.status_code == 200:
             snapshot.html = response.text

@@ -80,8 +80,9 @@ class AnalyticsClient:
             )
         return response.json()
 
-    def _paginate(self, base_payload: dict[str, Any], *, row_limit: int) -> dict[str, Any]:
-        """Collect ALL rows via limit+offset pagination, using rowCount as total."""
+    def _paginate(self, base_payload: dict[str, Any], *, row_limit: int,
+                  max_rows: int | None = None) -> dict[str, Any]:
+        """Collect rows via limit+offset, optionally capped for diagnostics."""
         page_size = min(max(row_limit, 1), 250_000)
         rows: list[dict[str, Any]] = []
         row_count = 0
@@ -95,9 +96,11 @@ class AnalyticsClient:
             quota = data.get("propertyQuota") or quota
             batch = self._parse_rows(data, base_payload["dimensions"],
                                      base_payload["metrics"])
+            if max_rows is not None:
+                batch = batch[: max(0, max_rows - len(rows))]
             rows.extend(batch)
             offset += page_size
-            if not batch or offset >= row_count:
+            if not batch or offset >= row_count or (max_rows is not None and len(rows) >= max_rows):
                 break
         return {"rows": rows, "row_count": row_count, "quota": quota}
 
@@ -126,6 +129,7 @@ class AnalyticsClient:
         start_date: str,
         end_date: str,
         row_limit: int = 25_000,
+        max_rows: int | None = None,
         known_urls: set[str] | None = None,
         expected_domain: str = "",
     ) -> dict[str, Any]:
@@ -146,7 +150,7 @@ class AnalyticsClient:
                 }
             },
         }
-        result = self._paginate(payload, row_limit=row_limit)
+        result = self._paginate(payload, row_limit=row_limit, max_rows=max_rows)
         rows: list[dict[str, Any]] = []
         unmatched: list[dict[str, str]] = []
         for raw in result["rows"]:
@@ -213,7 +217,7 @@ class AnalyticsClient:
     def status(self, *, start_date: str, end_date: str) -> dict[str, Any]:
         """Diagnóstico da coleta: configuração + amostra da property."""
         result = self.organic_landing_performance(
-            start_date=start_date, end_date=end_date, row_limit=100,
+            start_date=start_date, end_date=end_date, row_limit=100, max_rows=100,
         )
         return {
             "configured": True,

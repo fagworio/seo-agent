@@ -208,6 +208,24 @@ def test_status_report(monkeypatch):
     assert status["quota"]["tokensPerDay"]["remaining"] == 100
 
 
+def test_status_caps_rows_without_scanning_all_pages(monkeypatch):
+    config = _make_config(monkeypatch)
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body.get("offset", 0))
+        return httpx.Response(200, json=_report_response(
+            [_organic_row(f"https://www.unicorniohater.com.br/p{i}/") for i in range(100)],
+            row_count=10_000,
+        ))
+
+    client = _client(config, handler)
+    status = client.status(start_date="2026-01-01", end_date="2026-01-28")
+    assert status["rows_returned"] == 10_000
+    assert calls == [0]
+
+
 def test_ga4_requires_property_id(monkeypatch):
     monkeypatch.delenv("GA4_PROPERTY_ID", raising=False)
     monkeypatch.setenv("SEO_ENV_FILE", "/nonexistent")

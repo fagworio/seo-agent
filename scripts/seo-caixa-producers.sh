@@ -53,12 +53,7 @@ run_stage() { # run_stage NOME cmd [args...]
 before_check=$(counts checklist); before_backlog=$(counts backlog); before_briefs=$(counts briefs)
 echo "[$(stamp)] inicio (checklist=$before_check backlog=$before_backlog briefs=$before_briefs)" >>"$LOG"
 
-run_stage refresh-data "$BIN" refresh-data --json >/dev/null
-run_stage demand "$BIN" demand --store --json >/dev/null
-run_stage reconcile-work-items "$BIN" reconcile-work-items --apply --json >/dev/null
-run_stage title-opportunities "$BIN" title-opportunities --persist --json >/dev/null
-run_stage content-brief "$BIN" content-brief --store --limit 20 --json >/dev/null
-run_stage editorial-backlog "$BIN" editorial-backlog --json >/dev/null
+run_stage producers-cycle "$BIN" producers-cycle --json >/dev/null
 
 after_check=$(counts checklist); after_backlog=$(counts backlog); after_briefs=$(counts briefs)
 echo "[$(stamp)] fim (checklist=$after_check backlog=$after_backlog briefs=$after_briefs)" >>"$LOG"

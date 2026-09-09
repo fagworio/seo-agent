@@ -170,11 +170,80 @@ def get_provider(config: Any) -> MarketIntelligenceProvider:
         trends_key = getattr(config, "trends_api_key", "") or getattr(
             config, "pagespeed_api_key", "") or ""
         if trends_key:
-            return TrendsProvider(config)
+            return _attach_persistent_cache(TrendsProvider(config), config)
         return NoopProvider(config)
     if mode == "scrape":
-        return TrendsScrapeProvider(config)
+        return _attach_persistent_cache(TrendsScrapeProvider(config), config)
     return NoopProvider(config)
+
+
+def _attach_persistent_cache(provider: MarketIntelligenceProvider, config: Any):
+    import types
+    original = provider.trend_signal
+    cache = {}
+    def cached(self, keyword):
+        import json, time
+        from ..storage.db import Storage
+        key = f"trends:{provider.name}:trend_signal:{keyword}"
+        try:
+            with Storage(config.sqlite_path) as db:
+                raw = db.get_setting(key, "")
+            if raw:
+                item = json.loads(raw)
+                if time.time() - float(item.get("ts", 0)) < 86400:
+                    return item.get("value")
+        except Exception:
+            pass
+        value = original(keyword)
+        try:
+            with Storage(config.sqlite_path) as db:
+                db.set_setting(key, json.dumps({"ts": time.time(), "value": value}))
+        except Exception:
+            pass
+        return value
+    provider.trend_signal = types.MethodType(cached, provider)
+    return provider
+
+
+class _PersistentCacheProvider(MarketIntelligenceProvider):
+    """Small SQLite TTL cache shared by CLI processes."""
+    def __init__(self, inner: MarketIntelligenceProvider, config: Any, ttl: int = 86400):
+        super().__init__(config)
+        self.inner, self.ttl = inner, ttl
+        self.name = inner.name
+        self.cost_per_call_cents = inner.cost_per_call_cents
+
+    def _call(self, method: str, key: str, fn):
+        import json, time
+        from ..storage.db import Storage
+        cache_key = f"trends:{self.name}:{method}:{key}"
+        try:
+            with Storage(self.config.sqlite_path) as db:
+                raw = db.get_setting(cache_key, "")
+            if raw:
+                item = json.loads(raw)
+                if time.time() - float(item.get("ts", 0)) < self.ttl:
+                    return item.get("value")
+        except Exception:
+            pass
+        value = fn()
+        try:
+            with Storage(self.config.sqlite_path) as db:
+                db.set_setting(cache_key, json.dumps({"ts": time.time(), "value": value}))
+        except Exception:
+            pass
+        return value
+
+    def keyword_metrics(self, keyword, *, limit=10):
+        return self._call("keyword_metrics", f"{keyword}:{limit}", lambda: self.inner.keyword_metrics(keyword, limit=limit))
+    def keyword_suggestions(self, seed, *, limit=20):
+        return self._call("keyword_suggestions", f"{seed}:{limit}", lambda: self.inner.keyword_suggestions(seed, limit=limit))
+    def competitor_gap(self, topic, *, limit=10):
+        return self._call("competitor_gap", f"{topic}:{limit}", lambda: self.inner.competitor_gap(topic, limit=limit))
+    def serp_snapshot(self, keyword, *, limit=10):
+        return self._call("serp_snapshot", f"{keyword}:{limit}", lambda: self.inner.serp_snapshot(keyword, limit=limit))
+    def trend_signal(self, keyword):
+        return self._call("trend_signal", keyword, lambda: self.inner.trend_signal(keyword))
 
 
 class TrendsScrapeProvider(MarketIntelligenceProvider):
@@ -477,4 +546,3 @@ def _parse_timeline(data: dict[str, Any], keyword: str) -> list[dict[str, Any]]:
             break
     points.sort(key=lambda p: p["date"])
     return points
-

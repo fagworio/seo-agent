@@ -15,6 +15,7 @@ unless DRY_RUN=false in .env AND the executor exists (Phase 4).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import datetime
 import json
 import os
@@ -121,6 +122,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("serve", "Control plane: servir /api/v1 via HTTP (stdlib; trocável por FastAPI)"),
         ("user", "Control plane: manage users, roles and bootstrap admin"),
         ("refresh-data", "Control plane: coletar fontes como AgentRun refresh_data (R3)"),
+        ("producers-cycle", "Run all Caixa producers in one process"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -447,6 +449,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--sources", default="",
                            help="fontes separadas por vírgula (wordpress,sitemap,gsc,ga4,crux,corpus); vazio = todas")
             p.set_defaults(func=_cmd_refresh_data)
+        elif name == "producers-cycle":
+            p.set_defaults(func=_cmd_producers_cycle)
         else:
             p.set_defaults(func=_cmd_inventory)
 
@@ -554,98 +558,138 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     started = _now()
     cycle_id = f"cycle-{uuid.uuid4().hex[:12]}"
 
-    with WordPressClient(config) as wp, StaticSiteClient(config) as static:
-        posts = wp.list_posts(status="publish")
-        sitemap_urls = static.all_sitemap_urls()
-        report = reconcile(posts, sitemap_urls, static_host=_static_host(config))
+    shared = getattr(args, "_run_context", None)
+    clients = shared if shared is not None else None
+    if clients is None:
+        from .services.run_context import RunContext
+        clients = RunContext(config)
+    wp, static = clients.wordpress(), clients.static()
+    posts = clients.posts()
+    sitemap_urls = clients.sitemap_urls()
+    if getattr(args, "_incremental", False):
+        fingerprint = hashlib.sha256("\n".join(sitemap_urls).encode()).hexdigest()
+        with Storage(config.sqlite_path) as checkpoint:
+            previous = checkpoint.get_setting("audit:sitemap_fingerprint", "")
+            checkpoint.set_setting("audit:sitemap_fingerprint", fingerprint)
+        if previous and previous == fingerprint:
+            result = {"status": "skipped", "summary": {"command": "audit",
+                       "reason": "sitemap unchanged", "audited_urls": 0, "findings": 0},
+                      "findings": [], "safe_actions": [], "approval_required": []}
+            _emit(result, force_json=args.json)
+            if shared is None:
+                clients.close()
+            return 0
+    report = reconcile(posts, sitemap_urls, static_host=_static_host(config))
 
-        # Robots first: one fetch, used by all sitemap-blocked checks.
-        robots = static.fetch_robots()
-        blocked = robots_check.sitemap_urls_blocked(robots, sitemap_urls)
+    # Robots first: one fetch, used by all sitemap-blocked checks.
+    robots = static.fetch_robots()
+    blocked = robots_check.sitemap_urls_blocked(robots, sitemap_urls)
 
-        # Bounded deterministic audit of the sitemap sample.
-        sample = sitemap_urls[:limit]
-        findings: list[dict[str, Any]] = []
-        pages = [static.fetch_page(url) for url in sample]
+    # Bounded deterministic audit of the sitemap sample.
+    sample_start = 0
+    if sitemap_urls and len(sitemap_urls) > limit:
+        with Storage(config.sqlite_path) as cursor_storage:
+            sample_start = int(cursor_storage.get_setting("audit:sitemap_cursor", "0") or 0) % len(sitemap_urls)
+            cursor_storage.set_setting("audit:sitemap_cursor", str((sample_start + limit) % len(sitemap_urls)))
+    sample = (sitemap_urls[sample_start:] + sitemap_urls[:sample_start])[:limit]
+    findings: list[dict[str, Any]] = []
+    pages = [static.fetch_page(url) for url in sample]
 
-        # Local history: every analyzed page gets a snapshot (before/after basis).
-        with Storage(config.sqlite_path) as snap_storage:
-            for page in pages:
-                _save_page_snapshot(snap_storage, page, cycle_id=cycle_id, source="audit")
-
-        # HTTP health pass: status >= 400, redirect chains, redirect loops.
-        for url in sample:
-            state = check_http(static.http, url, max_hops=config.max_redirect_hops)
-            if state.get("redirect_loop"):
-                findings.append({"rule_id": "redirect_loop", "url": url,
-                                 "severity": "critical", "detail": state.get("error", "loop")})
-            elif state.get("error") and state["status_code"] == 0:
-                findings.append({"rule_id": "broken_internal_link", "url": url,
-                                 "severity": "high", "detail": state.get("error", "unreachable")})
-            elif state["status_code"] >= 400:
-                findings.append({"rule_id": "broken_internal_link", "url": url,
-                                 "severity": "high",
-                                 "detail": f"HTTP {state['status_code']} (final {state['final_url']})"})
-            elif state.get("redirect_hops", 0) > 1:
-                findings.append({"rule_id": "redirect_chain", "url": url,
-                                 "severity": "medium",
-                                 "detail": f"{state['redirect_hops']} hops -> {state['final_url']}"})
-
-        # wp_static_mismatch: published post whose expected static URL is not
-        # rendered (bounded sample, deterministic GET).
-        for post in posts[:limit]:
-            expected = wp_link_to_static(post.get("link", ""), _static_host(config))
-            state = check_http(static.http, expected, max_hops=config.max_redirect_hops)
-            if state.get("redirect_loop"):
-                findings.append({"rule_id": "redirect_loop", "url": expected,
-                                 "severity": "critical", "detail": "loop on expected static URL"})
-            elif state["status_code"] == 0 or state["status_code"] >= 400:
-                findings.append(
-                    {
-                        "rule_id": "wp_static_mismatch",
-                        "url": post.get("link", ""),
-                        "severity": "high",
-                        "detail": f"expected static URL {expected} -> HTTP {state['status_code']}"
-                                  f" ({state.get('error', 'not rendered')})",
-                    }
-                )
-
+    # Local history: every analyzed page gets a snapshot (before/after basis).
+    with Storage(config.sqlite_path) as snap_storage:
         for page in pages:
-            expected = _expected_canonical(page.url, config)
-            findings.extend(
-                _finding(f, page.url) for f in meta_check.meta_findings(page)
-            )
-            findings.extend(
-                _finding(f, page.url) for f in meta_check.canonical_findings(page, expected_canonical=expected)
-            )
-        for f in meta_check.duplicate_title_findings(pages):
-            rule = get_rule("title_duplicate")
+            _save_page_snapshot(snap_storage, page, cycle_id=cycle_id, source="audit")
+
+    # HTTP health pass reuses the page fetch above (one GET per URL).
+    # Redirect-chain details require an extra request and are intentionally
+    # collected only by the dedicated HTTP check command.
+    page_by_url = {p.url: p for p in pages}
+    for url in sample:
+        page = page_by_url.get(url)
+        state = {"status_code": page.status_code if page else 0,
+                 "final_url": page.url if page else url,
+                 "redirect_hops": 0, "redirect_loop": False,
+                 "error": "page not fetched" if page is None else ""}
+        if state.get("redirect_loop"):
+            findings.append({"rule_id": "redirect_loop", "url": url,
+                             "severity": "critical", "detail": state.get("error", "loop")})
+        elif state.get("error") and state["status_code"] == 0:
+            findings.append({"rule_id": "broken_internal_link", "url": url,
+                             "severity": "high", "detail": state.get("error", "unreachable")})
+        elif state["status_code"] >= 400:
+            findings.append({"rule_id": "broken_internal_link", "url": url,
+                             "severity": "high",
+                             "detail": f"HTTP {state['status_code']} (final {state['final_url']})"})
+        elif state.get("redirect_hops", 0) > 1:
+            findings.append({"rule_id": "redirect_chain", "url": url,
+                             "severity": "medium",
+                             "detail": f"{state['redirect_hops']} hops -> {state['final_url']}"})
+
+    # wp_static_mismatch: published post whose expected static URL is not
+    # rendered (bounded sample, deterministic GET).
+    for post in posts[:limit]:
+        expected = wp_link_to_static(post.get("link", ""), _static_host(config))
+        page = page_by_url.get(expected)
+        if page is None:
+            try:
+                page = static.fetch_page(expected)
+                page_by_url[expected] = page
+            except Exception:
+                page = None
+        state = {"status_code": page.status_code if page else 0,
+                 "final_url": page.url if page else expected,
+                 "redirect_hops": 0, "redirect_loop": False,
+                 "error": "page not fetched" if page is None else ""}
+        if state.get("redirect_loop"):
+            findings.append({"rule_id": "redirect_loop", "url": expected,
+                             "severity": "critical", "detail": "loop on expected static URL"})
+        elif state["status_code"] == 0 or state["status_code"] >= 400:
             findings.append(
                 {
-                    "rule_id": "title_duplicate",
-                    "url": ", ".join(f.get("urls", [])),
-                    "severity": rule.severity if rule else "medium",
-                    "detail": f.get("detail", ""),
+                    "rule_id": "wp_static_mismatch",
+                    "url": post.get("link", ""),
+                    "severity": "high",
+                    "detail": f"expected static URL {expected} -> HTTP {state['status_code']}"
+                              f" ({state.get('error', 'not rendered')})",
                 }
             )
+
+    for page in pages:
+        expected = _expected_canonical(page.url, config)
         findings.extend(
-            {
-                "rule_id": "sitemap_blocked",
-                "url": item["url"],
-                "severity": "high",
-                "detail": f"blocked by robots.txt rule {item['rule']!r}",
-            }
-            for item in blocked
+            _finding(f, page.url) for f in meta_check.meta_findings(page)
         )
         findings.extend(
-            {
-                "rule_id": "wp_static_mismatch",
-                "url": item.get("wp_link", ""),
-                "severity": "high",
-                "detail": f"expected static URL {item.get('expected_static', '')} not rendered",
-            }
-            for item in report.wp_static_mismatch[:limit]
+            _finding(f, page.url) for f in meta_check.canonical_findings(page, expected_canonical=expected)
         )
+    for f in meta_check.duplicate_title_findings(pages):
+        rule = get_rule("title_duplicate")
+        findings.append(
+            {
+                "rule_id": "title_duplicate",
+                "url": ", ".join(f.get("urls", [])),
+                "severity": rule.severity if rule else "medium",
+                "detail": f.get("detail", ""),
+            }
+        )
+    findings.extend(
+        {
+            "rule_id": "sitemap_blocked",
+            "url": item["url"],
+            "severity": "high",
+            "detail": f"blocked by robots.txt rule {item['rule']!r}",
+        }
+        for item in blocked
+    )
+    findings.extend(
+        {
+            "rule_id": "wp_static_mismatch",
+            "url": item.get("wp_link", ""),
+            "severity": "high",
+            "detail": f"expected static URL {item.get('expected_static', '')} not rendered",
+        }
+        for item in report.wp_static_mismatch[:limit]
+    )
 
     plan = build_action_plan(findings, max_safe_fix=config.max_safe_fix_per_cycle)
     summary = {"command": "audit", "cycle_id": cycle_id, **report.summary(),
@@ -672,9 +716,13 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
             result.setdefault("warnings", []).append(f"state persist failed: {exc}")
         if not getattr(args, "json", False):
             sys.stdout.write(render_markdown(result))
+            if shared is None:
+                clients.close()
             return 0
 
     _emit(result, force_json=args.json)
+    if shared is None:
+        clients.close()
     return 0
 
 
@@ -785,7 +833,7 @@ def _cmd_inspect(args: argparse.Namespace, config: Any) -> int:
             "pending_top": storage.pending_snapshot(10),
         }
         _emit(result, force_json=True)
-        return 0
+    return 0
 
 
 def _cmd_opportunities(args: argparse.Namespace, config: Any) -> int:
@@ -795,7 +843,8 @@ def _cmd_opportunities(args: argparse.Namespace, config: Any) -> int:
 
     # -- tier A: low CTR / zero-click (needs GSC) ----------------------------
     if config.google_credentials:
-        gsc = SearchConsoleClient(config)
+        shared = getattr(args, "_run_context", None)
+        gsc = shared.search_console() if shared is not None else SearchConsoleClient(config)
         end = date.today()
         start = end - timedelta(days=config.search_analytics_days)
         try:
@@ -1109,6 +1158,38 @@ def _cmd_telemetry(args: argparse.Namespace, config: Any) -> int:
     return 0
 
 
+def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
+    """Run Caixa producers in one process, sharing connector context."""
+    import contextlib, io
+    from .services.run_context import RunContext
+    ctx = RunContext(config)
+    stages = [("refresh-data", _cmd_refresh_data, _ns(sources="wordpress,sitemap", json=True)),
+              ("demand", _cmd_demand, _ns(store=True, min_impressions=0)),
+              ("title-opportunities", _cmd_opportunities, _ns(json=True)),
+              ("content-brief", _cmd_content_brief, _ns(store=True, limit=20, json=True)),
+              ("editorial-backlog", _cmd_editorial_backlog, _ns(json=True))]
+    errors, completed = [], []
+    try:
+        for name, func, stage_args in stages:
+            setattr(stage_args, "_run_context", ctx)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = func(args=stage_args, config=config)
+                if isinstance(rc, int) and rc != 0:
+                    errors.append(f"{name}: exit {rc}")
+                else:
+                    completed.append(name)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+    finally:
+        ctx.close()
+    result = {"status": "partial" if errors else "ok",
+              "summary": {"command": "producers-cycle", "stages": completed, "errors": errors},
+              "findings": [], "safe_actions": [], "approval_required": []}
+    _emit(result, force_json=True)
+    return 1 if errors and not completed else 0
+
+
 def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     """Watchdog: run the right phase by time-of-day (publish-cron pattern).
 
@@ -1119,24 +1200,48 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     import contextlib
     import datetime
     import io
+    import json
     from .services.agent_runs import AgentRunService
 
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(datetime.timezone.utc)
     steps: list[str] = []
+    errors: list[str] = []
+    totals = {"urls": 0, "findings": 0, "opportunities": 0, "safe_fixes": 0, "executed": 0}
     with Storage(config.sqlite_path) as run_storage:
         scheduled_run_id = AgentRunService(run_storage).start_run(
             "hermes-seo-agent", trigger="schedule", intent="normal_cycle",
             mode="analyze", started_by="system",
         )
 
-    def run_silently(func, **kw) -> None:
-        """Run an internal command swallowing its stdout (single JSON out)."""
-        with contextlib.redirect_stdout(io.StringIO()):
-            func(**kw)
+    def run_silently(func, **kw) -> bool:
+        """Run an internal command swallowing stdout while preserving failures."""
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = func(**kw)
+            try:
+                payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
+                summary = payload.get("summary", {})
+                for key in totals:
+                    totals[key] += int(summary.get(key, summary.get("audited_urls", 0) if key == "urls" else 0) or 0)
+            except Exception:
+                pass
+            if isinstance(code, int) and code != 0:
+                errors.append(f"{func.__name__}: exit {code}")
+                return False
+            return True
+        except Exception as exc:  # scheduler must always close its run
+            errors.append(f"{func.__name__}: {exc}")
+            return False
+
+    from .services.run_context import RunContext
+    run_context = RunContext(config)
 
     # 1) Bounded audit + report (always).
     run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run, json=True,
-                                      markdown=False, command="report"), config=config)
+                                      markdown=False, command="report",
+                                      _run_context=run_context,
+                                      _incremental=True), config=config)
     steps.append("audit")
 
     # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
@@ -1164,8 +1269,6 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     # 3) Weekly deep report + opportunities + deep post-audit.
     if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
         run_silently(_cmd_opportunities, args=_ns(json=True), config=config)
-        run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run * 2, json=True,
-                                          markdown=False, command="report"), config=config)
         run_silently(_cmd_post_audit, args=_ns(limit=50, min_impressions=50,
                                                write=True, json=True), config=config)
         steps.append("deep_report")
@@ -1200,23 +1303,31 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             if c["status"] not in ("approved", "queued"):
                 continue
             next_at = c.get("next_run_at") or ""
-            if next_at and next_at > now.isoformat():
-                continue
+            if next_at:
+                try:
+                    due_at = datetime.datetime.fromisoformat(next_at.replace("Z", "+00:00"))
+                    if due_at.tzinfo is None:
+                        due_at = due_at.replace(tzinfo=datetime.timezone.utc)
+                    if due_at > now:
+                        continue
+                except ValueError:
+                    errors.append(f"campaign-{c['id']}: invalid next_run_at")
+                    continue
             csvc.run(c["id"], actor="system")
             steps.append(f"campaign-{c['id']}")
 
+    run_context.close()
     result = {
-        "status": "ok",
+        "status": "partial" if errors else "ok",
         "summary": {"command": "schedule", "steps": steps,
-                    "hour": now.hour, "weekday": now.weekday()},
+                    "hour": now.hour, "weekday": now.weekday(), "errors": errors},
         "findings": [],
         "safe_actions": [],
         "approval_required": [],
     }
     with Storage(config.sqlite_path) as run_storage:
         AgentRunService(run_storage).complete(
-            scheduled_run_id, status="success", urls=0, findings=0,
-            opportunities=0, safe_fixes=0, executed=0,
+            scheduled_run_id, status="partial" if errors else "success", **totals,
             summary={"steps": steps, "revalidation_window_days": 7},
         )
     _emit(result, force_json=True)
@@ -1382,7 +1493,8 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                          ensure_ascii=False))
         return 2
 
-    gsc = SearchConsoleClient(config)
+    shared = getattr(args, "_run_context", None)
+    gsc = shared.search_console() if shared is not None else SearchConsoleClient(config)
     end = date.today()
     start = end - timedelta(days=config.search_analytics_days)
 
@@ -1434,17 +1546,22 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     targets = eligible
 
     with StaticSiteClient(config) as static, WordPressClient(config) as wp:
-        # Pass 1: collect each page's real GSC queries (row_limit=15).
+        # Pass 1: collect page/query rows once, then group locally (avoids N+1).
         page_queries: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+        query_map: dict[str, list[dict[str, Any]]] = {}
+        try:
+            for item in gsc.search_analytics_query_page(
+                    start_date=start.isoformat(), end_date=end.isoformat(), row_limit=25_000):
+                keys = item.get("keys") or []
+                if len(keys) >= 2:
+                    query_map.setdefault(keys[1], []).append({"keys": [keys[0]], **item})
+            for values in query_map.values():
+                values.sort(key=lambda x: float(x.get("clicks", 0)), reverse=True)
+        except ConnectorError as exc:
+            warnings.append(f"query/page: {exc}")
         for row in targets:
             url = (row.get("keys") or [""])[0]
-            try:
-                queries = gsc.top_queries(url, start_date=start.isoformat(),
-                                          end_date=end.isoformat(), row_limit=15)
-            except ConnectorError as exc:
-                warnings.append(f"{url}: {exc}")
-                continue
-            page_queries.append((row, queries))
+            page_queries.append((row, query_map.get(url, [])[:15]))
 
         # Pass 2: Google Trends for the top-5 queries of each page (dedup
         # global; fail-soft -> neutral scores when Trends is unreachable).
@@ -1972,6 +2089,23 @@ def _cmd_post_audit(args: argparse.Namespace, config: Any) -> int:
     # Prioriza CTR baixo + muito volume.
     candidates.sort(key=lambda r: (float(r.get("ctr", 1)), -float(r.get("impressions", 0))))
     pool = candidates[: (args.limit or 20) * 3]
+    previous_by_url = {}
+    try:
+        previous_rows = gsc.search_analytics_by_page(
+            start_date=prev_start.isoformat(),
+            end_date=(start - timedelta(days=1)).isoformat())
+        previous_by_url = {(r.get("keys") or [""])[0]: r for r in previous_rows}
+    except Exception:
+        previous_by_url = {}
+    queries_by_url = {}
+    try:
+        for item in gsc.search_analytics_query_page(
+                start_date=start.isoformat(), end_date=end.isoformat(), row_limit=25_000):
+            keys = item.get("keys") or []
+            if len(keys) >= 2:
+                queries_by_url.setdefault(keys[1], []).append({"keys": [keys[0]], **item})
+    except Exception:
+        queries_by_url = {}
 
     rows: list[dict[str, Any]] = []
     with Storage(config.sqlite_path) as storage, \
@@ -2007,20 +2141,13 @@ def _cmd_post_audit(args: argparse.Namespace, config: Any) -> int:
                 pass
             lost = False
             try:
-                prev = gsc.page_metrics(
-                    url, start_date=prev_start.isoformat(),
-                    end_date=(start - timedelta(days=1)).isoformat(),
-                )
+                prev = previous_by_url.get(url, {})
                 lost = prev.get("impressions", 0) > float(row.get("impressions", 0)) * LOST_TRAFFIC_RATIO
             except Exception:
                 pass
 
-            queries: list[dict[str, Any]] = []
-            try:
-                queries = gsc.top_queries(url, start_date=start.isoformat(),
-                                          end_date=end.isoformat(), row_limit=15)
-            except Exception:
-                pass  # Lack of query detail must not prevent the broader audit.
+            queries = sorted(queries_by_url.get(url, []),
+                             key=lambda x: float(x.get("clicks", 0)), reverse=True)[:15]
             brief = build_content_brief(page, queries) if page else {"signals": {}, "suggestions": []}
             content = {"word_count": word_count, "age_days": age_days, "lost_traffic": lost,
                        **brief["signals"]}

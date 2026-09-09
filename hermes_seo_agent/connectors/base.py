@@ -52,6 +52,16 @@ class HttpClient:
         """GET with retries; raises ConnectorError when all attempts fail."""
         return self._request("GET", url, params=params, headers=headers)
 
+    def get_conditional(self, url: str, *, etag: str = "", last_modified: str = "",
+                        headers: dict[str, str] | None = None) -> httpx.Response:
+        """GET using HTTP validators; callers handle a 304 response."""
+        merged = dict(headers or {})
+        if etag:
+            merged["If-None-Match"] = etag
+        if last_modified:
+            merged["If-Modified-Since"] = last_modified
+        return self.get(url, headers=merged)
+
     def post(self, url: str, *, json_body: dict[str, Any] | None = None,
              headers: dict[str, str] | None = None,
              params: dict[str, Any] | None = None) -> httpx.Response:
