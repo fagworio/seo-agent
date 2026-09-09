@@ -154,14 +154,14 @@ class StaticSiteClient:
     def fetch_sitemap_index(self, url: str | None = None) -> list[str]:
         """Parse a <sitemapindex> and return the child sitemap URLs."""
         url = url or self.config.sitemap_url
-        response = self._cached_get(url)
+        response = self._cached_get(url, cache_body=True)
         if response.status_code != 200:
             raise ConnectorError(f"sitemap index {url} returned HTTP {response.status_code}")
         return _parse_sitemap_urls(response.text, is_index=True)
 
     def fetch_sitemap(self, url: str) -> list[str]:
         """Parse a <urlset> and return the <loc> URLs."""
-        response = self._cached_get(url)
+        response = self._cached_get(url, cache_body=True)
         if response.status_code != 200:
             raise ConnectorError(f"sitemap {url} returned HTTP {response.status_code}")
         return _parse_sitemap_urls(response.text, is_index=False)
@@ -185,7 +185,7 @@ class StaticSiteClient:
         return entries
 
     def _fetch_sitemap_entries(self, url: str) -> list[tuple[str, str]]:
-        response = self._cached_get(url)
+        response = self._cached_get(url, cache_body=True)
         if response.status_code != 200:
             raise ConnectorError(f"sitemap {url} returned HTTP {response.status_code}")
         return _parse_sitemap_entries(response.text, is_index=False)
@@ -199,19 +199,65 @@ class StaticSiteClient:
             self._own_store = Storage(self.config.sqlite_path)
         return self._own_store
 
-    def _cached_get(self, url: str):
+    def _disk_path(self, url: str) -> str:
+        import os
+        base = getattr(self.config, "http_cache_dir", "./state/http_cache")
+        return os.path.join(base, hashlib.sha256(url.encode()).hexdigest()[:32] + ".gz")
+
+    def _disk_write(self, url: str, data: bytes) -> None:
+        import os
+        path = self._disk_path(url)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(data)
+        except Exception:
+            pass  # cache de disco é best-effort; nunca derrubar o fetch
+
+    def _disk_read(self, url: str) -> bytes | None:
+        path = self._disk_path(url)
+        try:
+            with open(path, "rb") as fh:
+                return fh.read()
+        except Exception:
+            return None
+
+    def _cached_get(self, url: str, *, cache_body: bool = True):
+        """GET condicional com cache. `cache_body`:
+        - True (sitemap/robots/recursos): guarda o corpo gzip no SQLite.
+        - False (páginas): guarda só ETag/Last-Modified/content_hash no SQLite e o
+          corpo gzip em ARQUIVO NO DISCO (evita inflar o SQLite com HTML de
+          milhares de páginas). Em 304, reconstrói a resposta a partir do disco.
+        """
         store = self._get_store()
         cached = store.get_http_cache(url)
         response = self.http.get_conditional(url, etag=(cached or {}).get("etag", ""),
                                              last_modified=(cached or {}).get("last_modified", ""))
-        if response.status_code == 304 and cached and cached.get("body") is not None:
-            response = type(response)(status_code=200, headers=response.headers,
-                                      content=gzip.decompress(cached["body"]))
-        elif response.status_code == 200:
-            store.save_http_cache(url, etag=response.headers.get("etag", ""),
-                                  last_modified=response.headers.get("last-modified", ""),
-                                  status_code=200, body=gzip.compress(response.content),
-                                  content_hash=hashlib.sha256(response.content).hexdigest())
+        if response.status_code == 304:
+            body = None
+            if cache_body:
+                body = (cached or {}).get("body")
+            else:
+                b = self._disk_read(url)
+                body = b if b is not None else None
+            if body is not None:
+                response = type(response)(status_code=200, headers=response.headers,
+                                          content=gzip.decompress(body))
+            else:
+                # 304 sem corpo disponível (cache limpo): força um GET pleno.
+                response = self.http.get(url)
+        if response.status_code == 200:
+            etag = response.headers.get("etag", "")
+            last_modified = response.headers.get("last-modified", "")
+            content_hash = hashlib.sha256(response.content).hexdigest()
+            if cache_body:
+                store.save_http_cache(url, etag=etag, last_modified=last_modified,
+                                      status_code=200, body=gzip.compress(response.content),
+                                      content_hash=content_hash)
+            else:
+                self._disk_write(url, gzip.compress(response.content))
+                store.save_http_cache(url, etag=etag, last_modified=last_modified,
+                                      status_code=200, body=None, content_hash=content_hash)
         return response
 
     def all_sitemap_urls(self, sitemap_url: str | None = None) -> list[str]:
@@ -221,7 +267,9 @@ class StaticSiteClient:
     # -- pages ---------------------------------------------------------------
 
     def fetch_page(self, url: str) -> PageSnapshot:
-        response = self._cached_get(url)
+        # Corpo da página vai para cache de DISCO (separado do SQLite); no banco
+        # só ETag/Last-Modified/content_hash.
+        response = self._cached_get(url, cache_body=False)
         snapshot = PageSnapshot(url=url, status_code=response.status_code)
         if response.status_code == 200:
             snapshot.html = response.text

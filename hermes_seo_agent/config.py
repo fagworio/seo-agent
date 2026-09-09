@@ -76,6 +76,7 @@ class Config:
     session_cookie_secure: bool = True
     session_touch_interval_seconds: int = 300   # intervalo min. entre touch de sessão (read-only em GETs)
     scheduler_timezone: str = "America/Sao_Paulo"  # hora LOCAL p/ decisões do scheduler (banco fica em UTC)
+    http_cache_dir: str = "./state/http_cache"    # corpo HTML de páginas fora do SQLite
     auth_max_attempts: int = 5                  # janela de brute-force
     auth_attempt_window_seconds: int = 900      # por email/IP
     csrf_header: str = "X-CSRF-Token"
@@ -241,6 +242,7 @@ def load_config() -> Config:
             "SESSION_TOUCH_INTERVAL_SECONDS", 300, 0, 86400
         ),
         scheduler_timezone=_env("SCHEDULER_TIMEZONE", "America/Sao_Paulo"),
+        http_cache_dir=_env("HTTP_CACHE_DIR", "./state/http_cache"),
         session_cookie_name=_env("SESSION_COOKIE_NAME", "__Host-seo_session"),
         session_cookie_secure=_bool("SESSION_COOKIE_SECURE", True),
         auth_max_attempts=_int("AUTH_MAX_ATTEMPTS", 5, 1, 1000),
