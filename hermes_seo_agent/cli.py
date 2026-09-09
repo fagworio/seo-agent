@@ -1275,9 +1275,13 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     import datetime
     import io
     import json
+    from zoneinfo import ZoneInfo
     from .services.agent_runs import AgentRunService
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    # Decisões do scheduler em hora LOCAL (inspect-hours é hora local). O banco
+    # continua em UTC (_now()); aqui só a janela de execução usa o fuso local.
+    _local_tz = ZoneInfo(getattr(config, "scheduler_timezone", "America/Sao_Paulo"))
+    now = datetime.datetime.now(_local_tz)
     steps: list[str] = []
     errors: list[str] = []
     totals = {"urls": 0, "findings": 0, "opportunities": 0, "safe_fixes": 0, "executed": 0}
