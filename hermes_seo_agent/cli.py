@@ -1586,8 +1586,12 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     start = end - timedelta(days=config.search_analytics_days)
 
     try:
-        pages = gsc.search_analytics_by_page(start_date=start.isoformat(),
-                                             end_date=end.isoformat())
+        # Reaproveita a coleta do ciclo (RunContext) quando presente (P5).
+        if shared is not None and shared.search_console() is not None:
+            pages = shared.gsc_by_page(start.isoformat(), end.isoformat())
+        else:
+            pages = gsc.search_analytics_by_page(start_date=start.isoformat(),
+                                                 end_date=end.isoformat())
     except ConnectorError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         return 2
@@ -1637,8 +1641,12 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         page_queries: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         query_map: dict[str, list[dict[str, Any]]] = {}
         try:
-            for item in gsc.search_analytics_query_page(
-                    start_date=start.isoformat(), end_date=end.isoformat(), row_limit=25_000):
+            # Reaproveita a coleta do ciclo (RunContext) quando presente (P5).
+            gqp = (shared.gsc_query_pages(start.isoformat(), end.isoformat())
+                   if shared is not None and shared.search_console() is not None
+                   else gsc.search_analytics_query_page(
+                       start_date=start.isoformat(), end_date=end.isoformat(), row_limit=25_000))
+            for item in gqp:
                 keys = item.get("keys") or []
                 if len(keys) >= 2:
                     query_map.setdefault(keys[1], []).append({"keys": [keys[0]], **item})
@@ -2161,13 +2169,23 @@ def _cmd_post_audit(args: argparse.Namespace, config: Any) -> int:
                          ensure_ascii=False))
         return 2
 
+    shared = getattr(args, "_run_context", None)
     gsc = SearchConsoleClient(config)
+    _use_ctx = shared is not None and shared.search_console() is not None
+
+    def _by_page(s: str, e: str):
+        return (shared.gsc_by_page(s, e) if _use_ctx
+                else gsc.search_analytics_by_page(start_date=s, end_date=e))
+
+    def _query_page(s: str, e: str):
+        return (shared.gsc_query_pages(s, e) if _use_ctx
+                else gsc.search_analytics_query_page(start_date=s, end_date=e, row_limit=25_000))
+
     end = date.today()
     start = end - timedelta(days=config.search_analytics_days)
     prev_start = start - timedelta(days=config.search_analytics_days)
 
-    pages = gsc.search_analytics_by_page(start_date=start.isoformat(),
-                                         end_date=end.isoformat())
+    pages = _by_page(start.isoformat(), end.isoformat())
     # BASE AO VIVO: métricas por página vêm direto do GSC (janela atual), não de
     # query_pages persistido. É a fonte da verdade da medição — difere de
     # url_demand() (janela persistida + filtro --min-impressions da coleta) apenas
@@ -2178,16 +2196,14 @@ def _cmd_post_audit(args: argparse.Namespace, config: Any) -> int:
     pool = candidates[: (args.limit or 20) * 3]
     previous_by_url = {}
     try:
-        previous_rows = gsc.search_analytics_by_page(
-            start_date=prev_start.isoformat(),
-            end_date=(start - timedelta(days=1)).isoformat())
+        previous_rows = _by_page(prev_start.isoformat(),
+                                 (start - timedelta(days=1)).isoformat())
         previous_by_url = {(r.get("keys") or [""])[0]: r for r in previous_rows}
     except Exception:
         previous_by_url = {}
     queries_by_url = {}
     try:
-        for item in gsc.search_analytics_query_page(
-                start_date=start.isoformat(), end_date=end.isoformat(), row_limit=25_000):
+        for item in _query_page(start.isoformat(), end.isoformat()):
             keys = item.get("keys") or []
             if len(keys) >= 2:
                 queries_by_url.setdefault(keys[1], []).append({"keys": [keys[0]], **item})
@@ -2628,12 +2644,17 @@ def _cmd_demand(args: argparse.Namespace, config: Any) -> int:
                          ensure_ascii=False))
         return 2
 
-    gsc = SearchConsoleClient(config)
     end = date.today()
     start = end - timedelta(days=config.search_analytics_days)
 
-    rows = gsc.search_analytics_query_page(start_date=start.isoformat(),
-                                           end_date=end.isoformat())
+    # Reaproveita a coleta do ciclo (RunContext) quando presente (P5).
+    shared = getattr(args, "_run_context", None)
+    if shared is not None and shared.search_console() is not None:
+        rows = shared.gsc_query_pages(start.isoformat(), end.isoformat())
+    else:
+        gsc = SearchConsoleClient(config)
+        rows = gsc.search_analytics_query_page(start_date=start.isoformat(),
+                                               end_date=end.isoformat())
     stored = 0
     with Storage(config.sqlite_path) as storage:
         kept = 0

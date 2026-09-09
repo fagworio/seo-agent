@@ -23,6 +23,11 @@ class RunContext:
         self._posts = None
         self._sitemap_urls = None
         self._sitemap_entries = None
+        # cache de datasets por janela (start, end) — a MESMA coleta GSC/GA4 é
+        # reutilizada pelas etapas do ciclo (demand/title-opportunities/post-audit).
+        self._gsc_by_page: dict[tuple[str, str, int], Any] = {}
+        self._gsc_query_pages: dict[tuple[str, str, int], Any] = {}
+        self._ga4_organic: dict[tuple[str, str, int, str, bool], Any] = {}
 
     def storage(self):
         if self._storage is None:
@@ -70,6 +75,41 @@ class RunContext:
         if self._sitemap_urls is None:
             self._sitemap_urls = [loc for loc, _ in self.sitemap_entries()]
         return self._sitemap_urls
+
+    # -- cache de datasets GSC/GA4 por janela (P5) --------------------------
+
+    def gsc_by_page(self, start: str, end: str, row_limit: int = 25_000):
+        key = (start, end, row_limit)
+        if key not in self._gsc_by_page:
+            if self.search_console() is not None:
+                self._gsc_by_page[key] = self._gsc.search_analytics_by_page(
+                    start_date=start, end_date=end, row_limit=row_limit)
+            else:
+                self._gsc_by_page[key] = []
+        return self._gsc_by_page[key]
+
+    def gsc_query_pages(self, start: str, end: str, row_limit: int = 25_000):
+        key = (start, end, row_limit)
+        if key not in self._gsc_query_pages:
+            if self.search_console() is not None:
+                self._gsc_query_pages[key] = self._gsc.search_analytics_query_page(
+                    start_date=start, end_date=end, row_limit=row_limit)
+            else:
+                self._gsc_query_pages[key] = []
+        return self._gsc_query_pages[key]
+
+    def ga4_organic(self, start: str, end: str, *, row_limit: int = 25_000,
+                    expected_domain: str = ""):
+        key = (start, end, row_limit, expected_domain, False)
+        if key not in self._ga4_organic:
+            if self.analytics() is not None:
+                self._ga4_organic[key] = self._ga4.organic_landing_performance(
+                    start_date=start, end_date=end, row_limit=row_limit,
+                    expected_domain=expected_domain)
+            else:
+                self._ga4_organic[key] = {"rows": [], "row_count": 0,
+                                          "unmatched": [], "quota": {}}
+        return self._ga4_organic[key]
 
     def close(self):
         for client in (self._wp, self._static, self._gsc, self._ga4):
