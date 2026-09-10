@@ -554,15 +554,19 @@ def _record_agent_run(config: Any, result: dict[str, Any], *, cycle_id: str,
 
 
 def _audit_content_fingerprint(sitemap_entries: list[tuple[str, str]],
-                               posts: list[dict[str, Any]]) -> str:
+                               posts: list[dict[str, Any]],
+                               build_signal: str = "") -> str:
     """Fingerprint de CONTEÚDO do acervo (não apenas da lista de URLs).
 
     Inclui: URLs do sitemap + lastmod (sinal de conteúdo/template) + `modified`
-    dos posts WordPress. Assim uma alteração em uma URL que continua no sitemap
-    (ex.: um post editado) muda o fingerprint e força o audit — o fingerprint
-    anterior (só a lista de URLs) deixava essas alterações sem auditoria.
+    dos posts WordPress + um `build_signal` opcional (marcador de deploy do site
+    estático, ex.: /build.json), que captura um deploy de template que não muda
+    WP modified nem o sitemap. Assim uma alteração em uma URL que continua no
+    sitemap força o audit.
     """
     parts: list[str] = []
+    if build_signal:
+        parts.append(f"build|{build_signal}")
     for url, lastmod in sorted(sitemap_entries, key=lambda e: e[0]):
         parts.append(f"url|{url}|{lastmod or ''}")
     for post in posts:
@@ -589,8 +593,17 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     sitemap_urls = [loc for loc, _ in sitemap_entries]
     audit_fp = ""
     if getattr(args, "_incremental", False):
-        audit_fp = _audit_content_fingerprint(sitemap_entries, posts)
-        ttl = getattr(config, "audit_full_ttl_seconds", 7 * 24 * 3600)
+        # Sinal de deploy do site estático (ex.: /build.json), se configurado.
+        build_signal = ""
+        _build_url = getattr(config, "static_build_url", "") or ""
+        if _build_url:
+            try:
+                build_signal = hashlib.sha256(
+                    static.fetch_text(_build_url).encode("utf-8")).hexdigest()[:16]
+            except Exception:  # noqa: BLE001 — build signal é best-effort
+                build_signal = ""
+        audit_fp = _audit_content_fingerprint(sitemap_entries, posts, build_signal)
+        ttl = getattr(config, "audit_full_ttl_seconds", 24 * 3600)
         with Storage(config.sqlite_path) as checkpoint:
             previous = checkpoint.get_setting("audit:content_fingerprint", "")
             last_ok = checkpoint.get_setting("audit:last_success_at", "")
@@ -624,7 +637,16 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
             cursor_storage.set_setting("audit:sitemap_cursor", str((sample_start + limit) % len(sitemap_urls)))
     sample = (sitemap_urls[sample_start:] + sitemap_urls[:sample_start])[:limit]
     findings: list[dict[str, Any]] = []
-    pages = [static.fetch_page(url) for url in sample]
+    # Fetch tolerante por URL: uma página que falhe (SSRF bloqueado, limite de
+    # tamanho, rede) não pode abortar o audit inteiro — entra como "não buscada".
+    pages = []
+    for url in sample:
+        try:
+            page = static.fetch_page(url)
+        except Exception:  # noqa: BLE001 — melhor seguir com as demais páginas
+            page = None
+        if page is not None:
+            pages.append(page)
 
     # Local history: every analyzed page gets a snapshot (before/after basis).
     # Em lote (uma transação) — evita 1 COMMIT por página (foi um gargalo).
@@ -644,7 +666,7 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
                  "error": "page not fetched" if page is None else ""}
         if status in {301, 302, 303, 307, 308}:
             try:
-                info = check_http(static.http, url)
+                info = check_http(static.http, url, validate_url=static.validate_url)
                 state = {"status_code": info.get("status_code", 0),
                          "final_url": info.get("final_url", url),
                          "redirect_hops": info.get("redirect_hops", 0),
@@ -684,7 +706,7 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
                  "error": "page not fetched" if page is None else ""}
         if status in {301, 302, 303, 307, 308}:
             try:
-                info = check_http(static.http, expected)
+                info = check_http(static.http, expected, validate_url=static.validate_url)
                 state = {"status_code": info.get("status_code", 0),
                          "final_url": info.get("final_url", expected),
                          "redirect_hops": info.get("redirect_hops", 0),
@@ -810,9 +832,15 @@ def _cmd_inspect(args: argparse.Namespace, config: Any) -> int:
     with Storage(config.sqlite_path) as storage:
         # Crash recovery: rows stuck in_progress from interrupted runs.
         storage.reset_stuck_in_progress()
-        with WordPressClient(config) as wp, StaticSiteClient(config) as static:
-            posts = wp.list_posts(status="publish")
-            sitemap_urls = static.all_sitemap_urls()
+        shared = getattr(args, "_run_context", None)
+        if shared is not None:
+            # Reaproveita posts/sitemap do ciclo (sem novo full scan WP/sitemap).
+            posts = shared.posts()
+            sitemap_urls = shared.sitemap_urls()
+        else:
+            with WordPressClient(config) as wp, StaticSiteClient(config) as static:
+                posts = wp.list_posts(status="publish")
+                sitemap_urls = static.all_sitemap_urls()
 
         modified_by_url = {
             normalize_url(p.get("link", "")): (p.get("modified") or "")
@@ -824,19 +852,26 @@ def _cmd_inspect(args: argparse.Namespace, config: Any) -> int:
         prev_impressions: dict[str, float] = {}
         gsc: SearchConsoleClient | None = None
         if config.google_credentials:
-            gsc = SearchConsoleClient(config)
             end = date.today()
             start = end - timedelta(days=config.search_analytics_days)
             prev_start = start - timedelta(days=config.search_analytics_days)
             try:
-                for row in gsc.search_analytics_by_page(
-                    start_date=start.isoformat(), end_date=end.isoformat()
-                ):
+                if shared is not None and shared.search_console() is not None:
+                    # Mesma coleta do ciclo (cache por janela no RunContext).
+                    gsc = shared.search_console()
+                    rows_cur = shared.gsc_by_page(start.isoformat(), end.isoformat())
+                    rows_prev = shared.gsc_by_page(
+                        prev_start.isoformat(), (start - timedelta(days=1)).isoformat())
+                else:
+                    gsc = SearchConsoleClient(config)
+                    rows_cur = gsc.search_analytics_by_page(
+                        start_date=start.isoformat(), end_date=end.isoformat())
+                    rows_prev = gsc.search_analytics_by_page(
+                        start_date=prev_start.isoformat(),
+                        end_date=(start - timedelta(days=1)).isoformat())
+                for row in rows_cur:
                     impressions[normalize_url(row["keys"][0])] = float(row.get("impressions", 0))
-                for row in gsc.search_analytics_by_page(
-                    start_date=prev_start.isoformat(),
-                    end_date=(start - timedelta(days=1)).isoformat(),
-                ):
+                for row in rows_prev:
                     prev_impressions[normalize_url(row["keys"][0])] = float(row.get("impressions", 0))
             except ConnectorError as exc:
                 warnings.append(f"GSC fetch failed: {exc}")
@@ -1401,27 +1436,31 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         steps.append("corpus-rebuild")
 
     # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
-    #    motor novo de correção). O cron só acorda o runner.
-    with Storage(config.sqlite_path) as camp_storage:
-        from .services.improvement_campaigns import ImprovementCampaignService
-        csvc = ImprovementCampaignService(camp_storage, config=config)
-        due = csvc.list_campaigns(limit=200)
-        for c in due:
-            if c["status"] not in ("approved", "queued"):
-                continue
-            next_at = c.get("next_run_at") or ""
-            if next_at:
-                try:
-                    due_at = datetime.datetime.fromisoformat(next_at.replace("Z", "+00:00"))
-                    if due_at.tzinfo is None:
-                        due_at = due_at.replace(tzinfo=datetime.timezone.utc)
-                    if due_at > now:
-                        continue
-                except ValueError:
-                    errors.append(f"campaign-{c['id']}: invalid next_run_at")
+    #    motor novo de correção). O cron só acorda o runner. Isolado: uma exceção
+    #    aqui NÃO pode escapar (senão run_context/agent_run ficam abertos).
+    try:
+        with Storage(config.sqlite_path) as camp_storage:
+            from .services.improvement_campaigns import ImprovementCampaignService
+            csvc = ImprovementCampaignService(camp_storage, config=config)
+            due = csvc.list_campaigns(limit=200)
+            for c in due:
+                if c["status"] not in ("approved", "queued"):
                     continue
-            csvc.run(c["id"], actor="system")
-            steps.append(f"campaign-{c['id']}")
+                next_at = c.get("next_run_at") or ""
+                if next_at:
+                    try:
+                        due_at = datetime.datetime.fromisoformat(next_at.replace("Z", "+00:00"))
+                        if due_at.tzinfo is None:
+                            due_at = due_at.replace(tzinfo=datetime.timezone.utc)
+                        if due_at > now:
+                            continue
+                    except ValueError:
+                        errors.append(f"campaign-{c['id']}: invalid next_run_at")
+                        continue
+                csvc.run(c["id"], actor="system")
+                steps.append(f"campaign-{c['id']}")
+    except Exception as exc:  # noqa: BLE001 — campanha nunca derruba o ciclo/recursos
+        errors.append(f"campaigns: {exc}")
 
     # Telemetria do ciclo: chamadas externas, cache hits, bytes, retries, duração
     # (agregadas no RunContext/budget compartilhado pelas etapas).
@@ -1443,7 +1482,9 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                      "telemetry": telemetry},
         )
     _emit(result, force_json=True)
-    return 0
+    # Consistência operacional: execução PARCIAL (alguma etapa falhou) sinaliza
+    # falha no exit code para o cron (antes retornava 0 mesmo com errors).
+    return 1 if errors else 0
 
 
 def _ns(**kw) -> argparse.Namespace:

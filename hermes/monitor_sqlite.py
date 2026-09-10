@@ -21,20 +21,30 @@ try:
         except sqlite3.Error:
             return [("missing", -1)]
 
-    def count(table: str):
+    def count_where(table: str, where: str):
         try:
-            return db.execute(f"select count(*) from {table}").fetchone()[0]
+            return db.execute(f"select count(*) from {table} where {where}").fetchone()[0]
         except sqlite3.Error:
             return -1
 
-    state["findings"] = count("findings")
+    # Estado ACIONÁVEL (fila/decisão/campanhas), não histórico cumulativo.
     state["inspection_queue"] = status_groups("inspection_queue")
     state["improvement_checklist"] = status_groups("improvement_checklist")
     state["editorial_backlog"] = status_groups("editorial_backlog")
     state["content_briefs"] = status_groups("content_briefs")
     state["campaigns"] = status_groups("improvement_campaigns")
-    # runs em falha/parcial = trabalho que falhou e merece atenção.
-    state["failed_runs"] = count("agent_runs")
+    # Só runs que FALHARAM/PARCIALIZARAM merecem atenção (não toda execução OK).
+    state["failed_runs"] = count_where("agent_runs", "status in ('failed','partial')")
+    # Findings do ÚLTIMO ciclo por severidade (não a contagem histórica bruta, que
+    # muda mesmo quando o audit reencontra exatamente os mesmos problemas).
+    try:
+        latest = db.execute("select id from cycles order by started_at desc limit 1").fetchone()
+        if latest:
+            state["findings_latest"] = db.execute(
+                "select severity, count(*) from findings where cycle_id = ? group by severity",
+                (latest[0],)).fetchall()
+    except sqlite3.Error:
+        pass
 
     print(hashlib.sha256(json.dumps(state, sort_keys=True, default=str).encode()).hexdigest()[:24])
 except Exception as exc:

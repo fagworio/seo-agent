@@ -58,6 +58,18 @@ class Config:
     external_budget_cents: int = 0           # teto de custo por execução (0 = desligado)
     max_corpus_docs: int = 20_000            # teto de documentos no corpus
     corpus_lease_seconds: int = 3600         # TTL do lease de URL no corpus rebuild
+    # TTL do full audit: força auditar mesmo sem mudança detectada no fingerprint.
+    audit_full_ttl_seconds: int = 24 * 3600  # default 24h (antes: fixo 7 dias)
+    # SSRF: resolver DNS dos hosts e rejeitar IP interno. Off por default (o
+    # ambiente de CI/testes pode não ter DNS); ligue SSRF_RESOLVE_DNS=1 em prod.
+    ssrf_resolve_dns: bool = False
+    # Limite de corpo por tipo de recurso (defesa contra resposta gigante/maliciosa).
+    max_page_bytes: int = 5 * 1024 * 1024      # 5 MB por página HTML
+    max_sitemap_bytes: int = 20 * 1024 * 1024  # 20 MB por sitemap
+    # URL de um marcador de BUILD do site estático (ex.: /build.json) cujo hash
+    # entra no fingerprint do audit: um deploy de template muda o hash e força o
+    # audit mesmo sem WP modified/lastmod. Vazio = recurso desligado.
+    static_build_url: str = ""
 
     # Alerting (Phase 5)
     alert_webhook_url: str = ""
@@ -230,6 +242,11 @@ def load_config() -> Config:
         external_budget_cents=_int("EXTERNAL_BUDGET_CENTS", 0, 0, 10_000_000),
         max_corpus_docs=_int("MAX_CORPUS_DOCS", 20_000, 1, 1_000_000),
         corpus_lease_seconds=_int("CORPUS_LEASE_SECONDS", 3600, 60, 7 * 24 * 3600),
+        audit_full_ttl_seconds=_int("AUDIT_FULL_INTERVAL_HOURS", 24, 1, 30 * 24) * 3600,
+        ssrf_resolve_dns=_bool("SSRF_RESOLVE_DNS", False),
+        max_page_bytes=_int("MAX_PAGE_BYTES", 5 * 1024 * 1024, 1024, 100 * 1024 * 1024),
+        max_sitemap_bytes=_int("MAX_SITEMAP_BYTES", 20 * 1024 * 1024, 1024, 500 * 1024 * 1024),
+        static_build_url=_env("STATIC_BUILD_URL", ""),
         alert_webhook_url=_env("ALERT_WEBHOOK_URL"),
         alert_high_threshold=_int("ALERT_HIGH_THRESHOLD", 10, 1, 10_000),
         dry_run=dry_run,

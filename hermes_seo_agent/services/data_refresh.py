@@ -119,9 +119,9 @@ def build_refresh_collectors(config: Config, storage: Storage, context: Any = No
     return {
         "wordpress": lambda: _collect_wordpress(config, storage, context=context),
         "sitemap": lambda: _collect_sitemap(config, context=context),
-        "gsc": lambda: _collect_gsc(config),
-        "ga4": lambda: _collect_ga4(config),
-        "crux": lambda: _collect_crux(config),
+        "gsc": lambda: _collect_gsc(config, context=context),
+        "ga4": lambda: _collect_ga4(config, context=context),
+        "crux": lambda: _collect_crux(config, context=context),
         "corpus": lambda: _collect_corpus(storage),
     }
 
@@ -188,37 +188,46 @@ def _collect_sitemap(config: Config, context: Any = None) -> StageResult:
     return StageResult("sitemap", records_read=len(urls))
 
 
-def _collect_gsc(config: Config) -> StageResult:
+def _collect_gsc(config: Config, context: Any = None) -> StageResult:
     if not getattr(config, "google_credentials", ""):
         return StageResult("gsc", status="skipped", error="GOOGLE_APPLICATION_CREDENTIALS vazio")
-    from ..connectors.search_console import SearchConsoleClient
-    gsc = SearchConsoleClient(config)
     end = datetime.date.today()
     start = end - datetime.timedelta(days=getattr(config, "search_analytics_days", 28))
-    rows = gsc.search_analytics_by_page(start_date=start.isoformat(), end_date=end.isoformat())
+    if context is not None:
+        # Reaproveita a coleta do ciclo — não faz um scan GSC paralelo.
+        rows = context.gsc_by_page(start.isoformat(), end.isoformat())
+    else:
+        from ..connectors.search_console import SearchConsoleClient
+        rows = SearchConsoleClient(config).search_analytics_by_page(
+            start_date=start.isoformat(), end_date=end.isoformat())
     return StageResult("gsc", records_read=len(rows),
                        data_window=f"{start.isoformat()} → {end.isoformat()}")
 
 
-def _collect_ga4(config: Config) -> StageResult:
+def _collect_ga4(config: Config, context: Any = None) -> StageResult:
     if not getattr(config, "ga4_property_id", ""):
         return StageResult("ga4", status="skipped", error="GA4_PROPERTY_ID vazio")
-    from ..connectors.analytics import AnalyticsClient
-    ga4 = AnalyticsClient(config)
     end = datetime.date.today() - datetime.timedelta(days=1)
     start = end - datetime.timedelta(days=27)
-    st = ga4.status(start_date=start.isoformat(), end_date=end.isoformat())
+    if context is not None:
+        st = context.ga4_status(start.isoformat(), end.isoformat())
+    else:
+        from ..connectors.analytics import AnalyticsClient
+        st = AnalyticsClient(config).status(start_date=start.isoformat(), end_date=end.isoformat())
     return StageResult("ga4", records_read=st.get("rows_returned", 0),
                        data_window=f"{start.isoformat()} → {end.isoformat()}")
 
 
-def _collect_crux(config: Config) -> StageResult:
+def _collect_crux(config: Config, context: Any = None) -> StageResult:
     if not getattr(config, "crux_api_key", "") and not getattr(config, "pagespeed_api_key", ""):
         return StageResult("crux", status="skipped", error="CRUX_API_KEY/PAGESPEED_API_KEY vazio")
     from urllib.parse import urlsplit
-    from ..connectors.crux import CruxClient
     origin = f"https://{urlsplit(config.static_site_url).netloc}"
-    cwv = CruxClient(config).origin_cwv(origin)
+    if context is not None:
+        cwv = context.crux_origin(origin)
+    else:
+        from ..connectors.crux import CruxClient
+        cwv = CruxClient(config).origin_cwv(origin)
     return StageResult("crux", records_read=len(cwv), data_window="p75 por origem")
 
 

@@ -33,17 +33,21 @@ class ExecutionBudget:
         self._duration = 0.0
         self._kinds: dict[str, int] = {}
 
-    def inc(self, kind: str = "http", *, bytes_: int = 0, retries: int = 0,
+    def inc(self, kind: str = "http", *, bytes_: int = 0,
             duration: float = 0.0) -> None:
         with self._lock:
             self._calls += 1
             self._bytes += max(bytes_, 0)
-            self._retries += max(retries, 0)
             self._duration += max(duration, 0.0)
             self._kinds[kind] = self._kinds.get(kind, 0) + 1
             if self.max_calls and self._calls > self.max_calls:
                 raise BudgetExceeded(
                     f"execution budget exceeded: {self._calls} calls > {self.max_calls}")
+
+    def retry(self) -> None:
+        """Conta UMA retentativa (uma tentativa adicional além da primeira)."""
+        with self._lock:
+            self._retries += 1
 
     def hit(self, kind: str = "cache") -> None:
         """Registra uma chamada EVITADA (cache hit) — não conta no limite."""
@@ -64,9 +68,14 @@ class ExecutionBudget:
             }
 
 
-def make_budget(config: Any) -> ExecutionBudget | None:
+def make_budget(config: Any) -> ExecutionBudget:
+    """Sempre devolve um budget: max_calls=0 MEDE sem nunca bloquear.
+
+    Antes, max_calls=0 devolvia None -> sem limite E SEM TELEMETRIA, o oposto do
+    que se precisa para medir o consumo real e só depois calibrar o teto.
+    """
     max_calls = int(getattr(config, "max_external_calls", 0) or 0)
-    return ExecutionBudget(max_calls=max_calls) if max_calls else None
+    return ExecutionBudget(max_calls=max_calls)
 
 
 _TIME = time.perf_counter

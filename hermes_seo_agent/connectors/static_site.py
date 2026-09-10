@@ -148,6 +148,16 @@ class StaticSiteClient:
         # o client é dono de uma conexão lazily criada (e fechada em close()).
         self.cache_store = cache_store
         self._own_store = None
+        # Guard SSRF: apenas hosts do próprio site; resolve DNS se configurado.
+        from .url_guard import allowed_hosts_from_config
+        self.allowed_hosts = allowed_hosts_from_config(config)
+        self.ssrf_resolve = bool(getattr(config, "ssrf_resolve_dns", False))
+
+    def validate_url(self, url: str) -> None:
+        """Levanta UnsafeUrlError se a URL for insegura (SSRF)."""
+        from .url_guard import validate_external_url
+        validate_external_url(url, allowed_hosts=self.allowed_hosts,
+                              resolve=self.ssrf_resolve)
 
     # -- sitemap -------------------------------------------------------------
 
@@ -205,14 +215,38 @@ class StaticSiteClient:
         return os.path.join(base, hashlib.sha256(url.encode()).hexdigest()[:32] + ".gz")
 
     def _disk_write(self, url: str, data: bytes) -> None:
+        """Gravação ATÔMICA: escreve .tmp, fsync, os.replace (sem .gz parcial)."""
         import os
         path = self._disk_path(url)
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as fh:
+            with open(tmp, "wb") as fh:
                 fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
         except Exception:
-            pass  # cache de disco é best-effort; nunca derrubar o fetch
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            # cache de disco é best-effort; nunca derrubar o fetch
+
+    def _disk_clear(self, url: str) -> None:
+        import os
+        try:
+            os.remove(self._disk_path(url))
+        except Exception:
+            pass
+
+    def _max_bytes(self, cache_body: bool) -> int:
+        attr = "max_sitemap_bytes" if cache_body else "max_page_bytes"
+        try:
+            return int(getattr(self.config, attr, 0) or 0)
+        except Exception:
+            return 0
 
     def _disk_read(self, url: str) -> bytes | None:
         path = self._disk_path(url)
@@ -220,6 +254,14 @@ class StaticSiteClient:
             with open(path, "rb") as fh:
                 return fh.read()
         except Exception:
+            return None
+
+    def _decompress(self, url: str, body: bytes) -> bytes | None:
+        """Descomprime tolerante: .gz corrompido -> limpa cache e devolve None."""
+        try:
+            return gzip.decompress(body)
+        except (gzip.BadGzipFile, OSError, EOFError):
+            self._disk_clear(url)
             return None
 
     def _cached_get(self, url: str, *, cache_body: bool = True):
@@ -230,25 +272,33 @@ class StaticSiteClient:
           milhares de páginas). Em 304, reconstrói a resposta a partir do disco.
         """
         store = self._get_store()
+        # Guard SSRF antes de qualquer fetch (sitemap ou página).
+        self.validate_url(url)
         cached = store.get_http_cache(url)
         response = self.http.get_conditional(url, etag=(cached or {}).get("etag", ""),
                                              last_modified=(cached or {}).get("last_modified", ""))
         if response.status_code == 304:
-            body = None
+            raw = None
             if cache_body:
-                body = (cached or {}).get("body")
+                raw = (cached or {}).get("body")
             else:
-                b = self._disk_read(url)
-                body = b if b is not None else None
-            if body is not None:
+                raw = self._disk_read(url)
+            content = self._decompress(url, raw) if raw is not None else None
+            if content is not None:
                 response = type(response)(status_code=200, headers=response.headers,
-                                          content=gzip.decompress(body))
+                                          content=content)
                 if self.http.budget is not None:
                     self.http.budget.hit("http_304")  # chamada de corpo EVITADA
             else:
-                # 304 sem corpo disponível (cache limpo): força um GET pleno.
+                # 304 sem corpo (cache limpo) ou .gz corrompido: força um GET pleno.
                 response = self.http.get(url)
         if response.status_code == 200:
+            # Limite de tamanho por tipo de recurso (anti resposta gigante/maliciosa).
+            limit = self._max_bytes(cache_body)
+            if limit and len(response.content) > limit:
+                raise ConnectorError(
+                    f"resposta excede o limite de {limit} bytes "
+                    f"({len(response.content)}): {url}")
             etag = response.headers.get("etag", "")
             last_modified = response.headers.get("last-modified", "")
             content_hash = hashlib.sha256(response.content).hexdigest()
@@ -265,6 +315,10 @@ class StaticSiteClient:
     def all_sitemap_urls(self, sitemap_url: str | None = None) -> list[str]:
         """Resolve the whole sitemap tree into the final URL list."""
         return [loc for loc, _ in self.all_sitemap_entries(sitemap_url)]
+
+    def fetch_text(self, url: str) -> str:
+        """Corpo de um recurso textual (ex.: marcador de build). Guard SSRF on."""
+        return self._cached_get(url, cache_body=True).text
 
     # -- pages ---------------------------------------------------------------
 
@@ -296,6 +350,7 @@ class StaticSiteClient:
 
     def fetch_robots(self, base_url: str | None = None) -> "RobotsRules":
         base = (base_url or self.config.static_site_url).rstrip("/")
+        self.validate_url(f"{base}/robots.txt")
         response = self.http.get(f"{base}/robots.txt")
         if response.status_code != 200:
             return RobotsRules(base=base, raw="", disallow=[], sitemaps=[])

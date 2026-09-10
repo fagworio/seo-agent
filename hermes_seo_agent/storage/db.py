@@ -15,6 +15,16 @@ from typing import Any
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
 _SCHEMA_VERSION = 1
 
+# Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
+# virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
+# `implemented` pode avançar para `measured`; measured/rejected são finais.
+_LIFECYCLE_TERMINAL = {"implemented", "measured", "rejected"}
+_LIFECYCLE_TERMINAL_ALLOWED: dict[str, set[str]] = {
+    "implemented": {"implemented", "measured"},
+    "measured": {"measured"},
+    "rejected": {"rejected"},
+}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,
@@ -957,11 +967,16 @@ class Storage:
             # Ordem canônica: estados à frente nunca voltam para trás.
             rank = {"new": 0, "approved": 1, "delegated": 2, "executing": 3,
                     "implemented": 4, "measured": 5, "rejected": 5}
-            if rank.get(canonical_status, 0) < rank.get(prior, 0) \
-                    and prior not in ("rejected", "measured", "implemented"):
-                # Implementado/medido não retrocede. Rejeitado é terminal.
-                if prior in ("measured", "rejected"):
+            # Estados TERMINAIS não podem regredir nem voltar para a fila (isso
+            # reenfileiraria na Caixa → campanha pega de novo → ação duplicada).
+            # `implemented` ainda pode AVANÇAR para `measured`; measured/rejected
+            # são finais. A checagem anterior era inalcançável (o `if` externo
+            # excluía justamente os terminais), então o guard não protegia nada.
+            if prior in _LIFECYCLE_TERMINAL:
+                if canonical_status not in _LIFECYCLE_TERMINAL_ALLOWED.get(prior, {prior}):
                     return
+            elif rank.get(canonical_status, 0) < rank.get(prior, 0):
+                return
             self.conn.execute(
                 "UPDATE work_item_lifecycle SET canonical_status = ?, source = ?, url = ?, "
                 "action_fingerprint = COALESCE(?, action_fingerprint), "

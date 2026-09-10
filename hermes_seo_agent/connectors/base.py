@@ -76,24 +76,32 @@ class HttpClient:
                  headers: dict[str, str] | None = None) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
+            counted = False
+            _t0 = time.perf_counter()
             try:
-                if self.budget is not None:
-                    _t0 = time.perf_counter()
                 if method == "GET":
                     response = self.client.get(url, params=params, headers=headers, auth=self.auth)
                 else:
                     response = self.client.post(url, params=params, json=json_body,
                                                 headers=headers, auth=self.auth)
                 if self.budget is not None:
-                    self.budget.inc(method.lower(), bytes_=len(response.content),
-                                    retries=attempt - 1,
+                    # cada tentativa é UMA chamada externa real (com bytes/duração)
+                    self.budget.inc(method.lower(), bytes_=len(response.content or b""),
                                     duration=time.perf_counter() - _t0)
+                    counted = True
                 if response.status_code in {429, 500, 502, 503, 504}:
-                    raise _Transient(response.status_code)
+                    raise _Transient(response.status_code, response=response)
                 return response
             except (_Transient, httpx.TimeoutException, httpx.TransportError) as exc:
+                if self.budget is not None and not counted:
+                    # timeout/connreset/DNS: a chamada FOI feita e falhou — conta.
+                    self.budget.inc(method.lower() + "_error",
+                                    duration=time.perf_counter() - _t0)
                 last_exc = exc
                 if attempt < self.max_retries:
+                    if self.budget is not None:
+                        self.budget.retry()
+                    # _Transient carrega a response -> Retry-After é respeitado.
                     delay = _backoff(attempt, response=getattr(exc, "response", None))
                     time.sleep(delay)
         raise ConnectorError(f"{method} {url} failed after {self.max_retries} attempts: {last_exc}")
@@ -109,10 +117,11 @@ class HttpClient:
 
 
 class _Transient(RuntimeError):
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, response: httpx.Response | None = None):
         super().__init__(f"transient HTTP {status_code}")
         self.status_code = status_code
-        self.response = None
+        # carrega a response para o backoff honrar Retry-After (antes era None).
+        self.response = response
 
 
 def _backoff(attempt: int, *, response: httpx.Response | None = None) -> float:

@@ -33,6 +33,9 @@ class RunContext:
         self._gsc_by_page: dict[tuple[str, str, int], Any] = {}
         self._gsc_query_pages: dict[tuple[str, str, int], Any] = {}
         self._ga4_organic: dict[tuple[str, str, int, str, bool], Any] = {}
+        self._ga4_status: dict[tuple[str, str], Any] = {}
+        self._crux = None
+        self._crux_cwv: dict[str, Any] = {}
 
     def storage(self):
         if self._storage is None:
@@ -127,8 +130,29 @@ class RunContext:
             self._hit("dataset_cache_hit")
         return self._ga4_organic[key]
 
+    def ga4_status(self, start: str, end: str):
+        key = (start, end)
+        if key not in self._ga4_status:
+            if self.analytics() is not None:
+                self._ga4_status[key] = self._ga4.status(start_date=start, end_date=end)
+            else:
+                self._ga4_status[key] = {}
+        else:
+            self._hit("dataset_cache_hit")
+        return self._ga4_status[key]
+
+    def crux_origin(self, origin: str):
+        if origin not in self._crux_cwv:
+            from ..connectors.crux import CruxClient
+            if self._crux is None:
+                self._crux = CruxClient(self.config)
+            self._crux_cwv[origin] = self._crux.origin_cwv(origin)
+        else:
+            self._hit("dataset_cache_hit")
+        return self._crux_cwv[origin]
+
     def close(self):
-        for client in (self._wp, self._static, self._gsc, self._ga4):
+        for client in (self._wp, self._static, self._gsc, self._ga4, self._crux):
             if client is not None and hasattr(client, "close"):
                 client.close()
         if self._storage is not None:

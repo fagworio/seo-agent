@@ -16,7 +16,8 @@ nunca avancava). O rm vivo elimina ghost e mantem a janela util.
 O executor re-verifica por REST apos o write (unverified = falha).
 
 Roda: .venv/bin/python scripts/build_title_fixes.py [--limit N]
-(--limit = numero maximo de leituras REST / acoes por run)
+(--limit = numero maximo de leituras REST / acoes por run; default 100,
+ --limit 0 = sem teto. Sem teto o script consulta o backlog INTEIRO via REST.)
 """
 import json
 import sys
@@ -30,9 +31,12 @@ from hermes_seo_agent.connectors.wordpress import WordPressClient  # noqa: E402
 from hermes_seo_agent.storage.db import Storage  # noqa: E402
 from hermes_seo_agent.tools.title_opportunities import shorten_title  # noqa: E402
 
-limit = None
+DEFAULT_LIMIT = 100
 if "--limit" in sys.argv:
     limit = int(sys.argv[sys.argv.index("--limit") + 1])
+else:
+    # Sem --limit: teto default (evita consultar o backlog inteiro via REST).
+    limit = DEFAULT_LIMIT
 
 cfg = load_config()
 storage = Storage(cfg.sqlite_path)

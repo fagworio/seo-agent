@@ -15,11 +15,14 @@ def check_http(
     url: str,
     *,
     max_hops: int = 5,
+    validate_url: Any | None = None,
 ) -> dict[str, Any]:
     """Follow redirects deterministically; return status, final URL, chain.
 
     httpx history is unreliable with follow_redirects=False, so redirects are
     followed manually hop-by-hop with a hard cap (loop/chain protection).
+    `validate_url` (opcional) é chamado a CADA hop — proteção SSRF contra um
+    redirect que aponte para IP interno/host fora da allowlist.
     """
     chain: list[dict[str, Any]] = []
     current = url
@@ -35,6 +38,18 @@ def check_http(
                 "error": "redirect loop detected",
             }
         seen.add(current)
+        if validate_url is not None:
+            try:
+                validate_url(current)
+            except Exception as exc:  # UnsafeUrlError / ConnectorError
+                return {
+                    "url": url,
+                    "status_code": 0,
+                    "final_url": current,
+                    "redirect_chain": chain,
+                    "redirect_loop": False,
+                    "error": f"blocked redirect target: {exc}",
+                }
         try:
             response = client.get(current)
         except Exception as exc:  # ConnectorError / httpx
