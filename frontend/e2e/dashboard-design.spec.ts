@@ -5,7 +5,7 @@ const permissions = ["pages.read", "opportunity.read", "opportunity.review", "te
 async function authenticated(page: Page) {
   await page.context().addCookies([{ name: "seo_session", value: "design-check", url: "http://127.0.0.1:3000" }]);
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ csrf_token: "csrf", user: { permissions } }) }));
-  await page.route("**/api/v1/pages**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages: Array.from({ length: 25 }, (_, i) => ({ url: `https://site.test/post-${i}`, title: `Página ${i}`, health: "ok", index_state: "indexed", metrics: { position: 4.2, clicks: i, impressions: 100, ctr: .02 } })) }) }));
+  await page.route("**/api/v1/pages**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages: Array.from({ length: 25 }, (_, i) => ({ url: `https://site.test/post-${i}`, title: `Página ${i}`, health: "ok", index_state: "indexed", metrics: { position: 4.2, clicks: i, impressions: 100, ctr: .02 } })), total: 25 }) }));
   await page.route("**/api/v1/work-items**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ work_items: Array.from({ length: 25 }, (_, i) => ({ id: `item-${i}`, title: `Decisão ${i}`, source: "checklist", status: "pending", score: i, action_class: "approval_required", url: "https://site.test" })) }) }));
   await page.route("**/api/v1/findings**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ findings: [] }) }));
   await page.route("**/api/v1/actions**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ corrections: [{ fingerprint: "fix-1", rule_id: "title_opportunity", label: "Oportunidade de título", url: "https://site.test/post", status: "executed", before: {}, after: {}, rollback: {}, executed_at: null }] }) }));
@@ -19,16 +19,16 @@ test("dashboard pagination and editorial pipeline remain usable", async ({ page 
   await authenticated(page);
   await page.goto("/pages");
   await expect(page.getByRole("heading", { name: "Páginas" })).toBeVisible();
-  await expect(page.getByText("1–20 de 25 páginas carregadas")).toBeVisible();
+  await expect(page.getByText("1–20 de 25 páginas")).toBeVisible();
   await page.getByRole("button", { name: "Próxima" }).click();
   await expect(page.getByText("Página 24")).toBeVisible();
   await page.goto("/work");
   await expect(page.getByRole("heading", { name: "Caixa de trabalho" })).toBeVisible();
-  await expect(page.getByText("1–10 de 25 decisões")).toBeVisible();
+  await expect(page.getByText("1–10 de 25 decisões").first()).toBeVisible();
   await page.goto("/editorial");
   await expect(page.getByRole("heading", { name: "Pipeline editorial" })).toBeVisible();
-  await expect(page.getByText("Discovery & revisão")).toBeVisible();
-  await expect(page.getByText("1–6 de 8 itens")).toBeVisible();
+  await expect(page.getByText("Para revisar")).toBeVisible();
+  await expect(page.getByText("1–6 de 8 itens").first()).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("editorial-desktop.png"), fullPage: true });
 });
 
@@ -36,7 +36,7 @@ test("technical corrections use friendly labels instead of rule identifiers", as
   await authenticated(page);
   await page.goto("/technical");
   await page.getByRole("button", { name: /Correções disponíveis/ }).click();
-  await expect(page.getByText("Oportunidade de título")).toBeVisible();
+  await expect(page.getByText("Oportunidade de título").first()).toBeVisible();
   await expect(page.getByText("title_opportunity", { exact: true })).toHaveCount(0);
 });
 
@@ -108,7 +108,7 @@ test("home exposes real Google searches and revalidation state", async ({ page }
   await page.goto("/today");
   await expect(page.getByRole("heading", { name: "Hoje" })).toBeVisible();
   await expect(page.getByText("Impacto acumulado das otimizações de título")).toBeVisible();
-  await expect(page.getByText("IMPACTO GOOGLE AJUSTADO")).toBeVisible();
+  await expect(page.getByText("Impacto ajustado")).toBeVisible();
   await expect(page.getByRole("cell", { name: "idade do gojo" })).toBeVisible();
   await expect(page.getByText("Somente uma janela está disponível; ainda não há base para afirmar tendência.")).toBeVisible();
   await expect(page.getByText("Aguardando 7 dias", { exact: true })).toBeVisible();

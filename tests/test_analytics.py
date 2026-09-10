@@ -237,6 +237,7 @@ def test_ga4_requires_property_id(monkeypatch):
 def test_ga4_token_uses_analytics_scope_not_gsc(monkeypatch):
     """Regressão: o token GA4 precisa do escopo analytics.readonly — o provider
     do GSC (webmasters.readonly) NÃO autoriza a GA4 Data API."""
+    pytest.importorskip("google.auth")  # extra `google` (google-auth)
     from hermes_seo_agent.connectors import analytics as analytics_mod
     from hermes_seo_agent.connectors import search_console as sc_mod
 

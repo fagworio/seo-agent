@@ -12,7 +12,8 @@ test("botão Sair faz logout (revoga + redireciona para /login)", async ({ page 
   const btn = page.getByRole("button", { name: /Sair/ });
   await expect(btn).toBeVisible();
   await btn.click();
-  // o POST /auth/logout foi chamado (revogação server-side) e redireciona
-  await expect(logoutCalled).toBeTruthy();
+  // o POST /auth/logout é assíncrono (após GET /auth/me pegar o csrf) — poll até
+  // a rota ser chamada, em vez de checar o booleano imediatamente (corrida).
+  await expect.poll(() => logoutCalled, { timeout: 10_000 }).toBeTruthy();
   await page.waitForURL(/login/, { timeout: 10_000 });
 });

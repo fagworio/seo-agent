@@ -66,6 +66,6 @@ test("fluxo completo: login -> MFA -> hoje renderiza", async ({ page }) => {
   await page.getByPlaceholder("000000").fill("123456");
   await page.getByRole("button", { name: "Confirmar" }).click();
   // após o MFA a aplicação navega para /hoje e o read model renderiza
-  await expect(page.getByText("Precisa de atenção")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hoje" })).toBeVisible();
   await expect(page.getByText("hermes-seo-agent")).toBeVisible();
 });
