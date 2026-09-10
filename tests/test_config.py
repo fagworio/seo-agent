@@ -10,7 +10,8 @@ def _clean_env(monkeypatch):
     for key in ("WORDPRESS_URL", "WORDPRESS_API_BASE", "WORDPRESS_APP_USER",
                 "WORDPRESS_APP_PASSWORD", "STATIC_SITE_URL", "SITEMAP_URL",
                 "DRY_RUN", "GOOGLE_API_KEY", "PAGESPEED_API_KEY",
-                "CRUX_API_KEY", "GA4_PROPERTY_ID", "GOOGLE_APPLICATION_CREDENTIALS"):
+                "CRUX_API_KEY", "GA4_PROPERTY_ID", "GOOGLE_APPLICATION_CREDENTIALS",
+                "MAX_EXTERNAL_CALLS"):
         monkeypatch.delenv(key, raising=False)
     # Point the .env loader at a missing file so a local .env never leaks in.
     monkeypatch.setenv("SEO_ENV_FILE", "/nonexistent/seo-agent.env")
@@ -73,3 +74,18 @@ def test_gsc_site_url_rejects_invalid(monkeypatch):
     monkeypatch.setenv("GSC_SITE_URL", "sc-domain:")
     with pytest.raises(ConfigError):
         load_config()
+
+
+def test_external_call_budget_is_opt_in_by_default():
+    """Regressão 2026-09-10: com default 50 o `cycle --limit 500` abortava em
+    produção (`BudgetExceeded: execution budget exceeded: 51 calls > 50`) —
+    um ciclo real faz ~1.000 chamadas com cache frio. O guard é opt-in: sem
+    MAX_EXTERNAL_CALLS no ambiente, max_external_calls == 0 (= sem teto)."""
+    cfg = load_config()
+    assert cfg.max_external_calls == 0
+
+
+def test_external_call_budget_reads_env(monkeypatch):
+    monkeypatch.setenv("MAX_EXTERNAL_CALLS", "2000")
+    cfg = load_config()
+    assert cfg.max_external_calls == 2000

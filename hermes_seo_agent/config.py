@@ -50,7 +50,11 @@ class Config:
     # M0 — limites operacionais (URLs, queries, chunks, quota e custo por execução)
     max_queries_per_source: int = 500        # queries por fonte por execução
     max_chunks_per_doc: int = 200            # chunks/seções por documento no corpus
-    max_external_calls: int = 50             # chamadas a provedores externos por execução
+    # Chamadas a provedores externos por execução. 0 = SEM TETO (opt-in): um
+    # `cycle --limit 500` faz ~1.000 chamadas com cache frio, então um default
+    # baixo aborta o ciclo em produção (BudgetExceeded). Defina
+    # MAX_EXTERNAL_CALLS no .env para ligar o guard depois de calibrar.
+    max_external_calls: int = 0
     external_budget_cents: int = 0           # teto de custo por execução (0 = desligado)
     max_corpus_docs: int = 20_000            # teto de documentos no corpus
     corpus_lease_seconds: int = 3600         # TTL do lease de URL no corpus rebuild
@@ -222,7 +226,7 @@ def load_config() -> Config:
         editorial_measurement_min_days=_int("EDITORIAL_MEASUREMENT_MIN_DAYS", 28, 1, 365),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),
         max_chunks_per_doc=_int("MAX_CHUNKS_PER_DOC", 200, 1, 10_000),
-        max_external_calls=_int("MAX_EXTERNAL_CALLS", 50, 0, 100_000),
+        max_external_calls=_int("MAX_EXTERNAL_CALLS", 0, 0, 100_000),
         external_budget_cents=_int("EXTERNAL_BUDGET_CENTS", 0, 0, 10_000_000),
         max_corpus_docs=_int("MAX_CORPUS_DOCS", 20_000, 1, 1_000_000),
         corpus_lease_seconds=_int("CORPUS_LEASE_SECONDS", 3600, 60, 7 * 24 * 3600),
