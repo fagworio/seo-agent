@@ -625,10 +625,14 @@ class Storage:
         except Exception:
             pass
         # WAL é opt-in (produção: SQLITE_WAL=1 na .env) — testes mantêm delete-mode
-        # para não criar arquivos -wal/-shm ao lado dos .db temporários.
+        # para não criar arquivos -wal/-shm ao lado dos .db temporários. O modo é
+        # persistente no arquivo: só aplica se ainda não estiver em WAL (evita
+        # re-setar/lock a cada open).
         if os.environ.get("SQLITE_WAL", "0") == "1":
             try:
-                self.conn.execute("PRAGMA journal_mode=WAL")
+                current = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                if current != "wal":
+                    self.conn.execute("PRAGMA journal_mode=WAL")
             except Exception:
                 pass
         # Gating por user_version: schema + migração rodam 1x por banco, não a
