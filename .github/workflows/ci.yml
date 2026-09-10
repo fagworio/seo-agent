@@ -3,9 +3,14 @@ on:
   pull_request:
   push:
     branches: [main]
+# cancela runs obsoletos do mesmo ref (evita gasto/duplicidade no CI).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,5 +27,6 @@ jobs:
         run: npm run lint && npm run typecheck && npm test && npm run build
       - working-directory: frontend
         run: npx playwright install --with-deps chromium && npm run test:e2e
+      # o build valida que a imagem de produção constrói (inclui o extra [google]).
       - run: docker build -f Dockerfile.backend .
       - run: docker build -f Dockerfile.web frontend

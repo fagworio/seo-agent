@@ -11,8 +11,10 @@ COPY hermes_seo_agent ./hermes_seo_agent
 
 # O índice corporativo do ambiente de desenvolvimento não espelha FastAPI.
 # Produção pode sobrescrever PIP_INDEX_URL no build para usar seu mirror aprovado.
+# O extra [google] (google-auth) é necessário em runtime para GSC/GA4 — sem ele os
+# conectores levantam "google-auth is required" ao consultar o Search Console.
 ARG PIP_INDEX_URL=https://pypi.org/simple
-RUN pip install --index-url "$PIP_INDEX_URL" --no-cache-dir .
+RUN pip install --index-url "$PIP_INDEX_URL" --no-cache-dir '.[google]'
 
 EXPOSE 8000
 
