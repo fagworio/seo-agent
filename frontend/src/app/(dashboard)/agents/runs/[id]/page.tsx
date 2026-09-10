@@ -7,6 +7,7 @@ import { api, ApiError, RunDetail } from "@/lib/api";
 import { Badge } from "@/design-system/badge";
 import { Card } from "@/design-system/card";
 import { Button } from "@/design-system/button";
+import { ExternalTelemetry } from "@/features/agents/external-telemetry";
 
 const TABS = ["Summary", "Stages", "Results", "Changes", "Logs"] as const;
 
@@ -86,6 +87,7 @@ export default function RunDetailPage() {
               <Metric label="Executados" value={run.executed_changes_count} />
             </div>
             {run.error && <p className="text-sm text-[var(--danger)]">Erro: {run.error}</p>}
+            <ExternalTelemetry summary={run.summary} />
             {run.summary && <pre className="whitespace-pre-wrap text-xs text-[var(--muted)]">{JSON.stringify(run.summary, null, 2)}</pre>}
             {!run.summary && <p className="text-[var(--muted)]">Sem resumo humano.</p>}
           </div>
