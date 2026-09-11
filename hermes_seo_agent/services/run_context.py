@@ -36,6 +36,7 @@ class RunContext:
         self._ga4_status: dict[tuple[str, str], Any] = {}
         self._crux = None
         self._crux_cwv: dict[str, Any] = {}
+        self._pagespeed = None
 
     def storage(self):
         if self._storage is None:
@@ -151,8 +152,15 @@ class RunContext:
             self._hit("dataset_cache_hit")
         return self._crux_cwv[origin]
 
+    def pagespeed(self):
+        if self._pagespeed is None:
+            from ..connectors.pagespeed import PageSpeedClient
+            self._pagespeed = PageSpeedClient(self.config, budget=self.budget)
+        return self._pagespeed
+
     def close(self):
-        for client in (self._wp, self._static, self._gsc, self._ga4, self._crux):
+        for client in (self._wp, self._static, self._gsc, self._ga4,
+                       self._crux, self._pagespeed):
             if client is not None and hasattr(client, "close"):
                 client.close()
         if self._storage is not None:

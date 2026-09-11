@@ -184,3 +184,39 @@ def test_get_provider_mode_scrape_default():
     assert isinstance(p2.inner, TrendsProvider)          # api explícito
     assert isinstance(get_provider(Config(wordpress_url="http://x", trends_mode="none")),
                       NoopProvider)
+
+
+def test_get_provider_passes_budget_to_http():
+    """Regression: Trends precisa contar no ExecutionBudget do ciclo."""
+    from hermes_seo_agent.services.budget import ExecutionBudget
+
+    b = ExecutionBudget(max_calls=0)
+    p = get_provider(Config(wordpress_url="http://x", trends_mode="scrape"), budget=b)
+    assert isinstance(p, _PersistentCacheProvider)
+    assert p.inner._http.budget is b, "o HttpClient do provider deve receber o budget"
+
+
+def test_batch_trends_uses_single_snapshot_per_term(monkeypatch):
+    """Uma coleta por termo (trend_snapshot), não keyword_metrics+trend_signal."""
+    from hermes_seo_agent.services import market_intelligence as mi
+
+    calls = {"snapshot": 0, "metrics": 0, "signal": 0}
+
+    class FakeProvider:
+        def trend_snapshot(self, term):
+            calls["snapshot"] += 1
+            return {"interest": 12.0, "momentum": 1}
+
+        def keyword_metrics(self, *a, **k):
+            calls["metrics"] += 1
+            return []
+
+        def trend_signal(self, *a, **k):
+            calls["signal"] += 1
+            return {}
+
+    monkeypatch.setattr(mi, "get_provider", lambda config, budget=None: FakeProvider())
+    out = mi.batch_trends(Config(wordpress_url="http://x"), ["a", "b"])
+    assert calls["snapshot"] == 2
+    assert calls["metrics"] == 0 and calls["signal"] == 0
+    assert out["a"] == {"interest": 12.0, "momentum": 1}

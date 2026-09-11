@@ -11,9 +11,10 @@ _BASE = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 
 
 class PageSpeedClient:
-    def __init__(self, config: Config, http: HttpClient | None = None):
+    def __init__(self, config: Config, http: HttpClient | None = None,
+                 budget: Any | None = None):
         self.config = config
-        self.http = http or HttpClient(timeout=config.http_timeout)
+        self.http = http or HttpClient(timeout=config.http_timeout, budget=budget)
 
     def run(self, url: str, *, strategy: str = "mobile") -> dict[str, Any]:
         if not self.config.pagespeed_api_key:

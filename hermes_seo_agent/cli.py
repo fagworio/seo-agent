@@ -937,17 +937,19 @@ def _cmd_opportunities(args: argparse.Namespace, config: Any) -> int:
     """Search Analytics + Core Web Vitals opportunities (deterministic gates)."""
     warnings: list[str] = []
     findings: list[dict[str, Any]] = []
+    shared = getattr(args, "_run_context", None)
 
     # -- tier A: low CTR / zero-click (needs GSC) ----------------------------
     if config.google_credentials:
-        shared = getattr(args, "_run_context", None)
         gsc = shared.search_console() if shared is not None else SearchConsoleClient(config)
         end = date.today()
         start = end - timedelta(days=config.search_analytics_days)
         try:
-            rows = gsc.search_analytics_by_page(
-                start_date=start.isoformat(), end_date=end.isoformat()
-            )
+            # Reaproveita a coleta do ciclo (RunContext) quando presente.
+            rows = (shared.gsc_by_page(start.isoformat(), end.isoformat())
+                    if shared is not None and shared.search_console() is not None
+                    else gsc.search_analytics_by_page(
+                        start_date=start.isoformat(), end_date=end.isoformat()))
             for row in rows:
                 impressions = float(row.get("impressions", 0))
                 clicks = float(row.get("clicks", 0))
@@ -974,9 +976,11 @@ def _cmd_opportunities(args: argparse.Namespace, config: Any) -> int:
 
     # -- tier B: Core Web Vitals (CrUX field data; PSI lab fallback) ---------
     if config.crux_api_key:
-        crux = CruxClient(config)
         try:
-            cwv_values = crux.origin_cwv(_origin(config.static_site_url))
+            origin = _origin(config.static_site_url)
+            # Reaproveita o client/cache do ciclo quando presente.
+            cwv_values = (shared.crux_origin(origin) if shared is not None
+                          else CruxClient(config).origin_cwv(origin))
             findings.extend(cwv_findings("origin", cwv_values))
             # History: snapshot tagged with CWV so trends track improvement.
             with Storage(config.sqlite_path) as storage:
@@ -991,7 +995,7 @@ def _cmd_opportunities(args: argparse.Namespace, config: Any) -> int:
 
     # PageSpeed lab data for the home URL (bounded: 1 Lighthouse run).
     if config.pagespeed_api_key:
-        psi = PageSpeedClient(config)
+        psi = shared.pagespeed() if shared is not None else PageSpeedClient(config)
         try:
             result = psi.run(config.static_site_url, strategy="mobile")
             findings.extend(
@@ -1776,7 +1780,9 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                     if term and term not in trend_terms:
                         trend_terms.append(term)
             if trend_terms:
-                trends = batch_trends(config, trend_terms)
+                trends = batch_trends(
+                    config, trend_terms,
+                    budget=(shared.budget if shared is not None else None))
         except Exception:  # noqa: BLE001 - Trends is enrichment, never fatal
             trends = {}
 

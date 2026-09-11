@@ -65,6 +65,14 @@ class MarketIntelligenceProvider(ABC):
     def trend_signal(self, keyword: str) -> dict[str, Any]:
         """Sinal de tendência (crescente/estável/decrescente)."""
 
+    def trend_snapshot(self, keyword: str) -> dict[str, Any]:
+        """Interesse + momentum em UMA coleta: {interest, momentum}.
+
+        Evita chamar keyword_metrics + trend_signal (que no TrendsProvider fariam
+        duas vezes a mesma consulta de série). Default: neutro (sem dado).
+        """
+        return {"interest": None, "momentum": 0}
+
     # -- infra comum ---------------------------------------------------------
 
     def _evidence(self, keyword: str, *, method: str, rows: list[dict[str, Any]],
@@ -152,7 +160,7 @@ class NoopProvider(MarketIntelligenceProvider):
         return {}
 
 
-def get_provider(config: Any) -> MarketIntelligenceProvider:
+def get_provider(config: Any, *, budget: Any | None = None) -> MarketIntelligenceProvider:
     """Factory: retorna o adaptador configurado ou NoopProvider.
 
     Estratégia (sem depender da allowlist do alpha):
@@ -162,6 +170,9 @@ def get_provider(config: Any) -> MarketIntelligenceProvider:
         data_status explícito quando o Google bloqueia o IP (400/403/429).
       * TRENDS_MODE=api + chave -> TrendsProvider (alpha, exige allowlist).
       * sem chave alguma -> NoopProvider.
+
+    `budget` (ExecutionBudget) é repassado ao HttpClient do provider para que as
+    chamadas de Trends contem na telemetria do ciclo.
     """
     mode = getattr(config, "trends_mode", "") or "scrape"
     if mode == "none":
@@ -171,42 +182,37 @@ def get_provider(config: Any) -> MarketIntelligenceProvider:
             config, "pagespeed_api_key", "") or ""
         if trends_key:
             # Cache persistente p/ TODOS os métodos (não só trend_signal).
-            return _PersistentCacheProvider(TrendsProvider(config), config)
+            return _PersistentCacheProvider(TrendsProvider(config, budget=budget), config)
         return NoopProvider(config)
     if mode == "scrape":
-        return _PersistentCacheProvider(TrendsScrapeProvider(config), config)
+        return _PersistentCacheProvider(TrendsScrapeProvider(config, budget=budget), config)
     return NoopProvider(config)
 
 
-def batch_trends(config: Any, terms: list[str], *, limit: int = 20
-                 ) -> dict[str, dict[str, Any]]:
+def batch_trends(config: Any, terms: list[str], *, limit: int = 20,
+                 budget: Any | None = None) -> dict[str, dict[str, Any]]:
     """Sinal de tendência no formato do title-opportunities: {term: {interest, momentum}}.
 
     Unifica o Trends no mesmo provider cacheado (`_PersistentCacheProvider`),
     substituindo o `GoogleTrendsClient` paralelo (que dependia de `pytrends`, não
-    declarado, e tinha só cache em memória). Fail-soft: termos indisponíveis saem
-    neutros (interest None, momentum 0) e o scoring cai para GSC-only. `limit`
-    limita quantos termos consultam a fonte externa (enrichment, não bloqueante).
+    declarado, e tinha só cache em memória). Usa `trend_snapshot` (UMA coleta por
+    termo, em vez de keyword_metrics + trend_signal). `budget` faz as chamadas
+    contarem na telemetria do ciclo. Fail-soft: termos indisponíveis saem neutros.
+    `limit` limita quantos termos consultam a fonte externa (enrichment).
     """
-    provider = get_provider(config)
+    provider = get_provider(config, budget=budget)
     unique = list(dict.fromkeys(t.strip() for t in (terms or []) if t and t.strip()))
     out: dict[str, dict[str, Any]] = {}
     for term in unique[:limit]:
-        interest: float | None = None
-        momentum = 0
         try:
-            metrics = provider.keyword_metrics(term, limit=1)
-            if metrics:
-                value = metrics[0].get("relative_interest_avg")
-                interest = float(value) if isinstance(value, (int, float)) else None
+            snap = provider.trend_snapshot(term) or {}
         except Exception:  # noqa: BLE001 — Trends é enrichment, nunca fatal
-            pass
-        try:
-            trend = (provider.trend_signal(term) or {}).get("trend")
-            momentum = 1 if trend == "growing" else (-1 if trend == "declining" else 0)
-        except Exception:  # noqa: BLE001
-            pass
-        out[term] = {"interest": interest, "momentum": momentum}
+            snap = {}
+        interest = snap.get("interest")
+        out[term] = {
+            "interest": float(interest) if isinstance(interest, (int, float)) else None,
+            "momentum": int(snap.get("momentum") or 0),
+        }
     return out
 
 
@@ -249,6 +255,9 @@ class _PersistentCacheProvider(MarketIntelligenceProvider):
         return self._call("serp_snapshot", f"{keyword}:{limit}", lambda: self.inner.serp_snapshot(keyword, limit=limit))
     def trend_signal(self, keyword):
         return self._call("trend_signal", keyword, lambda: self.inner.trend_signal(keyword))
+    def trend_snapshot(self, keyword):
+        return self._call("trend_snapshot", keyword,
+                          lambda: self.inner.trend_snapshot(keyword))
 
 
 class TrendsScrapeProvider(MarketIntelligenceProvider):
@@ -273,10 +282,24 @@ class TrendsScrapeProvider(MarketIntelligenceProvider):
     _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, budget: Any | None = None):
         super().__init__(config)
         from ..connectors.base import HttpClient
-        self._http = HttpClient(timeout=getattr(config, "http_timeout", 15.0))
+        self._http = HttpClient(timeout=getattr(config, "http_timeout", 15.0),
+                                budget=budget)
+
+    def trend_snapshot(self, keyword: str) -> dict[str, Any]:
+        """UMA tentativa de explore -> {interest, momentum}; neutro se bloqueado.
+
+        O scrape não devolve série utilizável de forma confiável (o Google
+        bloqueia datacenter), então interest fica None e momentum 0 — o scoring
+        cai para GSC-only, como antes.
+        """
+        try:
+            self._explore(keyword)
+        except Exception:
+            pass
+        return {"interest": None, "momentum": 0}
 
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         from ..connectors.base import ConnectorError
@@ -385,10 +408,11 @@ class TrendsProvider(MarketIntelligenceProvider):
     _BASE = "https://www.googleapis.com/trends/v1beta"
     _COUNTRY = "BR"
 
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, budget: Any | None = None):
         super().__init__(config)
         from ..connectors.base import HttpClient
-        self._http = HttpClient(timeout=getattr(config, "http_timeout", 15.0))
+        self._http = HttpClient(timeout=getattr(config, "http_timeout", 15.0),
+                                budget=budget)
         self._key = getattr(config, "trends_api_key", "") or getattr(
             config, "pagespeed_api_key", "") or ""
 
@@ -469,6 +493,25 @@ class TrendsProvider(MarketIntelligenceProvider):
 
     def serp_snapshot(self, keyword: str, *, limit: int = 10) -> list[dict[str, Any]]:
         return []  # requer provedor SERP
+
+    def trend_snapshot(self, keyword: str) -> dict[str, Any]:
+        """Interesse + momentum em UMA consulta de série (evita 2x _timeline)."""
+        try:
+            points = self._timeline(keyword)
+        except Exception:
+            return {"interest": None, "momentum": 0}
+        if not points:
+            return {"interest": None, "momentum": 0}
+        values = [p["value"] for p in points]
+        interest = round(sum(values) / len(values), 1)
+        momentum = 0
+        if len(points) >= 4:
+            mid = len(points) // 2
+            a = sum(values[:mid]) / max(mid, 1)
+            b = sum(values[mid:]) / max(len(points) - mid, 1)
+            delta = ((b - a) / a * 100) if a else 0.0
+            momentum = 1 if delta >= 20 else (-1 if delta <= -20 else 0)
+        return {"interest": interest, "momentum": momentum}
 
     def trend_signal(self, keyword: str) -> dict[str, Any]:
         """Sinal de tendência: metade atual vs metade anterior da série 90d."""
