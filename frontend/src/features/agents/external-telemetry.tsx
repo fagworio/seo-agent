@@ -7,6 +7,7 @@
 type Telemetry = {
   calls?: number;
   cache_hits?: number;
+  http_304?: number;
   bytes?: number;
   retries?: number;
   duration_s?: number;
@@ -29,8 +30,9 @@ export function ExternalTelemetry({ summary }: { summary: Record<string, unknown
         Chamadas externas do ciclo
       </h3>
       <div className="mt-3 flex flex-wrap gap-6 text-sm">
-        <Metric label="Chamadas" value={String(t.calls ?? 0)} />
-        <Metric label="Evitadas (cache)" value={String(t.cache_hits ?? 0)} />
+        <Metric label="Chamadas externas" value={String(t.calls ?? 0)} />
+        <Metric label="Chamadas evitadas (cache)" value={String(t.cache_hits ?? 0)} />
+        <Metric label="HTTP 304 (corpo reusado)" value={String(t.http_304 ?? 0)} />
         <Metric label="Bytes" value={formatBytes(t.bytes ?? 0)} />
         <Metric label="Retentativas" value={String(t.retries ?? 0)} />
         <Metric label="Duração" value={`${Math.round(t.duration_s ?? 0)}s`} />

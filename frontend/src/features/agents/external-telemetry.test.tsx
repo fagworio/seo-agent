@@ -8,24 +8,27 @@ describe("ExternalTelemetry", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("mostra chamadas, evitadas por cache, bytes, retentativas e duração", () => {
+  it("mostra chamadas, evitadas por cache, HTTP 304, bytes, retentativas e duração", () => {
     render(
       <ExternalTelemetry
         summary={{
           telemetry: {
-            calls: 142, cache_hits: 57, bytes: 4_812_345, retries: 2,
-            duration_s: 63.2, max_calls: 0, by_kind: { get: 140, post: 2, http_304: 40 },
+            calls: 142, cache_hits: 17, http_304: 40, bytes: 4_812_345, retries: 2,
+            duration_s: 63.2, max_calls: 0, by_kind: { get: 140, post: 2 },
           },
         }}
       />,
     );
     expect(screen.getByLabelText("Telemetria externa")).toBeInTheDocument();
+    expect(screen.getByText("Chamadas externas")).toBeInTheDocument();
     expect(screen.getByText("142")).toBeInTheDocument();
-    expect(screen.getByText("57")).toBeInTheDocument();
+    expect(screen.getByText("Chamadas evitadas (cache)")).toBeInTheDocument();
+    expect(screen.getByText("17")).toBeInTheDocument();
+    // HTTP 304 é separado das chamadas evitadas (a requisição HTTP aconteceu).
+    expect(screen.getByText("HTTP 304 (corpo reusado)")).toBeInTheDocument();
+    expect(screen.getByText("40")).toBeInTheDocument();
     expect(screen.getByText("4.6 MB")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("63s")).toBeInTheDocument();
-    expect(screen.getByText("http_304: 40")).toBeInTheDocument();
   });
 
   it("mostra o teto quando MAX_EXTERNAL_CALLS está configurado", () => {

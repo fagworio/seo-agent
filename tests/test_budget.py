@@ -23,8 +23,10 @@ def test_budget_counts_bytes_retries_and_duration():
 
 def test_budget_blocks_when_limit_reached():
     budget = ExecutionBudget(max_calls=1)
+    hits = {"n": 0}
 
     def handler(request):
+        hits["n"] += 1
         return httpx.Response(200, text="ok")
 
     http = HttpClient(transport=httpx.MockTransport(handler), budget=budget)
@@ -35,6 +37,20 @@ def test_budget_blocks_when_limit_reached():
     except BudgetExceeded:
         raised = True
     assert raised, "a 2ª chamada deve estourar o orçamento (max_calls=1)"
+    # PRE-FLIGHT: a chamada bloqueada NÃO chega na rede (handler só 1 vez).
+    assert hits["n"] == 1, "a chamada que excede o teto não pode sair na rede"
+
+
+def test_stats_separates_http_304_from_avoided_calls():
+    """HTTP 304 reusa o corpo, mas a requisição ACONTECEU — não é chamada evitada;
+    chamadas realmente evitadas são as de cache de dataset."""
+    b = ExecutionBudget(max_calls=0)
+    b.hit("http_304")
+    b.hit("http_304")
+    b.hit("dataset_cache_hit")
+    stats = b.stats()
+    assert stats["http_304"] == 2
+    assert stats["cache_hits"] == 1
 
 
 def test_make_budget_measures_when_zero_but_never_blocks():

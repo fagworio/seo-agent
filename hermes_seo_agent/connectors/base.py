@@ -65,6 +65,63 @@ class HttpClient:
             merged["If-Modified-Since"] = last_modified
         return self.get(url, headers=merged)
 
+    def get_limited(self, url: str, *, max_bytes: int = 0,
+                    headers: dict[str, str] | None = None) -> httpx.Response:
+        """GET com teto de bytes aplicado em STREAMING.
+
+        Defesa real contra resource exhaustion: rejeita cedo por `Content-Length`
+        e interrompe a leitura ao exceder `max_bytes` — sem baixar a resposta
+        inteira para a RAM. Mantém o pré-flight do budget e o retry/backoff.
+        Uma violação de tamanho NÃO é retentada (ConnectorError direto).
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            kind = "get"
+            if self.budget is not None:
+                self.budget.reserve(kind)
+            recorded = False
+            _t0 = time.perf_counter()
+            try:
+                with self.client.stream("GET", url, headers=headers, auth=self.auth) as resp:
+                    if resp.status_code in {429, 500, 502, 503, 504}:
+                        body = resp.read()
+                        if self.budget is not None:
+                            self.budget.record(bytes_=len(body),
+                                               duration=time.perf_counter() - _t0)
+                            recorded = True
+                        raise _Transient(resp.status_code, response=httpx.Response(
+                            resp.status_code, headers=resp.headers, content=body,
+                            request=resp.request))
+                    declared = resp.headers.get("content-length")
+                    if max_bytes and declared and declared.isdigit() \
+                            and int(declared) > max_bytes:
+                        raise ConnectorError(
+                            f"resposta excede o limite ({declared} > {max_bytes} bytes): {url}")
+                    buf = bytearray()
+                    for chunk in resp.iter_bytes():
+                        buf.extend(chunk)
+                        if max_bytes and len(buf) > max_bytes:
+                            raise ConnectorError(
+                                f"resposta excede o limite de {max_bytes} bytes: {url}")
+                    content = bytes(buf)
+                    response = httpx.Response(resp.status_code, headers=resp.headers,
+                                              content=content, request=resp.request)
+                if self.budget is not None:
+                    self.budget.record(bytes_=len(content),
+                                       duration=time.perf_counter() - _t0)
+                    recorded = True
+                return response
+            except (_Transient, httpx.TimeoutException, httpx.TransportError) as exc:
+                if self.budget is not None and not recorded:
+                    self.budget.record(duration=time.perf_counter() - _t0)
+                    self.budget.record_error(kind)
+                last_exc = exc
+                if attempt < self.max_retries:
+                    if self.budget is not None:
+                        self.budget.retry()
+                    time.sleep(_backoff(attempt, response=getattr(exc, "response", None)))
+        raise ConnectorError(f"GET {url} failed after {self.max_retries} attempts: {last_exc}")
+
     def post(self, url: str, *, json_body: dict[str, Any] | None = None,
              headers: dict[str, str] | None = None,
              params: dict[str, Any] | None = None) -> httpx.Response:
@@ -76,7 +133,12 @@ class HttpClient:
                  headers: dict[str, str] | None = None) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
-            counted = False
+            kind = method.lower()
+            # PRE-FLIGHT: conta/reserva a chamada ANTES da rede. Se o teto já foi
+            # atingido, BudgetExceeded sobe aqui e a requisição NÃO sai.
+            if self.budget is not None:
+                self.budget.reserve(kind)
+            recorded = False
             _t0 = time.perf_counter()
             try:
                 if method == "GET":
@@ -85,18 +147,18 @@ class HttpClient:
                     response = self.client.post(url, params=params, json=json_body,
                                                 headers=headers, auth=self.auth)
                 if self.budget is not None:
-                    # cada tentativa é UMA chamada externa real (com bytes/duração)
-                    self.budget.inc(method.lower(), bytes_=len(response.content or b""),
-                                    duration=time.perf_counter() - _t0)
-                    counted = True
+                    self.budget.record(bytes_=len(response.content or b""),
+                                       duration=time.perf_counter() - _t0)
+                    recorded = True
                 if response.status_code in {429, 500, 502, 503, 504}:
                     raise _Transient(response.status_code, response=response)
                 return response
             except (_Transient, httpx.TimeoutException, httpx.TransportError) as exc:
-                if self.budget is not None and not counted:
-                    # timeout/connreset/DNS: a chamada FOI feita e falhou — conta.
-                    self.budget.inc(method.lower() + "_error",
-                                    duration=time.perf_counter() - _t0)
+                if self.budget is not None and not recorded:
+                    # timeout/connreset/DNS: a reserva já contou a chamada; aqui só
+                    # registra a duração e marca como erro de rede.
+                    self.budget.record(duration=time.perf_counter() - _t0)
+                    self.budget.record_error(kind)
                 last_exc = exc
                 if attempt < self.max_retries:
                     if self.budget is not None:
