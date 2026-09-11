@@ -22,6 +22,9 @@ dev = [
 ]
 google = [
     "google-auth>=2.0",
+    # google.auth.transport.requests (usado para renovar o token) importa
+    # `requests`; sem ele o provider GSC/GA4 quebra em runtime e no CI.
+    "requests>=2.31",
 ]
 
 [project.scripts]
