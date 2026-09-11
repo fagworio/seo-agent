@@ -65,6 +65,25 @@ class HttpClient:
             merged["If-Modified-Since"] = last_modified
         return self.get(url, headers=merged)
 
+    @staticmethod
+    def _decoded_response(resp: httpx.Response, content: bytes) -> httpx.Response:
+        """Reconstrói a Response com o corpo JÁ descomprimido (`iter_bytes`).
+
+        `resp.iter_bytes()` entrega o corpo DECODIFICADO (gzip/br/deflate), então
+        os cabeçalhos de codificação NÃO podem ser preservados: se
+        `Content-Encoding: gzip` sobrevivesse, o httpx tentaria descomprimir de
+        novo ao ler `.content`/`.text` -> DecodingError ("incorrect header
+        check") em toda página/sitemap servida comprimida — regressão de
+        produção 2026-09-11 (o `audit` morria no primeiro fetch gzipado).
+        `Content-Length`/`Transfer-Encoding` também são recalculados a partir do
+        novo corpo (o `Response` repõe `Content-Length` correto).
+        """
+        skip = {"content-encoding", "content-length", "transfer-encoding"}
+        headers = [(key, value) for key, value in resp.headers.raw
+                   if key.decode("latin-1").lower() not in skip]
+        return httpx.Response(resp.status_code, headers=headers, content=content,
+                              request=resp.request)
+
     def get_limited(self, url: str, *, max_bytes: int = 0,
                     headers: dict[str, str] | None = None) -> httpx.Response:
         """GET com teto de bytes aplicado em STREAMING.
@@ -96,9 +115,8 @@ class HttpClient:
                             self.budget.record(bytes_=len(body),
                                                duration=time.perf_counter() - _t0)
                             recorded = True
-                        raise _Transient(resp.status_code, response=httpx.Response(
-                            resp.status_code, headers=resp.headers, content=body,
-                            request=resp.request))
+                        raise _Transient(resp.status_code,
+                                         response=self._decoded_response(resp, body))
                     declared = resp.headers.get("content-length")
                     if max_bytes and declared and declared.isdigit() \
                             and int(declared) > max_bytes:
@@ -111,8 +129,7 @@ class HttpClient:
                             raise ConnectorError(
                                 f"resposta excede o limite de {max_bytes} bytes: {url}")
                     content = bytes(buf)
-                    response = httpx.Response(resp.status_code, headers=resp.headers,
-                                              content=content, request=resp.request)
+                    response = self._decoded_response(resp, content)
                 if self.budget is not None:
                     self.budget.record(bytes_=len(content),
                                        duration=time.perf_counter() - _t0)

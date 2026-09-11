@@ -26,6 +26,31 @@ def _cfg(tmp_path) -> Config:
     )
 
 
+def test_gzipped_body_is_readable_after_streaming_limit(tmp_path):
+    """Regressão (produção 2026-09-11): `get_limited` lia o corpo em STREAMING via
+    `iter_bytes()` (que DESCOMPRIME) mas reconstruía a `Response` preservando
+    `Content-Encoding: gzip` — o httpx descomprimia de novo ao ler
+    `.content`/`.text` e o fetch morria com
+    `DecodingError: incorrect header check`. Na prática o `audit` quebrava no
+    primeiro sitemap/página comprimida (site atrás de Cloudflare/nginx).
+    """
+    cfg = _cfg(tmp_path)
+    body = "<html><head><title>P</title></head><body>oi</body></html>"
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-encoding": "gzip", "etag": '"1"'},
+                              content=gzip.compress(body.encode()))
+
+    http = HttpClient(transport=httpx.MockTransport(handler))
+    with Storage(cfg.sqlite_path) as store:
+        static = StaticSiteClient(cfg, http=http, cache_store=store)
+        page = static.fetch_page("https://x.com/p/")
+        assert page.status_code == 200
+        assert page.html == body
+        assert page.title == "P"
+        static.close()
+
+
 def test_page_over_byte_limit_is_rejected(tmp_path):
     """Limite de bytes é enforçado (anti resposta gigante)."""
     from hermes_seo_agent.connectors.base import ConnectorError
