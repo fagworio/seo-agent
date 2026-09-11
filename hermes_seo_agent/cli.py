@@ -1702,8 +1702,6 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         and float(r.get("ctr", 0)) <= args.max_ctr
     ]
     low_ctr.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
-    # --limit 0 (default) = TODOS os elegíveis; >0 = top N.
-    targets = low_ctr if not args.limit else low_ctr[: args.limit]
 
     # — Google Discover (site-wide): momento da superficie de descoberta.
     # A API do GSC so permite a dimensao DATE sob o filtro type=discover,
@@ -1720,20 +1718,24 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     except Exception:  # noqa: BLE001 - Discover is context, never fatal
         discover = {}
 
-    # — dedup: NÃO re-analisar URLs já em revisão de título ou com medição em
-    # andamento (evita o laço de repetir candidatos que o agente já tratou).
+    # — dedup ANTES do corte da janela: NAO re-analisar URLs ja em revisao de
+    # titulo ou com medicao em andamento. O corte --limit aplica-se aos
+    # ELEGIVEIS (top N por impressoes DEPOIS de descartar os bloqueados) —
+    # cortar antes prendia o agente nas mesmas top URLs bloqueadas (30/30
+    # skip, 0 candidatos para sempre, sem nunca alcancar as proximas).
     skipped: list[dict[str, Any]] = []
-    eligible: list[dict[str, Any]] = []
+    targets: list[dict[str, Any]] = []
     with Storage(config.sqlite_path) as storage:
-        for row in targets:
+        for row in low_ctr:
+            if args.limit and len(targets) >= args.limit:
+                break
             url = (row.get("keys") or [""])[0]
             skip, reason = storage.title_review_skippable(
                 url, measurement_days=config.editorial_measurement_min_days)
             if skip:
                 skipped.append({"url": url, "reason": reason})
             else:
-                eligible.append(row)
-    targets = eligible
+                targets.append(row)
 
     # Reaproveita os clients do ciclo (RunContext) quando presente — as chamadas
     # passam a contar no budget/telemetria e o WP/static não são recriados.
