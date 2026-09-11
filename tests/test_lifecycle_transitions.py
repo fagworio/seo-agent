@@ -58,3 +58,15 @@ def test_forward_transitions_still_allowed(tmp_path):
         s.set_work_item_lifecycle("checklist:6", "executing")
         s.set_work_item_lifecycle("checklist:6", "implemented")
         assert _status(s, "checklist:6") == "implemented"
+
+
+def test_lifecycle_insert_on_conflict_is_idempotent(tmp_path):
+    """Race no primeiro INSERT não deve levantar UNIQUE constraint."""
+    with Storage(str(tmp_path / "c.db")) as s:
+        s.set_work_item_lifecycle("z:1", "new")
+        # INSERT duplicado com ON CONFLICT DO NOTHING (mesmo SQL do método).
+        s.conn.execute(
+            "INSERT INTO work_item_lifecycle (work_item_id, canonical_status, updated_at) "
+            "VALUES ('z:1', 'approved', 'x') ON CONFLICT(work_item_id) DO NOTHING")
+        s.conn.commit()
+        assert _status(s, "z:1") == "new", "ON CONFLICT não deve sobrescrever"

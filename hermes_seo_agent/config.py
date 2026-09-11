@@ -66,6 +66,7 @@ class Config:
     # Limite de corpo por tipo de recurso (defesa contra resposta gigante/maliciosa).
     max_page_bytes: int = 5 * 1024 * 1024      # 5 MB por página HTML
     max_sitemap_bytes: int = 20 * 1024 * 1024  # 20 MB por sitemap
+    max_robots_bytes: int = 1 * 1024 * 1024    # 1 MB por robots.txt
     # URL de um marcador de BUILD do site estático (ex.: /build.json) cujo hash
     # entra no fingerprint do audit: um deploy de template muda o hash e força o
     # audit mesmo sem WP modified/lastmod. Vazio = recurso desligado.
@@ -246,6 +247,7 @@ def load_config() -> Config:
         ssrf_resolve_dns=_bool("SSRF_RESOLVE_DNS", False),
         max_page_bytes=_int("MAX_PAGE_BYTES", 5 * 1024 * 1024, 1024, 100 * 1024 * 1024),
         max_sitemap_bytes=_int("MAX_SITEMAP_BYTES", 20 * 1024 * 1024, 1024, 500 * 1024 * 1024),
+        max_robots_bytes=_int("MAX_ROBOTS_BYTES", 1 * 1024 * 1024, 1024, 100 * 1024 * 1024),
         static_build_url=_env("STATIC_BUILD_URL", ""),
         alert_webhook_url=_env("ALERT_WEBHOOK_URL"),
         alert_high_threshold=_int("ALERT_HIGH_THRESHOLD", 10, 1, 10_000),

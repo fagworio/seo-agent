@@ -84,7 +84,14 @@ class HttpClient:
             try:
                 with self.client.stream("GET", url, headers=headers, auth=self.auth) as resp:
                     if resp.status_code in {429, 500, 502, 503, 504}:
-                        body = resp.read()
+                        # corpo de erro TAMBÉM é limitado (um 500 com 500MB não
+                        # pode carregar tudo para a RAM).
+                        ebuf = bytearray()
+                        for chunk in resp.iter_bytes():
+                            ebuf.extend(chunk)
+                            if max_bytes and len(ebuf) > max_bytes:
+                                break
+                        body = bytes(ebuf)
                         if self.budget is not None:
                             self.budget.record(bytes_=len(body),
                                                duration=time.perf_counter() - _t0)

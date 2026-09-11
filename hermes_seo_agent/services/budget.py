@@ -31,6 +31,7 @@ class ExecutionBudget:
         self.max_calls = max_calls
         self._lock = threading.Lock()
         self._calls = 0
+        self._blocked = 0
         self._bytes = 0
         self._retries = 0
         self._duration = 0.0
@@ -41,13 +42,16 @@ class ExecutionBudget:
     def reserve(self, kind: str = "http") -> None:
         """Conta UMA chamada externa ANTES de enviá-la (hard pre-flight).
         Levanta :class:`BudgetExceeded` quando o teto é atingido, de modo que a
-        requisição que excederia NÃO sai na rede."""
+        requisição que excederia NÃO sai na rede. `stats()["calls"]` reflete
+        apenas chamadas REALMENTE realizadas; a tentativa bloqueada vai para
+        `blocked_calls` (útil na calibragem do teto)."""
         with self._lock:
+            if self.max_calls and self._calls >= self.max_calls:
+                self._blocked += 1
+                raise BudgetExceeded(
+                    f"execution budget exceeded: {self._calls} calls >= {self.max_calls}")
             self._calls += 1
             self._kinds[kind] = self._kinds.get(kind, 0) + 1
-            if self.max_calls and self._calls > self.max_calls:
-                raise BudgetExceeded(
-                    f"execution budget exceeded: {self._calls} calls > {self.max_calls}")
 
     def record(self, *, bytes_: int = 0, duration: float = 0.0) -> None:
         with self._lock:
@@ -80,6 +84,8 @@ class ExecutionBudget:
             kinds = dict(self._kinds)
             return {
                 "calls": self._calls,
+                # tentativas bloqueadas ANTES da rede (teto atingido)
+                "blocked_calls": self._blocked,
                 # chamadas externas REALMENTE evitadas (cache de dataset por janela)
                 "cache_hits": kinds.get("dataset_cache_hit", 0),
                 # HTTP 304 reusa o corpo, mas a requisição HTTP ACONTECEU — não é

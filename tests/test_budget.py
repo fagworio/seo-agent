@@ -39,6 +39,9 @@ def test_budget_blocks_when_limit_reached():
     assert raised, "a 2ª chamada deve estourar o orçamento (max_calls=1)"
     # PRE-FLIGHT: a chamada bloqueada NÃO chega na rede (handler só 1 vez).
     assert hits["n"] == 1, "a chamada que excede o teto não pode sair na rede"
+    stats = budget.stats()
+    assert stats["calls"] == 1, "calls conta apenas chamadas REALIZADAS"
+    assert stats["blocked_calls"] == 1, "a tentativa bloqueada vai para blocked_calls"
 
 
 def test_stats_separates_http_304_from_avoided_calls():

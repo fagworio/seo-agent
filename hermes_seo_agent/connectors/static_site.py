@@ -352,7 +352,10 @@ class StaticSiteClient:
     def fetch_robots(self, base_url: str | None = None) -> "RobotsRules":
         base = (base_url or self.config.static_site_url).rstrip("/")
         self.validate_url(f"{base}/robots.txt")
-        response = self.http.get(f"{base}/robots.txt")
+        # robots.txt com teto de bytes em streaming (antes usava get() sem limite).
+        response = self.http.get_limited(
+            f"{base}/robots.txt",
+            max_bytes=int(getattr(self.config, "max_robots_bytes", 0) or 0))
         if response.status_code != 200:
             return RobotsRules(base=base, raw="", disallow=[], sitemaps=[])
         return RobotsRules.parse(base, response.text)

@@ -1007,14 +1007,24 @@ class Storage:
                     campaign_item_id=campaign_item_id, outcome_id=outcome_id,
                     _retry=False)
             return
-        self.conn.execute(
+        # INSERT idempotente: se outra conexão (API/cron/runner) criou a linha
+        # entre o SELECT e o INSERT, ON CONFLICT não falha; reavaliamos o estado.
+        cur3 = self.conn.execute(
             "INSERT INTO work_item_lifecycle (work_item_id, canonical_status, source, url, "
             "action_fingerprint, campaign_id, campaign_item_id, outcome_id, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(work_item_id) DO NOTHING",
             (work_item_id, canonical_status, source, url, action_fingerprint,
              campaign_id, campaign_item_id, outcome_id, now),
         )
         self.conn.commit()
+        if cur3.rowcount == 0 and _retry:
+            # corrida no primeiro INSERT: reavalia o gate sobre o estado criado.
+            self.set_work_item_lifecycle(
+                work_item_id, canonical_status, source=source, url=url,
+                action_fingerprint=action_fingerprint, campaign_id=campaign_id,
+                campaign_item_id=campaign_item_id, outcome_id=outcome_id,
+                _retry=False)
 
     def get_work_item_lifecycle(self, work_item_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(

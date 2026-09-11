@@ -6,6 +6,7 @@
  */
 type Telemetry = {
   calls?: number;
+  blocked_calls?: number;
   cache_hits?: number;
   http_304?: number;
   bytes?: number;
@@ -37,6 +38,7 @@ export function ExternalTelemetry({ summary }: { summary: Record<string, unknown
         <Metric label="Retentativas" value={String(t.retries ?? 0)} />
         <Metric label="Duração" value={`${Math.round(t.duration_s ?? 0)}s`} />
         {t.max_calls ? <Metric label="Teto" value={String(t.max_calls)} /> : null}
+        {t.blocked_calls ? <Metric label="Bloqueadas (teto)" value={String(t.blocked_calls)} /> : null}
       </div>
       {kinds.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
