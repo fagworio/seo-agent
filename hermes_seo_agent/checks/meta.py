@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 
 from ..connectors.static_site import PageSnapshot
@@ -15,7 +16,16 @@ _SITE_NAME_SUFFIX = re.compile(r"\s*[—–-]\s*UnicornioHater\s*$", re.IGNORECA
 
 
 def _strip_site_name(title: str) -> str:
-    return _SITE_NAME_SUFFIX.sub("", (title or "")).strip()
+    """Remove o site name do template E desescapa entidades HTML.
+
+    O WP REST entrega title.rendered com entidades (&#8216;); o render
+    (autoescape do nunjucks) escapa de novo -> &amp;#8216; no <title>, que
+    infla o comprimento em ~10 chars por apóstrofo e gerava title_too_long
+    FALSO (título real de 54 chars medido como 78). Unescape duplo defensivo
+    cobre os dois níveis.
+    """
+    text = html.unescape(html.unescape(title or ""))
+    return _SITE_NAME_SUFFIX.sub("", text).strip()
 
 
 def canonical_findings(page: PageSnapshot, *, expected_canonical: str = "") -> list[dict[str, str]]:
