@@ -35,14 +35,17 @@ try:
     state["campaigns"] = status_groups("improvement_campaigns")
     # Só runs que FALHARAM/PARCIALIZARAM merecem atenção (não toda execução OK).
     state["failed_runs"] = count_where("agent_runs", "status in ('failed','partial')")
-    # Findings do ÚLTIMO ciclo por severidade (não a contagem histórica bruta, que
-    # muda mesmo quando o audit reencontra exatamente os mesmos problemas).
+    # Findings do ÚLTIMO ciclo por IDENTIDADE (rule_id+url+severity), não só
+    # contagem: dois ciclos com os mesmos totais mas problemas DIFERENTES devem
+    # mudar o hash. Ordenado para ser determinístico.
     try:
         latest = db.execute("select id from cycles order by started_at desc limit 1").fetchone()
         if latest:
-            state["findings_latest"] = db.execute(
-                "select severity, count(*) from findings where cycle_id = ? group by severity",
-                (latest[0],)).fetchall()
+            rows = db.execute(
+                "select rule_id, url, severity from findings where cycle_id = ? "
+                "order by rule_id, url, severity", (latest[0],)).fetchall()
+            state["findings_latest_digest"] = hashlib.sha256(
+                "\n".join(f"{r[0]}|{r[1]}|{r[2]}" for r in rows).encode()).hexdigest()[:24]
     except sqlite3.Error:
         pass
 

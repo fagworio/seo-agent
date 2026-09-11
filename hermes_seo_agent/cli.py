@@ -1367,124 +1367,144 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
     from .services.run_context import RunContext
     run_context = RunContext(config)
-
-    # 1) Bounded audit + report (always).
-    run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run, json=True,
-                                      markdown=False, command="report",
-                                      _run_context=run_context,
-                                      _incremental=True), config=config)
-    steps.append("audit")
-
-    # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
-    #     refresh_data). Não há um segundo motor de coleta.
-    run_silently(_cmd_refresh_data,
-                 args=_ns(sources="wordpress,sitemap", json=True,
-                          _run_context=run_context), config=config)
-    steps.append("refresh-wp-sitemap")
-
-    # 2) Daily GSC inspect window.
-    inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
-    if now.hour in inspect_hours:
-        run_silently(_cmd_inspect,
-                     args=_ns(budget=0, dry_run=False, json=True,
-                              _run_context=run_context), config=config)
-        if config.google_credentials:
-            run_silently(_cmd_demand,
-                         args=_ns(store=True, min_impressions=0,
-                                  _run_context=run_context), config=config)
-            run_silently(_cmd_outcomes,
-                         args=_ns(action="revalidate-due", limit=200,
-                                  _run_context=run_context), config=config)
-            steps.append("gsc-demand")
-            steps.append("revalidate-7d")
-        # Background: mantém a fila de melhorias crescendo diariamente.
-        run_silently(_cmd_post_audit,
-                     args=_ns(limit=20, min_impressions=50, write=False, json=True,
-                              _run_context=run_context), config=config)
-        steps.append("inspect")
-        steps.append("post-audit")
-
-    # 3) Weekly deep report + opportunities + deep post-audit.
-    if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_opportunities,
-                     args=_ns(json=True, _run_context=run_context), config=config)
-        run_silently(_cmd_post_audit,
-                     args=_ns(limit=50, min_impressions=50, write=True, json=True,
-                              _run_context=run_context), config=config)
-        steps.append("deep_report")
-        steps.append("post-audit-deep")
-
-    # 4) Weekly GA4 collection (A2): janela fechada, persistida; degrada em
-    #    silêncio quando GA4_PROPERTY_ID não está configurado.
-    if config.ga4_property_id and now.weekday() == args.deep_weekday \
-            and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_ga4,
-                     args=_ns(action="collect", days=28, store=True,
-                              _run_context=run_context), config=config)
-        steps.append("ga4-collect")
-
-    # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
-    #    — SEMPRE chama o rebuild (retomada real). Removida a trava de "run
-    #    ativo": um run parcial ficava "running" para sempre e o build semanal
-    #    nunca retomava (bug do corpus eternamente incompleto). O rebuild é
-    #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
-    #    com um run parcial apenas retoma e drena a fila até finalizar.
-    if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
-        run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0,
-                                           _run_context=run_context),
-                     config=config)
-        steps.append("corpus-rebuild")
-
-    # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
-    #    motor novo de correção). O cron só acorda o runner. Isolado: uma exceção
-    #    aqui NÃO pode escapar (senão run_context/agent_run ficam abertos).
     try:
-        with Storage(config.sqlite_path) as camp_storage:
-            from .services.improvement_campaigns import ImprovementCampaignService
-            csvc = ImprovementCampaignService(camp_storage, config=config)
-            due = csvc.list_campaigns(limit=200)
-            for c in due:
-                if c["status"] not in ("approved", "queued"):
-                    continue
-                next_at = c.get("next_run_at") or ""
-                if next_at:
-                    try:
-                        due_at = datetime.datetime.fromisoformat(next_at.replace("Z", "+00:00"))
-                        if due_at.tzinfo is None:
-                            due_at = due_at.replace(tzinfo=datetime.timezone.utc)
-                        if due_at > now:
-                            continue
-                    except ValueError:
-                        errors.append(f"campaign-{c['id']}: invalid next_run_at")
-                        continue
-                csvc.run(c["id"], actor="system")
-                steps.append(f"campaign-{c['id']}")
-    except Exception as exc:  # noqa: BLE001 — campanha nunca derruba o ciclo/recursos
-        errors.append(f"campaigns: {exc}")
 
-    # Telemetria do ciclo: chamadas externas, cache hits, bytes, retries, duração
-    # (agregadas no RunContext/budget compartilhado pelas etapas).
-    telemetry = run_context.budget.stats() if run_context.budget is not None else {}
-    run_context.close()
-    result = {
-        "status": "partial" if errors else "ok",
-        "summary": {"command": "schedule", "steps": steps,
-                    "hour": now.hour, "weekday": now.weekday(), "errors": errors,
-                    "telemetry": telemetry},
-        "findings": [],
-        "safe_actions": [],
-        "approval_required": [],
-    }
-    with Storage(config.sqlite_path) as run_storage:
-        AgentRunService(run_storage).complete(
-            scheduled_run_id, status="partial" if errors else "success", **totals,
-            summary={"steps": steps, "revalidation_window_days": 7,
-                     "telemetry": telemetry},
-        )
-    _emit(result, force_json=True)
-    # Consistência operacional: execução PARCIAL (alguma etapa falhou) sinaliza
-    # falha no exit code para o cron (antes retornava 0 mesmo com errors).
-    return 1 if errors else 0
+        # 1) Bounded audit + report (always).
+        run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run, json=True,
+                                          markdown=False, command="report",
+                                          _run_context=run_context,
+                                          _incremental=True), config=config)
+        steps.append("audit")
+
+        # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
+        #     refresh_data). Não há um segundo motor de coleta.
+        run_silently(_cmd_refresh_data,
+                     args=_ns(sources="wordpress,sitemap", json=True,
+                              _run_context=run_context), config=config)
+        steps.append("refresh-wp-sitemap")
+
+        # 2) Daily GSC inspect window.
+        inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
+        if now.hour in inspect_hours:
+            run_silently(_cmd_inspect,
+                         args=_ns(budget=0, dry_run=False, json=True,
+                                  _run_context=run_context), config=config)
+            if config.google_credentials:
+                run_silently(_cmd_demand,
+                             args=_ns(store=True, min_impressions=0,
+                                      _run_context=run_context), config=config)
+                run_silently(_cmd_outcomes,
+                             args=_ns(action="revalidate-due", limit=200,
+                                      _run_context=run_context), config=config)
+                steps.append("gsc-demand")
+                steps.append("revalidate-7d")
+            # Background: mantém a fila de melhorias crescendo diariamente.
+            run_silently(_cmd_post_audit,
+                         args=_ns(limit=20, min_impressions=50, write=False, json=True,
+                                  _run_context=run_context), config=config)
+            steps.append("inspect")
+            steps.append("post-audit")
+
+        # 3) Weekly deep report + opportunities + deep post-audit.
+        if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
+            run_silently(_cmd_opportunities,
+                         args=_ns(json=True, _run_context=run_context), config=config)
+            run_silently(_cmd_post_audit,
+                         args=_ns(limit=50, min_impressions=50, write=True, json=True,
+                                  _run_context=run_context), config=config)
+            steps.append("deep_report")
+            steps.append("post-audit-deep")
+
+        # 4) Weekly GA4 collection (A2): janela fechada, persistida; degrada em
+        #    silêncio quando GA4_PROPERTY_ID não está configurado.
+        if config.ga4_property_id and now.weekday() == args.deep_weekday \
+                and now.hour == min(inspect_hours or {6}):
+            run_silently(_cmd_ga4,
+                         args=_ns(action="collect", days=28, store=True,
+                                  _run_context=run_context), config=config)
+            steps.append("ga4-collect")
+
+        # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
+        #    — SEMPRE chama o rebuild (retomada real). Removida a trava de "run
+        #    ativo": um run parcial ficava "running" para sempre e o build semanal
+        #    nunca retomava (bug do corpus eternamente incompleto). O rebuild é
+        #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
+        #    com um run parcial apenas retoma e drena a fila até finalizar.
+        if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
+            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0,
+                                               _run_context=run_context),
+                         config=config)
+            steps.append("corpus-rebuild")
+
+        # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
+        #    motor novo de correção). O cron só acorda o runner. Isolado: uma exceção
+        #    aqui NÃO pode escapar (senão run_context/agent_run ficam abertos).
+        try:
+            with Storage(config.sqlite_path) as camp_storage:
+                from .services.improvement_campaigns import ImprovementCampaignService
+                csvc = ImprovementCampaignService(camp_storage, config=config)
+                due = csvc.list_campaigns(limit=200)
+                for c in due:
+                    if c["status"] not in ("approved", "queued"):
+                        continue
+                    next_at = c.get("next_run_at") or ""
+                    if next_at:
+                        try:
+                            due_at = datetime.datetime.fromisoformat(next_at.replace("Z", "+00:00"))
+                            if due_at.tzinfo is None:
+                                due_at = due_at.replace(tzinfo=datetime.timezone.utc)
+                            if due_at > now:
+                                continue
+                        except ValueError:
+                            errors.append(f"campaign-{c['id']}: invalid next_run_at")
+                            continue
+                    csvc.run(c["id"], actor="system")
+                    steps.append(f"campaign-{c['id']}")
+        except Exception as exc:  # noqa: BLE001 — campanha nunca derruba o ciclo/recursos
+            errors.append(f"campaigns: {exc}")
+
+        # Telemetria do ciclo: chamadas externas, cache hits, bytes, retries, duração
+        # (agregadas no RunContext/budget compartilhado pelas etapas).
+        telemetry = run_context.budget.stats() if run_context.budget is not None else {}
+        run_context.close()
+        result = {
+            "status": "partial" if errors else "ok",
+            "summary": {"command": "schedule", "steps": steps,
+                        "hour": now.hour, "weekday": now.weekday(), "errors": errors,
+                        "telemetry": telemetry},
+            "findings": [],
+            "safe_actions": [],
+            "approval_required": [],
+        }
+        with Storage(config.sqlite_path) as run_storage:
+            AgentRunService(run_storage).complete(
+                scheduled_run_id, status="partial" if errors else "success", **totals,
+                summary={"steps": steps, "revalidation_window_days": 7,
+                         "telemetry": telemetry},
+            )
+        _emit(result, force_json=True)
+        # Consistência operacional: execução PARCIAL (alguma etapa falhou) sinaliza
+        # falha no exit code para o cron (antes retornava 0 mesmo com errors).
+        return 1 if errors else 0
+    except Exception as exc:  # noqa: BLE001 — nunca deixar o ciclo sem finalizar
+        errors.append(f"scheduler: {exc}")
+        try:
+            with Storage(config.sqlite_path) as run_storage:
+                AgentRunService(run_storage).complete(
+                    scheduled_run_id, status="failed", error=f"scheduler: {exc}")
+        except Exception:
+            pass
+        _emit({"status": "error", "summary": {"command": "schedule",
+               "errors": errors}, "findings": [], "safe_actions": [],
+               "approval_required": []}, force_json=True)
+        return 1
+    finally:
+        # Garante o fechamento de recursos mesmo em exceção inesperada
+        # (close é idempotente: o caminho normal já fechou antes do return).
+        try:
+            run_context.close()
+        except Exception:
+            pass
 
 
 def _ns(**kw) -> argparse.Namespace:
@@ -1711,7 +1731,16 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                 eligible.append(row)
     targets = eligible
 
-    with StaticSiteClient(config) as static, WordPressClient(config) as wp:
+    # Reaproveita os clients do ciclo (RunContext) quando presente — as chamadas
+    # passam a contar no budget/telemetria e o WP/static não são recriados.
+    import contextlib as _contextlib
+    _stack = _contextlib.ExitStack()
+    if shared is not None:
+        static, wp = shared.static(), shared.wordpress()
+    else:
+        static = _stack.enter_context(StaticSiteClient(config))
+        wp = _stack.enter_context(WordPressClient(config))
+    with _stack:
         # Pass 1: collect page/query rows once, then group locally (avoids N+1).
         page_queries: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         query_map: dict[str, list[dict[str, Any]]] = {}
@@ -1735,9 +1764,11 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
 
         # Pass 2: Google Trends for the top-5 queries of each page (dedup
         # global; fail-soft -> neutral scores when Trends is unreachable).
+        # Unificado no MarketIntelligenceProvider (cache persistente) — sem o
+        # GoogleTrendsClient/pytrends paralelo.
         trends: dict[str, dict[str, Any]] = {}
         try:
-            from .connectors.google_trends import GoogleTrendsClient
+            from .services.market_intelligence import batch_trends
             trend_terms: list[str] = []
             for _row, queries in page_queries:
                 for q in queries[:5]:
@@ -1745,7 +1776,7 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                     if term and term not in trend_terms:
                         trend_terms.append(term)
             if trend_terms:
-                trends = GoogleTrendsClient().batch_interest(trend_terms)
+                trends = batch_trends(config, trend_terms)
         except Exception:  # noqa: BLE001 - Trends is enrichment, never fatal
             trends = {}
 

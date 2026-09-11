@@ -145,7 +145,7 @@ class RunContext:
         if origin not in self._crux_cwv:
             from ..connectors.crux import CruxClient
             if self._crux is None:
-                self._crux = CruxClient(self.config)
+                self._crux = CruxClient(self.config, budget=self.budget)
             self._crux_cwv[origin] = self._crux.origin_cwv(origin)
         else:
             self._hit("dataset_cache_hit")

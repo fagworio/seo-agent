@@ -306,7 +306,7 @@ class IntegrationStatusService:
             "trends", True, status,
             detail=detail,
             last_window=str(sig.get("updated_at", ""))[:19],
-            limitations="pytrends (endpoint nao oficial); geo=BR, janela 90d",
+            limitations="MarketIntelligenceProvider (Trends); geo=BR, janela 90d",
         )
 
     def _ga4(self) -> SourceStatus:
@@ -450,11 +450,14 @@ class IntegrationStatusService:
                              f"{provider.name} bloqueado/indisponível: {str(exc)[:120]}",
                              extras={"provider": provider.name})
 
-        # Trends (live): probe pytrends real (uma query de teste).
+        # Trends (live): probe pelo MarketIntelligenceProvider (mesmo caminho do
+        # title-opportunities; sem pytrends paralelo).
         try:
-            from ..connectors.google_trends import GoogleTrendsClient
-            probe = GoogleTrendsClient().batch_interest(["gta 6"])
-            ok = bool(probe.get("gta 6", {}).get("interest") is not None)
+            from .market_intelligence import get_provider
+            provider = get_provider(self.config)
+            probe = provider.keyword_metrics("gta 6", limit=1)
+            sig = provider.trend_signal("gta 6") or {}
+            ok = bool(probe) or sig.get("trend") in ("growing", "declining", "stable")
             self._update(
                 out, "trends", "available" if ok else "unavailable",
                 "operacional (probe ao vivo OK)"

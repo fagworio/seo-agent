@@ -5,6 +5,7 @@ SQLite apenas ETag/Last-Modified/content_hash e o corpo gzip em arquivo no disco
 (config.http_cache_dir). Sitemaps (pequenos, usados com frequência) continuam no
 SQLite.
 """
+import dataclasses
 import gzip
 
 import httpx
@@ -23,6 +24,29 @@ def _cfg(tmp_path) -> Config:
         http_cache_dir=str(tmp_path / "http_cache"),
         google_credentials="", ga4_property_id="",
     )
+
+
+def test_page_over_byte_limit_is_rejected(tmp_path):
+    """Limite de bytes é enforçado (anti resposta gigante)."""
+    from hermes_seo_agent.connectors.base import ConnectorError
+
+    cfg = _cfg(tmp_path)
+    cfg = dataclasses.replace(cfg, max_page_bytes=100)  # limite minúsculo
+
+    def handler(request):
+        return httpx.Response(200, text="x" * 5000,
+                              headers={"content-length": "5000"})
+
+    http = HttpClient(transport=httpx.MockTransport(handler))
+    with Storage(cfg.sqlite_path) as store:
+        static = StaticSiteClient(cfg, http=http, cache_store=store)
+        try:
+            static.fetch_page("https://x.com/p/")
+            raised = False
+        except ConnectorError:
+            raised = True
+        assert raised, "resposta acima de max_page_bytes deve ser rejeitada"
+        static.close()
 
 
 def test_page_body_goes_to_disk_not_sqlite(tmp_path):

@@ -178,6 +178,38 @@ def get_provider(config: Any) -> MarketIntelligenceProvider:
     return NoopProvider(config)
 
 
+def batch_trends(config: Any, terms: list[str], *, limit: int = 20
+                 ) -> dict[str, dict[str, Any]]:
+    """Sinal de tendência no formato do title-opportunities: {term: {interest, momentum}}.
+
+    Unifica o Trends no mesmo provider cacheado (`_PersistentCacheProvider`),
+    substituindo o `GoogleTrendsClient` paralelo (que dependia de `pytrends`, não
+    declarado, e tinha só cache em memória). Fail-soft: termos indisponíveis saem
+    neutros (interest None, momentum 0) e o scoring cai para GSC-only. `limit`
+    limita quantos termos consultam a fonte externa (enrichment, não bloqueante).
+    """
+    provider = get_provider(config)
+    unique = list(dict.fromkeys(t.strip() for t in (terms or []) if t and t.strip()))
+    out: dict[str, dict[str, Any]] = {}
+    for term in unique[:limit]:
+        interest: float | None = None
+        momentum = 0
+        try:
+            metrics = provider.keyword_metrics(term, limit=1)
+            if metrics:
+                value = metrics[0].get("relative_interest_avg")
+                interest = float(value) if isinstance(value, (int, float)) else None
+        except Exception:  # noqa: BLE001 — Trends é enrichment, nunca fatal
+            pass
+        try:
+            trend = (provider.trend_signal(term) or {}).get("trend")
+            momentum = 1 if trend == "growing" else (-1 if trend == "declining" else 0)
+        except Exception:  # noqa: BLE001
+            pass
+        out[term] = {"interest": interest, "momentum": momentum}
+    return out
+
+
 class _PersistentCacheProvider(MarketIntelligenceProvider):
     """Small SQLite TTL cache shared by CLI processes."""
     def __init__(self, inner: MarketIntelligenceProvider, config: Any, ttl: int = 86400):

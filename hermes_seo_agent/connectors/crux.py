@@ -11,9 +11,10 @@ _BASE = "https://chromeuxreport.googleapis.com/v1/records:queryRecord"
 
 
 class CruxClient:
-    def __init__(self, config: Config, http: HttpClient | None = None):
+    def __init__(self, config: Config, http: HttpClient | None = None,
+                 budget: Any | None = None):
         self.config = config
-        self.http = http or HttpClient(timeout=config.http_timeout)
+        self.http = http or HttpClient(timeout=config.http_timeout, budget=budget)
 
     def query_origin(self, origin: str, *, form_factor: str | None = "PHONE") -> dict[str, Any]:
         """CrUX record for an origin; form_factor None = aggregate."""

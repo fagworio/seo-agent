@@ -275,8 +275,14 @@ class StaticSiteClient:
         # Guard SSRF antes de qualquer fetch (sitemap ou página).
         self.validate_url(url)
         cached = store.get_http_cache(url)
-        response = self.http.get_conditional(url, etag=(cached or {}).get("etag", ""),
-                                             last_modified=(cached or {}).get("last_modified", ""))
+        # GET condicional com teto de bytes em STREAMING (não baixa 500MB p/ RAM).
+        merged: dict[str, str] = {}
+        if (cached or {}).get("etag"):
+            merged["If-None-Match"] = cached["etag"]
+        if (cached or {}).get("last_modified"):
+            merged["If-Modified-Since"] = cached["last_modified"]
+        response = self.http.get_limited(url, max_bytes=self._max_bytes(cache_body),
+                                         headers=merged)
         if response.status_code == 304:
             raw = None
             if cache_body:
@@ -288,17 +294,12 @@ class StaticSiteClient:
                 response = type(response)(status_code=200, headers=response.headers,
                                           content=content)
                 if self.http.budget is not None:
-                    self.http.budget.hit("http_304")  # chamada de corpo EVITADA
+                    self.http.budget.hit("http_304")  # corpo reusado (não é chamada evitada)
             else:
                 # 304 sem corpo (cache limpo) ou .gz corrompido: força um GET pleno.
-                response = self.http.get(url)
+                response = self.http.get_limited(url, max_bytes=self._max_bytes(cache_body))
         if response.status_code == 200:
-            # Limite de tamanho por tipo de recurso (anti resposta gigante/maliciosa).
-            limit = self._max_bytes(cache_body)
-            if limit and len(response.content) > limit:
-                raise ConnectorError(
-                    f"resposta excede o limite de {limit} bytes "
-                    f"({len(response.content)}): {url}")
+            # (o limite de bytes é aplicado em streaming no get_limited acima)
             etag = response.headers.get("etag", "")
             last_modified = response.headers.get("last-modified", "")
             content_hash = hashlib.sha256(response.content).hexdigest()

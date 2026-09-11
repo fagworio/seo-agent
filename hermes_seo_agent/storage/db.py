@@ -952,12 +952,18 @@ class Storage:
                                 action_fingerprint: str | None = None,
                                 campaign_id: int | None = None,
                                 campaign_item_id: int | None = None,
-                                outcome_id: int | None = None) -> None:
+                                outcome_id: int | None = None,
+                                _retry: bool = True) -> None:
         """Registra/aprimora o estado canônico de um work item (única fonte p/ UI).
 
         NUNCA retrocede um estado já terminal (implemented/measured/rejected) para
         um estado anterior (approved/delegated), para não "reenfileirar" na Caixa.
         Executado também por transições externas (approve, campanha, runner).
+
+        Concorrência: o UPDATE é OTIMISTA (WHERE canonical_status = estado lido) e
+        valida o `rowcount`. Se outra conexão (API/cron/runner) mudou o estado
+        entre o SELECT e o UPDATE, reavalia uma vez sobre o estado novo — o gate
+        de terminal nunca é aplicado sobre uma leitura obsoleta.
         """
         if not work_item_id:
             return
@@ -981,16 +987,25 @@ class Storage:
                     return
             elif rank.get(canonical_status, 0) < rank.get(prior, 0):
                 return
-            self.conn.execute(
+            cur2 = self.conn.execute(
                 "UPDATE work_item_lifecycle SET canonical_status = ?, source = ?, url = ?, "
                 "action_fingerprint = COALESCE(?, action_fingerprint), "
                 "campaign_id = COALESCE(?, campaign_id), "
                 "campaign_item_id = COALESCE(?, campaign_item_id), "
-                "outcome_id = COALESCE(?, outcome_id), updated_at = ? WHERE work_item_id = ?",
+                "outcome_id = COALESCE(?, outcome_id), updated_at = ? "
+                "WHERE work_item_id = ? AND canonical_status = ?",
                 (canonical_status, source, url, action_fingerprint, campaign_id,
-                 campaign_item_id, outcome_id, now, work_item_id),
+                 campaign_item_id, outcome_id, now, work_item_id, prior),
             )
             self.conn.commit()
+            if cur2.rowcount == 0 and _retry:
+                # Corrida: o estado mudou entre o SELECT e o UPDATE. Reavalia uma
+                # vez com o estado atual (aplica o gate correto).
+                self.set_work_item_lifecycle(
+                    work_item_id, canonical_status, source=source, url=url,
+                    action_fingerprint=action_fingerprint, campaign_id=campaign_id,
+                    campaign_item_id=campaign_item_id, outcome_id=outcome_id,
+                    _retry=False)
             return
         self.conn.execute(
             "INSERT INTO work_item_lifecycle (work_item_id, canonical_status, source, url, "

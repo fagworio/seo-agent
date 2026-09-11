@@ -267,8 +267,8 @@ def strategic_title(
     """Data-driven title decision for one page.
 
     ``queries``: GSC query rows [{keys:[q], impressions, position, ctr}].
-    ``trends``: {query: {interest, momentum}} from GoogleTrendsClient (may be
-    partial — missing queries get neutral trends).
+    ``trends``: {query: {interest, momentum}} de batch_trends (provider Trends
+    cacheado; pode ser parcial — queries ausentes recebem tendência neutra).
 
     Returns None when the current title already covers the best uncovered
     high-value query, or when no query beats the threshold (current title is
