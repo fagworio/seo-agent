@@ -1525,10 +1525,18 @@ class Storage:
             _dt.datetime.now(_dt.timezone.utc)
             - _dt.timedelta(days=measurement_days)
         ).isoformat()
+        # Comparacao por PATH: o mesmo post aparece como prod.unicorniohater.com.br
+        # (WP/link) e www.unicorniohater.com.br (GSC), com/sem barra final. A
+        # comparacao exata falhava e o dedupe nao bloqueava (churn real
+        # observado: 6 posts repropostos em todos os runs).
+        from urllib.parse import urlparse
+
+        path = urlparse(url).path.rstrip("/")
         row2 = self.conn.execute(
-            "SELECT id FROM opportunity_outcomes WHERE url = ? AND human_decision = 'approved' "
-            "AND implemented_at IS NOT NULL AND implemented_at >= ? LIMIT 1",
-            (url, cutoff),
+            "SELECT id FROM opportunity_outcomes WHERE human_decision = 'approved' "
+            "AND implemented_at IS NOT NULL AND implemented_at >= ? "
+            "AND (url = ? OR url LIKE ? OR url LIKE ?) LIMIT 1",
+            (cutoff, url, f"%{path}/", f"%{path}"),
         ).fetchone()
         if row2:
             return True, "baseline recente (medição em andamento)"
