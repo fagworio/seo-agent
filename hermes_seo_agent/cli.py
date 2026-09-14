@@ -1074,6 +1074,23 @@ def _cmd_apply(args: argparse.Namespace, config: Any) -> int:
                     url = action.get("url")
                     if not url:
                         continue
+                    # Registra a implementacao -> baseline de 7 dias no dedupe.
+                    # SEM isto o gerador repropoe a MESMA url a cada run (churn
+                    # observado: 6 posts reaplicados/desfeitos em 11/09 e
+                    # repropostos em todos os runs seguintes).
+                    try:
+                        fix = action.get("fix") or {}
+                        after = fix.get("meta") or fix.get("alt_text") or fix
+                        storage.record_implemented_outcome(
+                            url=url,
+                            action_type=str(action.get("rule_id") or "title_opportunity"),
+                            implemented_action=str(action.get("detail") or "fix"),
+                            before=action.get("before"),
+                            after=after,
+                            implemented_at=_now(),
+                        )
+                    except Exception:  # noqa: BLE001 - historico nao trava o apply
+                        pass
                     page = static.fetch_page(url)
                     _save_page_snapshot(
                         storage, page,

@@ -195,10 +195,24 @@ def shorten_title(
     return candidate
 
 
+def _norm_word(word: str) -> str:
+    """Normaliza p/ comparacao: sem acento, singular simples (s final).
+
+    Evita propor titulo para query ja coberta por plural/acento diferente
+    ('reinos' vs 'reino', 'aneis' vs 'Anéis').
+    """
+    import unicodedata
+
+    w = unicodedata.normalize("NFKD", word).encode("ascii", "ignore").decode().lower()
+    if len(w) > 3 and w.endswith("s"):
+        w = w[:-1]
+    return w
+
+
 def _tokens(text: str) -> set[str]:
     """Significant lowercase tokens (no stopwords, no punctuation)."""
     words = re.findall(r"[a-zà-ú0-9]+", (text or "").lower())
-    return {w for w in words if len(w) > 2 and w not in _STOP}
+    return {_norm_word(w) for w in words if len(w) > 2 and w not in _STOP}
 
 
 def entity_of(current_title: str) -> str:
@@ -311,24 +325,39 @@ def strategic_title(
         keyword = re.sub(r"\s*—.*$", "", keyword).strip()
         if not keyword:
             continue
-        # Build: ENTITY: description + keyword (drop the brand if it does
-        # not fit; brand has zero search value). Remove keyword tokens the
-        # title already carries (entity/description) to avoid repetition.
+        # Build: ENTITY: description + keyword. A keyword entra INTEIRA (frase)
+        # — remover tokens no meio gera fragmentos sem sentido (defeito real:
+        # "…: Reinos de dos Aneis"). Se TODOS os tokens significativos da query
+        # ja estao no titulo (normalizado: sem acento/plural), nao ha o que
+        # propor (evita churn e regressao).
         description = title_clean
         if ":" in title_clean:
             description = title_clean.split(":", 1)[1].strip()
         description = re.sub(r"\s+[—–-]\s+.*$", "", description).strip()
-        covered_words = _tokens(f"{entity} {description}")
-        kw_words = [w for w in keyword.split() if w.lower() not in covered_words]
-        if not kw_words:
+        sig_kw = [w for w in keyword.split() if w.lower() not in _STOP]
+        if not sig_kw:
             continue
-        kw_extra = " ".join(kw_words)
+        full_tokens = _tokens(title_clean) | _tokens(f"{entity} {description}")
+        if all(_norm_word(w) in full_tokens for w in sig_kw):
+            continue
+        kw_extra = " ".join(sig_kw)
         candidate = f"{entity}: {description} {kw_extra}".strip()
         if len(candidate) > max_len:
             # Shorter: ENTITY: keyword (entity is the indexed identity).
             candidate = f"{entity}: {kw_extra}".strip()
         if len(candidate) > max_len:
             candidate = candidate[: max_len - 1].rstrip() + "…"
+        # Guard de sanidade: nunca publicar titulo com preposicao duplicada
+        # ("de dos") nem terminando em preposicao solta.
+        _preps = {"de", "da", "do", "das", "dos", "em", "no", "na",
+                  "e", "para", "com", "que", "a", "o"}
+        palavras = candidate.lower().split()
+        if any(palavras[i] in _preps and palavras[i + 1] in _preps
+               for i in range(len(palavras) - 1)):
+            continue
+        while palavras and palavras[-1].strip("…") in _preps:
+            candidate = " ".join(candidate.split()[:-1]).strip()
+            palavras = candidate.lower().split()
         if not candidate or candidate.lower() == title_clean.lower():
             return None
         momentum_txt = {1: "em alta", 0: "estavel", -1: "em queda"}.get(
