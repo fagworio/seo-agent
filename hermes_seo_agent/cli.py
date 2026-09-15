@@ -4303,7 +4303,10 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
     e recalibrar pesos por regras simples (determinístico, sem modelo ainda)."""
     with Storage(config.sqlite_path) as storage:
         if args.action == "revalidate-due":
-            items = storage.list_opportunity_outcomes(limit=getattr(args, "limit", 200) or 200)
+            # Devidos mais ANTIGOS primeiro (list_outcomes_due): garante que
+            # nenhum item fica para tras quando o volume passa do limit.
+            items = storage.list_outcomes_due(
+                measurement_days=7, limit=getattr(args, "limit", 200) or 200)
             due, measured, skipped = 0, 0, []
             today = date.today()
             gsc = SearchConsoleClient(config) if config.google_credentials else None

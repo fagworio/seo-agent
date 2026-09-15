@@ -2674,6 +2674,52 @@ class Storage:
         )
         self.conn.commit()
 
+    def list_outcomes_due(self, *, measurement_days: int = 7,
+                          limit: int = 200) -> list[dict[str, Any]]:
+        """Outcomes PRONTOS para o marco N (aprovados, nao medidos, janela vencida).
+
+        Ordena por implemented_at ASC (mais antigos primeiro): a janela por id
+        DESC do list_opportunity_outcomes deixava os primeiros itens sem medicao
+        quando o volume passava do limit (bug real: 570 itens, limit 200).
+        """
+        import datetime as _dt
+
+        cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                  - _dt.timedelta(days=measurement_days)).isoformat()
+        sql = ("SELECT id, keyword, opportunity_type, decision, evidence_json, "
+               "candidate_score, action_score, human_decision, rejection_reason, "
+               "implemented_action, url, baseline_json, implemented_at, verdict, "
+               "measured_7d, measured_28d, measured_56d, measured_90d, "
+               "result_7d_json, result_28d_json, result_56d_json, result_90d_json, created_at "
+               "FROM opportunity_outcomes WHERE human_decision = 'approved' "
+               "AND implemented_at IS NOT NULL AND implemented_at <> '' "
+               "AND COALESCE(measured_7d, 0) = 0 AND implemented_at <= ? "
+               "ORDER BY implemented_at ASC LIMIT ?")
+        rows = self.conn.execute(sql, (cutoff, limit)).fetchall()
+        import json as _json
+        return [
+            {
+                "id": r[0], "keyword": r[1], "opportunity_type": r[2],
+                "decision": r[3],
+                "evidence": _json.loads(r[4]) if r[4] else None,
+                "candidate_score": r[5], "action_score": r[6],
+                "human_decision": r[7] or "", "rejection_reason": r[8] or "",
+                "implemented_action": r[9] or "", "url": r[10] or "",
+                "baseline": _json.loads(r[11]) if r[11] else None,
+                "implemented_at": r[12] or "", "verdict": r[13] or "",
+                "measured": {"7d": bool(r[14]), "28d": bool(r[15]),
+                             "56d": bool(r[16]), "90d": bool(r[17])},
+                "results": {
+                    "7d": _json.loads(r[18]) if r[18] else None,
+                    "28d": _json.loads(r[19]) if r[19] else None,
+                    "56d": _json.loads(r[20]) if r[20] else None,
+                    "90d": _json.loads(r[21]) if r[21] else None,
+                },
+                "created_at": r[22] or "",
+            }
+            for r in rows
+        ]
+
     def list_opportunity_outcomes(self, *, verdict: str | None = None,
                                   limit: int = 200) -> list[dict[str, Any]]:
         sql = ("SELECT id, keyword, opportunity_type, decision, evidence_json, "
