@@ -330,7 +330,8 @@ class Router:
 
     def _experiments(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"experiments": self.control.experiments(
-            limit=int(request.query.get("limit", "100")))})
+            limit=int(request.query.get("limit", "100")),
+            state_filter=(request.query.get("state") or "all"))})
 
     def _editorial(self, request: HttpRequest, params: dict[str, str]) -> HttpResponse:
         return HttpResponse.json(200, {"items": self.control.editorial_items(

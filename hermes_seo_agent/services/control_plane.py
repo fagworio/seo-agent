@@ -541,9 +541,13 @@ class ControlPlaneService:
 
     # -- Experimentos (F11) --------------------------------------------------
     def experiments(self, *, limit: int = 100,
-                    include_rankability_v2: bool = False) -> list[dict[str, Any]]:
+                    include_rankability_v2: bool = False,
+                    state_filter: str = "all") -> list[dict[str, Any]]:
         """Intervenções implementadas com baseline, janela de medição e delta.
 
+        ``state_filter``: all | waiting (medição pendente) | measured (com
+        resultado) — permite a lista de Melhorias exibir também os itens já
+        medidos (antes só os N mais recentes apareciam).
         Distingue movimento observado de certeza causal: expõe baseline, verdict
         e o estado de medição (waiting_data | measuring | measured). Nunca
         sobrestima causalidade sem evidência. Quando ``include_rankability_v2``
@@ -551,10 +555,19 @@ class ControlPlaneService:
         pacote V2 (Topic Authority × Query Rankability + OpportunityScore).
         """
         try:
-            outcomes = [item for item in self.storage.list_opportunity_outcomes(limit=limit)
-                        if item.get("human_decision") == "approved"]
+            outcomes_all = [item for item in self.storage.list_opportunity_outcomes(limit=1000)
+                            if item.get("human_decision") == "approved"]
         except Exception:
             return []
+        # Filtro por estado de medicao: sem isso a lista mostrava so os N mais
+        # recentes (todos em "aguardando") e os itens JA MEDIDOS nunca apareciam.
+        if state_filter == "measured":
+            outcomes_all = [o for o in outcomes_all
+                            if any((o.get("measured") or {}).values())]
+        elif state_filter == "waiting":
+            outcomes_all = [o for o in outcomes_all
+                            if not any((o.get("measured") or {}).values())]
+        outcomes = outcomes_all[:limit]
         revalidations = {item["id"]: item for item in self._revalidations(limit=limit)}
         # P3: índice do topic graph construído UMA vez (evita build_topic_graph por item).
         index = None
