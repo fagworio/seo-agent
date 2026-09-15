@@ -30,7 +30,10 @@ function Improvements() {
   const view = rawView === "implemented" ? "todas" : rawView;
   const selectedId = Number(params.get("item"));
   const [page, setPage] = useState(1);
-  const query = useQuery({ queryKey: ["improvements"], queryFn: () => api.get<{ experiments: Experiment[] }>("/experiments?limit=200") });
+  // A aba "Resultados" busca direto os itens MEDIDOS no backend: a janela
+  // padrão (N mais recentes) deixava os medidos — que são os mais antigos —
+  // fora da tela, e a visão aparecia vazia.
+  const query = useQuery({ queryKey: ["improvements", view], queryFn: () => api.get<{ experiments: Experiment[] }>(`/experiments?limit=200${view === "results" ? "&state=measured" : ""}`) });
   const setParam = (key: string, value: string) => { const next = new URLSearchParams(params.toString()); value ? next.set(key, value) : next.delete(key); router.replace(`/improvements?${next}`, { scroll: false }); };
   if (query.isLoading) return <Loading />;
   if (query.error) return <p className="text-sm text-[var(--danger)]">{(query.error as ApiError).message}</p>;
@@ -115,9 +118,9 @@ function formatDecimal(value: unknown) { const parsed = numeric(value); return p
 function formatPercent(value: unknown) { const parsed = numeric(value); return parsed === null ? "—" : percent.format(parsed); }
 function deltaLabel(delta: Record<string, unknown> | undefined, key: string) { const parsed = numeric(delta?.[`${key}_delta`] ?? delta?.[key]); return parsed === null ? "" : `${parsed > 0 ? "+" : ""}${decimal.format(parsed)} observado`; }
 function forecastLabel(value?: Record<string, unknown>) { const realistic = numeric(value?.realistic_clicks); return realistic === null ? "Sem previsão" : `${realistic >= 0 ? "+" : ""}${integer.format(realistic)} cliques`; }
-function resultLabel(item: Experiment) { const clicks = numeric(group(item.delta, "gsc").clicks_delta); return clicks === null ? "Aguardando medição" : `${clicks >= 0 ? "+" : ""}${integer.format(clicks)} cliques`; }
+function resultLabel(item: Experiment) { const clicks = numeric(group(item.delta, "gsc").clicks_delta); if (clicks !== null) return `${clicks >= 0 ? "+" : ""}${integer.format(clicks)} cliques`; return item.measurement_state === "measured" ? "Sem dados no período" : "Aguardando medição"; }
 function friendlyType(value?: string) { return (({ title_meta: "Título e meta description", expand_existing: "Conteúdo expandido", internal_link: "Link interno", refresh: "Atualização de conteúdo" } as Record<string, string>)[value ?? ""] ?? value?.replaceAll("_", " ")) || "Melhoria"; }
-function improvementStatus(item: Experiment): { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral" } { if (item.verdict === "improved") return { label: "Melhorou", tone: "success" }; if (item.verdict === "worsened") return { label: "Piorou", tone: "danger" }; if (item.verdict === "neutral" || item.verdict === "mixed") return { label: "Neutro/misto", tone: "neutral" }; const state = item.revalidation?.state; if (state === "ready") return { label: "Pronta para revalidar", tone: "warning" }; if (state === "waiting_google") return { label: "Aguardando Google", tone: "warning" }; if (state === "waiting_7d") return { label: "Aguardando 7 dias", tone: "info" }; return { label: "Implementada", tone: "neutral" }; }
+function improvementStatus(item: Experiment): { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral" } { if (item.verdict === "improved") return { label: "Melhorou", tone: "success" }; if (item.verdict === "worsened") return { label: "Piorou", tone: "danger" }; if (item.verdict === "neutral" || item.verdict === "mixed") return { label: "Neutro/misto", tone: "neutral" }; if (item.verdict === "insufficient_data") return { label: "Medida — sem dados no período", tone: "neutral" }; const state = item.revalidation?.state; if (state === "ready") return { label: "Pronta para revalidar", tone: "warning" }; if (state === "waiting_google") return { label: "Aguardando Google", tone: "warning" }; if (state === "waiting_7d") return { label: "Aguardando 7 dias", tone: "info" }; return { label: "Implementada", tone: "neutral" }; }
 function revalidationLabel(value?: string) { return ({ ready: "Pronta para revalidar", waiting_google: "Aguardando nova coleta Google", waiting_7d: "Aguardando 7 dias", measured: "Medida" } as Record<string, string>)[value ?? ""] ?? "Não agendada"; }
 function dateLabel(value?: string) { if (!value) return "—"; const date = new Date(value.length === 10 ? `${value}T12:00:00` : value); return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("pt-BR").format(date); }
 function normalizeExperiment(value: Experiment, index: number): Experiment {
