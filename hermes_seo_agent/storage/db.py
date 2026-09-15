@@ -1511,10 +1511,22 @@ class Storage:
         """
         import datetime as _dt
 
+        # (0) RETRIAGEM: item 'title_regression' pendente LIBERA a URL de volta ao
+        # funil — o titulo aplicado piorou e precisa de NOVO candidato. Sem esta
+        # excecao o dedupe (1)/(2) bloquearia exatamente o que deve ser re-triado.
+        regression = self.conn.execute(
+            "SELECT id FROM improvement_checklist WHERE url = ? AND status = 'pending' "
+            "AND item = 'title_regression' LIMIT 1",
+            (url,),
+        ).fetchone()
+        if regression:
+            return False, ""
+
         # (1) já há revisão de título pendente para esta URL
         row = self.conn.execute(
             "SELECT id FROM improvement_checklist WHERE url = ? AND status = 'pending' "
-            "AND (item LIKE '%title%' OR item = 'title_opportunity') LIMIT 1",
+            "AND (item LIKE '%title%' OR item = 'title_opportunity') "
+            "AND item <> 'title_regression' LIMIT 1",
             (url,),
         ).fetchone()
         if row:

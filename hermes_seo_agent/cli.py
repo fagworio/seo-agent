@@ -4396,6 +4396,28 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                                 "now_gsc": now_metrics, "now_ga4": now_ga4,
                                 "elapsed_days": elapsed, "observation": "preliminary_7d"},
                     )
+                    # Retriagem: intervencao que PIOROU (ou ficou misto) nao pode
+                    # morrer no relatorio. Enfileira na Caixa de Trabalho para o
+                    # agente propor novo titulo (ou o humano reverter — o
+                    # rollback fica salvo em actions.rollback_json).
+                    if verdict in {"worsened", "mixed"}:
+                        try:
+                            _imp = gsc_deltas.get("impressions_delta")
+                            _clk = gsc_deltas.get("clicks_delta")
+                            storage.save_checklist_item(
+                                url=outcome.get("url") or "",
+                                item="title_regression",
+                                reason=(
+                                    f"Medicao 7d ({outcome.get('implemented_at', '')[:10]}): "
+                                    f"titulo aplicado resultou em {verdict} "
+                                    f"(impressoes {_imp:+d} / cliques {_clk:+d}). "
+                                    "Re-triar: novo titulo melhor OU rollback da acao."
+                                ),
+                                action="retriar_titulo",
+                                gain_clicks=0,
+                            )
+                        except Exception:  # noqa: BLE001 — nao invalidar a medicao
+                            pass
                     measured += 1
                 except Exception as exc:  # noqa: BLE001 — item remains retryable
                     skipped.append({"id": outcome["id"], "reason": str(exc)})
