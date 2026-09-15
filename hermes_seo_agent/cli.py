@@ -4319,18 +4319,68 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     continue
                 due += 1
                 baseline = outcome.get("baseline") or {}
-                if not gsc or not baseline.get("gsc") or not outcome.get("url"):
-                    skipped.append({"id": outcome["id"], "reason": "conexão Google, URL ou baseline indisponível"})
+                if not gsc or not outcome.get("url"):
+                    skipped.append({"id": outcome["id"], "reason": "conexão Google ou URL indisponível"})
+                    continue
+                # Baseline GSC: usa o persistido quando existe; SENAO reconstroi a
+                # janela PRE-implementacao (implemented-7d -> implemented). O GSC
+                # guarda o historico, entao itens antigos tambem medem. Bug real:
+                # o apply gravava baseline no formato {before, after} (sem "gsc")
+                # => todo item virava skip e o frontend ficava eternamente em
+                # "aguardando 7 dias" (measured_7d=0 nos 570 outcomes).
+                pre_gsc = None
+                try:
+                    from .report.impact_ga4 import baseline_gsc as _baseline_gsc
+
+                    pre_gsc = _baseline_gsc(baseline)
+                except Exception:  # noqa: BLE001
+                    pre_gsc = None
+                if not (isinstance(pre_gsc, dict) and pre_gsc.get("impressions") is not None):
+                    try:
+                        pre_gsc = gsc.page_metrics(
+                            outcome["url"],
+                            start_date=(implemented - timedelta(days=7)).isoformat(),
+                            end_date=implemented.isoformat(),
+                        )
+                    except Exception:  # noqa: BLE001 - segue para o skip explicito
+                        pre_gsc = None
+                    if pre_gsc:
+                        baseline = {"gsc": pre_gsc, "ga4": baseline.get("ga4")}
+                if not (isinstance(pre_gsc, dict) and pre_gsc):
+                    # Sem dados de baseline: fecha como insufficient_data para o
+                    # frontend nao ficar eternamente em "aguardando 7 dias".
+                    try:
+                        storage.set_outcome_verdict(
+                            outcome["id"], verdict="insufficient_data", days=7,
+                            result={"observation": "no_baseline_data",
+                                    "elapsed_days": elapsed,
+                                    "note": "GSC sem dados na janela pre-implementacao"},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    skipped.append({"id": outcome["id"], "reason": "sem dados de baseline (GSC) para a URL"})
                     continue
                 try:
                     from .report.impact import impact_deltas
                     from .report.impact_ga4 import baseline_gsc, baseline_ga4, combined_verdict, engagement_deltas
-                    end = today
-                    start = end - timedelta(days=7)
+                    # Janela POS-implementacao: os 7 dias seguintes a correcao
+                    # (limitada a hoje) — mede o efeito da intervencao, nao a
+                    # ultima semana qualquer.
+                    end = min(implemented + timedelta(days=7), today)
+                    start = min(implemented + timedelta(days=1), end)
                     now_metrics = gsc.page_metrics(
                         outcome["url"], start_date=start.isoformat(), end_date=end.isoformat()
                     ) or None
                     if not now_metrics:
+                        try:
+                            storage.set_outcome_verdict(
+                                outcome["id"], verdict="insufficient_data", days=7,
+                                result={"observation": "no_post_data",
+                                        "elapsed_days": elapsed,
+                                        "note": "GSC ainda sem dados pos-implementacao"},
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
                         skipped.append({"id": outcome["id"], "reason": "Search Console ainda sem dados pós-implementação"})
                         continue
                     now_ga4 = storage.ga4_metrics_for_url(outcome["url"]) or None
