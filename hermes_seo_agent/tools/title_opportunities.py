@@ -340,7 +340,19 @@ def strategic_title(
         full_tokens = _tokens(title_clean) | _tokens(f"{entity} {description}")
         if all(_norm_word(w) in full_tokens for w in sig_kw):
             continue
-        kw_extra = " ".join(sig_kw)
+        # Remove tokens JA presentes apenas nas BORDAS da keyword (preserva a
+        # frase interna — remover no meio gera fragmentos). Evita duplicar a
+        # entidade ("The Boys: Onda Choque Boys").
+        _preps_kw = {"de", "da", "do", "das", "dos", "em", "no", "na", "e",
+                     "para", "com", "que", "a", "o", "the"}
+        kw = list(sig_kw)
+        while kw and (_norm_word(kw[0]) in full_tokens or kw[0].lower() in _preps_kw):
+            kw.pop(0)
+        while kw and (_norm_word(kw[-1]) in full_tokens or kw[-1].lower() in _preps_kw):
+            kw.pop()
+        if not kw:
+            continue
+        kw_extra = " ".join(kw)
         candidate = f"{entity}: {description} {kw_extra}".strip()
         if len(candidate) > max_len:
             # Shorter: ENTITY: keyword (entity is the indexed identity).
@@ -354,6 +366,14 @@ def strategic_title(
         palavras = candidate.lower().split()
         if any(palavras[i] in _preps and palavras[i + 1] in _preps
                for i in range(len(palavras) - 1)):
+            continue
+        # Guard: nao repetir a mesma palavra significativa (ex.: "Shadowfax:
+        # Senhor Cavalos Senhor Aneis" — a keyword recolocou um token que o
+        # titulo ja carregava). Titulo robotico/regressivo: nao propor.
+        from collections import Counter as _Counter
+
+        _sig = [_norm_word(w) for w in palavras if _norm_word(w) not in _STOP]
+        if _sig and _Counter(_sig).most_common(1)[0][1] > 1:
             continue
         while palavras and palavras[-1].strip("…") in _preps:
             candidate = " ".join(candidate.split()[:-1]).strip()

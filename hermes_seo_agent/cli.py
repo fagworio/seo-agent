@@ -1754,6 +1754,28 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
             else:
                 targets.append(row)
 
+        # RETRIAGEM: URLs com 'title_regression' pendente entram SEMPRE no alvo do
+        # gerador — mesmo sem passar no filtro low-CTR (o titulo aplicado piorou e
+        # precisa de um NOVO candidato; o dedup ja as liberou no passo acima).
+        _seen = {(r.get("keys") or [""])[0] for r in targets}
+        _lim = max(int(args.limit or 30), 30)
+        try:
+            _reg_rows = storage.conn.execute(
+                "SELECT url FROM improvement_checklist WHERE item = 'title_regression' "
+                "AND status = 'pending' AND url IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (_lim,),
+            ).fetchall()
+        except Exception:  # noqa: BLE001
+            _reg_rows = []
+        for (_url,) in _reg_rows:
+            if _url in _seen:
+                continue
+            if args.limit and len(targets) >= args.limit:
+                break
+            _seen.add(_url)
+            targets.append({"keys": [_url], "impressions": 0.0, "clicks": 0.0,
+                            "ctr": 0.0, "position": 0.0, "regression": True})
+
     # Reaproveita os clients do ciclo (RunContext) quando presente — as chamadas
     # passam a contar no budget/telemetria e o WP/static não são recriados.
     import contextlib as _contextlib
