@@ -1850,13 +1850,21 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         except Exception:  # noqa: BLE001 - persistence never breaks the run
             pass
 
-        # Pass 3: strategic decision per page (GSC score x Trends).
+        # Pass 3: strategic decision per page (GSC score x Trends x GA4).
         for row, queries in page_queries:
             url = (row.get("keys") or [""])[0]
             page = static.fetch_page(url)
             post = wp.get_post_by_slug(url.rstrip("/").split("/")[-1])
             current = (page.title if page else "") or ""
-            decision = strategic_title(current, queries, trends)
+            # GA4: engajamento real da pagina entra na decisao (quem clica e fica
+            # vale mais que pagina que so gera clique de curiosidade).
+            _ga4 = None
+            try:
+                with Storage(config.sqlite_path) as _st:
+                    _ga4 = _st.ga4_metrics_for_url(url)
+            except Exception:  # noqa: BLE001 - GA4 e enriquecimento, nunca fatal
+                _ga4 = None
+            decision = strategic_title(current, queries, trends, ga4=_ga4)
             if decision is None:
                 # Current title already optimal for its best query — no
                 # candidate (a worse fragment must never be proposed).

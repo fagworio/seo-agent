@@ -228,11 +228,13 @@ def entity_of(current_title: str) -> str:
     return title or title.strip()
 
 
-def _query_value(row: dict[str, Any], trends: dict[str, Any] | None) -> float:
-    """Statistical value of a GSC query row, enriched by Trends.
+def _query_value(row: dict[str, Any], trends: dict[str, Any] | None,
+                 ga4: dict[str, Any] | None = None) -> float:
+    """Statistical value of a GSC query row, enriched by Trends and GA4.
 
     GSC part: log10(impressions) * position_factor * (1 + ctr).
     Trends part (optional): interest 0..100 normalized + momentum bonus.
+    GA4 part (optional): engagement factor -- quem clica e fica vale mais.
     """
     impressions = max(float(row.get("impressions", 0)), 1.0)
     position = max(float(row.get("position", 10)), 1.0)
@@ -245,7 +247,30 @@ def _query_value(row: dict[str, Any], trends: dict[str, Any] | None) -> float:
             gsc *= 1.0 + min(float(interest) / 100.0, 1.0) * 0.6
         momentum = trends.get("momentum", 0)
         gsc *= 1.0 + float(momentum) * 0.25
+    gsc *= _engagement_factor(ga4)
     return gsc
+
+
+def _engagement_factor(ga4: dict[str, Any] | None) -> float:
+    """Fator de engajamento (GA4) para o score do candidato.
+
+    Uma pagina que RETEÉM quem clica (engagement_rate alto) merece mais
+    investimento de titulo: mais cliques tendem a virar leitura. Pagina que
+    nao retém (bounce) nao deve ganhar prioridade. Amostra pequena = neutro.
+    """
+    if not ga4:
+        return 1.0
+    try:
+        sessions = float(ga4.get("sessions") or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    if sessions < 5:
+        return 1.0
+    er = ga4.get("engagement_rate")
+    if not isinstance(er, (int, float)):
+        return 1.0
+    # 0.5 = neutro; 1.0 -> 1.20; 0.0 -> 0.80 (limitado a [0.7, 1.3])
+    return max(0.7, min(1.3, 1.0 + (float(er) - 0.5) * 0.4))
 
 
 def _covered(query: str, current_title: str) -> bool:
@@ -277,12 +302,15 @@ def strategic_title(
     trends: dict[str, dict[str, Any]] | None = None,
     *,
     max_len: int = 60,
+    ga4: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Data-driven title decision for one page.
 
     ``queries``: GSC query rows [{keys:[q], impressions, position, ctr}].
     ``trends``: {query: {interest, momentum}} de batch_trends (provider Trends
     cacheado; pode ser parcial — queries ausentes recebem tendência neutra).
+    ``ga4``: métricas de engajamento da página (sessions, engagement_rate,
+    engagement_time) — a página que retém quem clica pesa mais na decisão.
 
     Returns None when the current title already covers the best uncovered
     high-value query, or when no query beats the threshold (current title is
@@ -301,7 +329,7 @@ def strategic_title(
         if not query:
             continue
         tr = trends.get(query, {"interest": None, "momentum": 0})
-        value = _query_value(row, tr)
+        value = _query_value(row, tr, ga4)
         scored.append((value, row, tr))
     scored.sort(key=lambda x: x[0], reverse=True)
 
@@ -388,10 +416,19 @@ def strategic_title(
             if isinstance(tr.get("interest"), (int, float))
             else "sem dado de Trends"
         )
+        ga4_txt = ""
+        if ga4 and isinstance(ga4.get("sessions"), (int, float)) and float(ga4.get("sessions") or 0) > 0:
+            _er = ga4.get("engagement_rate")
+            _et = ga4.get("engagement_time")
+            ga4_txt = (
+                f"; GA4: {float(ga4['sessions']):.0f} sessoes"
+                + (f", {float(_er)*100:.0f}% engajamento" if isinstance(_er, (int, float)) else "")
+                + (f", {float(_et):.0f}s de tempo" if isinstance(_et, (int, float)) and float(_et) > 0 else "")
+            )
         rationale = (
             f"query '{query}': {impressions:.0f} impressoes, posicao "
             f"{position:.1f}, CTR {ctr*100:.1f}%; {interest_txt} "
-            f"({momentum_txt} 90d)"
+            f"({momentum_txt} 90d){ga4_txt}"
         )
         return {
             "title": candidate,
@@ -399,6 +436,7 @@ def strategic_title(
             "rationale": rationale,
             "score": round(value, 3),
             "trends": tr,
+            "ga4": ga4 or {},
             "gsc": {"impressions": impressions, "position": position,
                     "ctr": ctr},
         }
