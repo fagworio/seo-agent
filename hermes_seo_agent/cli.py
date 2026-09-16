@@ -591,6 +591,31 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     posts = clients.posts()
     sitemap_entries = clients.sitemap_entries()
     sitemap_urls = [loc for loc, _ in sitemap_entries]
+
+    # GA4: coleta diaria (idempotente pela idade do ultimo snapshot). Sem isto o
+    # engajamento ficava eternamente velho: o agendador antigo exigia a HORA
+    # exata 6h, e o ciclo de 2h (01:28, 03:33, 05:40, 07:46...) nunca coincide
+    # com ela. O GA4 alimenta a decisao de titulo (fator de engajamento).
+    try:
+        _last = ""
+        with Storage(config.sqlite_path) as _gst:
+            _h = _gst.ga4_collection_health().get("organic_landing") or []
+            _last = str((_h[0] or {}).get("collected_at") or "")
+        _due = True
+        if _last:
+            try:
+                _due = (datetime.datetime.fromisoformat(_now()) -
+                        datetime.datetime.fromisoformat(_last)).total_seconds() >= 20 * 3600
+            except Exception:  # noqa: BLE001
+                _due = True
+        if _due and getattr(config, "ga4_property_id", ""):
+            import contextlib as _ctxlib
+            import io as _io
+
+            with _ctxlib.redirect_stdout(_io.StringIO()):
+                _cmd_ga4(_ns(action="collect", days=28, store=True, json=True), config)
+    except Exception:  # noqa: BLE001 — GA4 e enriquecimento, nunca fatal
+        pass
     audit_fp = ""
     if getattr(args, "_incremental", False):
         # Sinal de deploy do site estático (ex.: /build.json), se configurado.

@@ -902,7 +902,15 @@ class Storage:
             if not post_id or not suggested or not url:
                 continue
             current = c.get("current_title", "")
-            detail = f"título ancorado na query '{c.get('top_query', '')}'"
+            # Reason = rationale COMPLETO (GSC + Trends + GA4), nao um rotulo
+            # generico: e o que o frontend exibe na decisao (auditavel).
+            detail = c.get("rationale") or f"título ancorado na query '{c.get('top_query', '')}'"
+            breakdown = {
+                "gsc": c.get("gsc") or {},
+                "trends": c.get("trends") or {},
+                "ga4": c.get("ga4") or {},
+                "score_total": c.get("score"),
+            }
             fix = {"type": "wp_post_meta", "post_id": post_id,
                    "meta": {"rank_math_title": suggested}}
             fingerprint = _fingerprint("title_opportunity", url, detail, fix)
@@ -913,8 +921,12 @@ class Storage:
                 rollback={"type": "wp_post_meta", "post_id": post_id,
                           "meta": {"rank_math_title": current}},
                 status="pending")
-            self.save_checklist_item(url=url, item="title", reason=detail, action=suggested,
-                                     gain_clicks=c.get("clicks"), explainable_score=None)
+            _score = c.get("score")
+            self.save_checklist_item(
+                url=url, item="title", reason=detail, action=suggested,
+                gain_clicks=c.get("clicks"),
+                explainable_score=(float(_score) if isinstance(_score, (int, float)) else None),
+                score_breakdown=breakdown)
             n += 1
         return n
 

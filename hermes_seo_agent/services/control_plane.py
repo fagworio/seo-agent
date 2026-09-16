@@ -649,7 +649,12 @@ class ControlPlaneService:
         são novos -> entram na fila de decisão. Quando ``include_rankability_v2``
         é True, cruza os sinais e anexa o pacote V2 (opcional, para não pesar).
         """
-        items = self.opportunities.feed(source=source, status=status, limit=limit)
+        # Busca MAIS do que o pedido: o filtro de lifecycle roda DEPOIS do corte
+        # da query, e itens ja trabalhados (score alto) ocupavam a cabeca da
+        # fila — com limit pequeno a Caixa aparecia VAZIA mesmo com pendentes
+        # reais na cauda. Cortamos aqui, depois de filtrar.
+        items = self.opportunities.feed(source=source, status=status,
+                                        limit=max(limit * 3, 600))
         # P3: índice do topic graph construído UMA vez (evita build_topic_graph por item).
         index = None
         if include_rankability_v2:
@@ -680,6 +685,8 @@ class ControlPlaneService:
                     except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
                         it["rankability_v2"] = None
             out.append(it)
+            if len(out) >= limit:
+                break
         return out
 
     @staticmethod
