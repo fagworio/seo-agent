@@ -91,7 +91,7 @@ def test_integration_status_all_sources_present(tmp_path):
         assert statuses["corpus"].data_status == "missing"
         # M4: default scrape (frontend público) -> external configurada
         assert statuses["external"].configured is True
-        assert statuses["external"].extras["provider"] == "trends_scrape"
+        assert statuses["external"].extras["provider"] == "trends_rss"
 
 
 def test_integration_status_unconfigured_sources(tmp_path):
@@ -171,5 +171,5 @@ def test_integration_status_external_with_trends(tmp_path):
         ext = statuses["external"]
         assert ext.configured is True
         assert ext.data_status == "partial"      # configurado, aguardando call live
-        assert ext.extras["provider"] == "trends_scrape"
+        assert ext.extras["provider"] == "trends_rss"
         assert ext.extras["cost_per_call_cents"] == 0

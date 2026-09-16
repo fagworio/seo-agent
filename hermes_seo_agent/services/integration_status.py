@@ -306,7 +306,7 @@ class IntegrationStatusService:
             "trends", True, status,
             detail=detail,
             last_window=str(sig.get("updated_at", ""))[:19],
-            limitations="MarketIntelligenceProvider (Trends); geo=BR, janela 90d",
+            limitations="RSS de buscas em alta (trends.google.com/trending/rss); geo=BR",
         )
 
     def _ga4(self) -> SourceStatus:

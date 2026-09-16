@@ -34,7 +34,8 @@ def test_noop_provider_never_fabricates():
     assert p.keyword_metrics("x") == []          # ausência ≠ zero
     assert p.trend_signal("x") == {}
     # factory default agora é scrape (frontend público, sem credencial)
-    assert get_provider(None).name == "trends_scrape"
+    # default = RSS de trending (funciona em datacenter; o explore e bloqueado)
+    assert get_provider(None).name == "trends_rss"
 
 
 def test_evidence_includes_cost_quota_origin():

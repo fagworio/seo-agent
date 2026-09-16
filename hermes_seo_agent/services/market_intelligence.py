@@ -185,7 +185,9 @@ def get_provider(config: Any, *, budget: Any | None = None) -> MarketIntelligenc
             return _PersistentCacheProvider(TrendsProvider(config, budget=budget), config)
         return NoopProvider(config)
     if mode == "scrape":
-        return _PersistentCacheProvider(TrendsScrapeProvider(config, budget=budget), config)
+        # RSS de trending (funciona em datacenter): o explore bloqueia IP de
+        # datacenter, mas o RSS da os termos em ALTA no BR — momentum real.
+        return _PersistentCacheProvider(TrendsRssProvider(config, budget=budget), config)
     return NoopProvider(config)
 
 
@@ -384,6 +386,64 @@ class TrendsScrapeProvider(MarketIntelligenceProvider):
                     "note": "explore bloqueado (400/429) — sem dados de tendência"}
         return {"trend": "unknown", "delta_pct": None,
                 "note": "explore não devolveu série utilizável"}
+
+
+class TrendsRssProvider(TrendsScrapeProvider):
+    """Google Trends via RSS de buscas em alta (FUNCIONA em datacenter).
+
+    O explore bloqueia IP de datacenter (400/403/429); o RSS responde 200 sem
+    cookie e da os termos em ALTA no Brasil — momentum real para o scoring.
+    """
+
+    name = "trends_rss"
+    _URL = "https://trends.google.com/trending/rss"
+
+    def __init__(self, config: Any, budget: Any | None = None):
+        super().__init__(config, budget=budget)
+        self._items: list[dict[str, Any]] | None = None
+        self._at = 0.0
+
+    def trend_snapshot(self, keyword: str) -> dict[str, Any]:
+        """{interest, momentum} casando a query com os termos em alta no BR."""
+        import re as _re
+
+        kw = (keyword or "").strip().lower()
+        if not kw:
+            return {"interest": None, "momentum": 0}
+        toks = {t for t in _re.findall(r"[a-z0-9]+", kw) if len(t) > 3}
+        for i, item in enumerate(self._trending()):
+            if kw == item["term"]:
+                return {"interest": max(70.0, 100.0 - i * 2.0), "momentum": 1}
+            if toks and item["tokens"]:
+                overlap = toks & item["tokens"]
+                if len(overlap) >= 2 and len(overlap) / len(toks) >= 0.6:
+                    return {"interest": max(60.0, 95.0 - i * 2.0), "momentum": 1}
+        return {"interest": None, "momentum": 0}
+
+    def _trending(self) -> list[dict[str, Any]]:
+        import time as _time
+        import xml.etree.ElementTree as _ET
+
+        now = _time.time()
+        if self._items is not None and now - self._at < 6 * 3600:
+            return self._items
+        items: list[dict[str, Any]] = []
+        try:
+            geo = getattr(self, "_COUNTRY", None) or "BR"
+            resp = self._http.get(self._URL, params={"geo": geo},
+                                  headers={"User-Agent": self._UA})
+            root = _ET.fromstring(resp.text)
+            import re as _re
+
+            for item in root.iter("item"):
+                term = (item.findtext("title") or "").strip().lower()
+                if term:
+                    items.append({"term": term, "tokens":
+                                  set(_re.findall(r"[a-z0-9]+", term))})
+        except Exception:  # noqa: BLE001 — enrichment, nunca fatal
+            items = []
+        self._items, self._at = items, now
+        return items
 
 
 class TrendsProvider(MarketIntelligenceProvider):
