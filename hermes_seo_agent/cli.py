@@ -1856,9 +1856,24 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         try:
             web_imps = sum(float(r.get("impressions", 0)) for r in pages)
             web_clicks = sum(float(r.get("clicks", 0)) for r in pages)
-            trend_ok = (any(
-                isinstance(v.get("interest"), (int, float))
-                for v in trends.values()) if trends else None)
+            # Trends: 'ok' = a FONTE respondeu (operacional); 'matched' = quantos
+            # termos do run estao em alta AGORA (0 e legitimo e nao significa
+            # indisponivel — o painel precisa distinguir os dois casos).
+            trend_ok = None
+            trend_matched = 0
+            if trends:
+                trend_matched = sum(
+                    1 for v in trends.values()
+                    if isinstance(v.get("interest"), (int, float)))
+                try:
+                    from .services.market_intelligence import get_provider as _get_prov
+
+                    _prov = _get_prov(config)
+                    _inner = getattr(_prov, "inner", _prov)
+                    _fn = getattr(_inner, "_trending", None)
+                    trend_ok = bool(_fn()) if callable(_fn) else False
+                except Exception:  # noqa: BLE001
+                    trend_ok = trend_matched > 0
             with Storage(config.sqlite_path) as storage:
                 storage.save_signal("discover", {
                     **discover, "window_days": config.search_analytics_days})
@@ -1871,7 +1886,7 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                 if trend_ok is not None:
                     storage.save_signal("trends", {
                         "ok": trend_ok, "terms": len(trends),
-                        "window_days": 90})
+                        "matched": trend_matched, "window_days": 90})
         except Exception:  # noqa: BLE001 - persistence never breaks the run
             pass
 

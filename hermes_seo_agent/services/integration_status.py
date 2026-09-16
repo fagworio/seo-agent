@@ -295,10 +295,11 @@ class IntegrationStatusService:
         sig = self.storage.get_signals().get("trends", {})
         if sig.get("ok"):
             status = "available"
-            detail = (f"operacional ({sig.get('terms', 0)} termos no ultimo run)")
+            detail = (f"operacional — {sig.get('terms', 0)} termos consultados, "
+                      f"{sig.get('matched', 0)} em alta agora (RSS BR)")
         elif sig.get("ok") is False:
             status = "unavailable"
-            detail = "indisponivel no ultimo run (fallback: GSC-only)"
+            detail = "fonte indisponivel no ultimo run (fallback: GSC-only)"
         else:
             status = "unknown"
             detail = "nao verificado neste ciclo (probe ao vivo com live=1)"
