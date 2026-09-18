@@ -1767,9 +1767,14 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     # skip, 0 candidatos para sempre, sem nunca alcancar as proximas).
     skipped: list[dict[str, Any]] = []
     targets: list[dict[str, Any]] = []
+    # O teto e dos TARGETS ANALISADOS, nao das propostas: muitas URLs elegiveis
+    # sao rejeitadas adiante pelo gerador ("titulo atual ja otimo") e, com o teto
+    # igual ao --limit, elas consumiam todas as vagas — o agente nunca alcancava
+    # as URLs com oportunidade real (0 candidatos com 40+ nunca tratadas).
+    _target_cap = max((args.limit or 30) * 5, 150)
     with Storage(config.sqlite_path) as storage:
         for row in low_ctr:
-            if args.limit and len(targets) >= args.limit:
+            if len(targets) >= _target_cap:
                 break
             url = (row.get("keys") or [""])[0]
             skip, reason = storage.title_review_skippable(
@@ -1795,7 +1800,7 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         for (_url,) in _reg_rows:
             if _url in _seen:
                 continue
-            if args.limit and len(targets) >= args.limit:
+            if len(targets) >= _target_cap:
                 break
             _seen.add(_url)
             targets.append({"keys": [_url], "impressions": 0.0, "clicks": 0.0,
@@ -1929,6 +1934,13 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                 "trends": decision.get("trends"),
                 "post_id": post["id"] if post else None,
             })
+
+    # O --limit vale para as PROPOSTAS (as de maior score), nao para os targets
+    # analisados: sem isso, analisar mais URLs nao adiantava — o excesso era
+    # descartado em silencio e a janela do agente seguia com poucas opcoes.
+    _cap = max(int(args.limit or 30), 1)
+    candidates_rows.sort(key=lambda c: -(c.get("score") or 0))
+    candidates_rows = candidates_rows[:_cap]
 
     result = {
         "status": "ok",
