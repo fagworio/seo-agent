@@ -1444,6 +1444,13 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                                       _run_context=run_context), config=config)
                 steps.append("gsc-demand")
                 steps.append("revalidate-7d")
+                # Marco de 1 MES: reavalia ~28 dias depois — se o desempenho
+                # PIOROU, abre a retriagem (title_regression); se nao, o titulo
+                # segue bloqueado (nunca retratado sem piora comprovada).
+                run_silently(_cmd_outcomes,
+                             args=_ns(action="revalidate-due", limit=200, measure_days=28,
+                                      _run_context=run_context), config=config)
+                steps.append("revalidate-28d")
             # Background: mantém a fila de melhorias crescendo diariamente.
             run_silently(_cmd_post_audit,
                          args=_ns(limit=20, min_impressions=50, write=False, json=True,
@@ -4387,13 +4394,15 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
         if args.action == "revalidate-due":
             # Devidos mais ANTIGOS primeiro (list_outcomes_due): garante que
             # nenhum item fica para tras quando o volume passa do limit.
+            _mdays = int(getattr(args, "measure_days", 0) or 0) or 7
             items = storage.list_outcomes_due(
-                measurement_days=7, limit=getattr(args, "limit", 200) or 200)
+                measurement_days=_mdays, limit=getattr(args, "limit", 200) or 200)
             due, measured, skipped = 0, 0, []
             today = date.today()
             gsc = SearchConsoleClient(config) if config.google_credentials else None
             for outcome in items:
-                if outcome.get("human_decision") != "approved" or outcome["measured"].get("7d"):
+                if (outcome.get("human_decision") != "approved"
+                        or outcome["measured"].get(f"{_mdays}d")):
                     continue
                 ref = outcome.get("implemented_at")
                 if not ref:
@@ -4424,7 +4433,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     try:
                         pre_gsc = gsc.page_metrics(
                             outcome["url"],
-                            start_date=(implemented - timedelta(days=7)).isoformat(),
+                            start_date=(implemented - timedelta(days=_mdays)).isoformat(),
                             end_date=implemented.isoformat(),
                         )
                     except Exception:  # noqa: BLE001 - segue para o skip explicito
@@ -4436,7 +4445,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     # frontend nao ficar eternamente em "aguardando 7 dias".
                     try:
                         storage.set_outcome_verdict(
-                            outcome["id"], verdict="insufficient_data", days=7,
+                            outcome["id"], verdict="insufficient_data", days=_mdays,
                             result={"observation": "no_baseline_data",
                                     "elapsed_days": elapsed,
                                     "note": "GSC sem dados na janela pre-implementacao"},
@@ -4451,7 +4460,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     # Janela POS-implementacao: os 7 dias seguintes a correcao
                     # (limitada a hoje) — mede o efeito da intervencao, nao a
                     # ultima semana qualquer.
-                    end = min(implemented + timedelta(days=7), today)
+                    end = min(implemented + timedelta(days=_mdays), today)
                     start = min(implemented + timedelta(days=1), end)
                     now_metrics = gsc.page_metrics(
                         outcome["url"], start_date=start.isoformat(), end_date=end.isoformat()
@@ -4459,7 +4468,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     if not now_metrics:
                         try:
                             storage.set_outcome_verdict(
-                                outcome["id"], verdict="insufficient_data", days=7,
+                                outcome["id"], verdict="insufficient_data", days=_mdays,
                                 result={"observation": "no_post_data",
                                         "elapsed_days": elapsed,
                                         "note": "GSC ainda sem dados pos-implementacao"},
@@ -4473,7 +4482,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
                     verdict = combined_verdict(gsc_deltas, ga4_deltas)
                     storage.set_outcome_verdict(
-                        outcome["id"], verdict=verdict, days=7,
+                        outcome["id"], verdict=verdict, days=_mdays,
                         result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
                                 "now_gsc": now_metrics, "now_ga4": now_ga4,
                                 "elapsed_days": elapsed, "observation": "preliminary_7d"},
@@ -4504,7 +4513,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 except Exception as exc:  # noqa: BLE001 — item remains retryable
                     skipped.append({"id": outcome["id"], "reason": str(exc)})
             _emit({"status": "ok", "summary": {"command": "outcomes",
-                   "action": "revalidate-due", "due": due, "measured": measured,
+                   "action": "revalidate-due", "days": _mdays, "due": due, "measured": measured,
                    "skipped": len(skipped)}, "findings": [], "safe_actions": [],
                    "approval_required": [], "skipped": skipped}, force_json=True)
             return 0

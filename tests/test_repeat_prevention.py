@@ -34,7 +34,36 @@ def test_title_review_skippable_recent_baseline(tmp_path):
         s.conn.commit()
         skip, reason = s.title_review_skippable("https://x.com/b/", measurement_days=28)
         assert skip is True
-        assert "baseline" in reason
+        assert "tratado" in reason or "baseline" in reason
+
+
+def test_treated_title_never_reopens_without_regression(tmp_path):
+    """Regra: titulo JA TRATADO nao volta ao funil sem piora comprovada.
+
+    Outcome antigo (>30 dias) com verdict 'improved' -> continua bloqueado;
+    com 'worsened' -> liberado para retriagem.
+    """
+    db = tmp_path / "d6.db"
+    with Storage(str(db)) as s:
+        s.conn.execute(
+            "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, human_decision, "
+            "implemented_action, url, implemented_at, created_at, verdict, measured_7d) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            ("gojo", "title_opportunity", "title_opportunity", "approved", "titulo novo",
+             "https://x.com/melhorou/", _days_ago(40), _now(), "improved"))
+        s.conn.execute(
+            "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, human_decision, "
+            "implemented_action, url, implemented_at, created_at, verdict, measured_7d) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            ("gojo", "title_opportunity", "title_opportunity", "approved", "titulo novo",
+             "https://x.com/piorou/", _days_ago(40), _now(), "worsened"))
+        s.conn.commit()
+        skip_ok, reason_ok = s.title_review_skippable("https://x.com/melhorou/",
+                                                      measurement_days=7)
+        assert skip_ok is True, "titulo que MELHOROU nao pode ser retratado"
+        assert "tratado" in reason_ok
+        skip_bad, _ = s.title_review_skippable("https://x.com/piorou/", measurement_days=7)
+        assert skip_bad is False, "titulo que PIOROU deve voltar para retriagem"
 
 
 def test_title_review_skippable_clean(tmp_path):

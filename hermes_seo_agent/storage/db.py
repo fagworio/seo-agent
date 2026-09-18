@@ -1558,12 +1558,18 @@ class Storage:
         path = urlparse(url).path.rstrip("/")
         row2 = self.conn.execute(
             "SELECT id FROM opportunity_outcomes WHERE human_decision = 'approved' "
-            "AND implemented_at IS NOT NULL AND implemented_at >= ? "
-            "AND (url = ? OR url LIKE ? OR url LIKE ?) LIMIT 1",
-            (cutoff, url, f"%{path}/", f"%{path}"),
+            "AND (url = ? OR url LIKE ? OR url LIKE ?) "
+            "AND ("
+            "  (implemented_at IS NOT NULL AND implemented_at >= ?) "
+            "  OR (COALESCE(verdict, '') NOT IN ('worsened', 'mixed'))"
+            ") LIMIT 1",
+            (url, '%' + path + '/', '%' + path, cutoff),
         ).fetchone()
         if row2:
-            return True, "baseline recente (medição em andamento)"
+            # <7d = medicao em andamento; verdict sem piora = NAO retratar.
+            # Regra: titulo ja tratado volta ao funil SO se o desempenho piorar
+            # (o marco de 1 mes reabre via title_regression quando ha piora).
+            return True, "titulo ja tratado (sem piora comprovada)"
         return False, ""
 
     def get_checklist_item(self, checklist_id: int) -> dict[str, Any] | None:
