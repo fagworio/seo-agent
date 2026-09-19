@@ -3,10 +3,13 @@ on:
   pull_request:
   push:
     branches: [main]
-# cancela runs obsoletos do mesmo ref (evita gasto/duplicidade no CI).
+# Cancela runs obsoletos do mesmo ref APENAS em pull_request (economiza sem
+# apagar histórico). Em push na main cada commit precisa do seu próprio
+# resultado de CI: com cancel-in-progress sempre ligado, pushes em sequência
+# deixavam commits da main sem check (apareciam como `cancelled` no GitHub).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     runs-on: ubuntu-latest
