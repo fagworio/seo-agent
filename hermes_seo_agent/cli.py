@@ -650,14 +650,10 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
                            datetime.datetime.fromisoformat(last_ok)).total_seconds() >= ttl
             except Exception:
                 due_ttl = True
-        if previous and previous == audit_fp and not due_ttl:
-            result = {"status": "skipped", "summary": {"command": "audit",
-                       "reason": "content unchanged", "audited_urls": 0, "findings": 0},
-                      "findings": [], "safe_actions": [], "approval_required": []}
-            _emit(result, force_json=args.json)
-            if shared is None:
-                clients.close()
-            return 0
+        # SEO-INC-004: o fingerprint NAO decide mais "auditar ou nao". Com a
+        # fila por URL, "site unchanged" pode significar "ha 16 mil URLs nunca
+        # auditadas" — pular aqui congelava a cobertura do acervo (site sem
+        # mudanca != nada a auditar). Ele fica so como telemetria do ciclo.
     report = reconcile(posts, sitemap_urls, static_host=_static_host(config))
 
     # Robots first: one fetch, used by all sitemap-blocked checks.
