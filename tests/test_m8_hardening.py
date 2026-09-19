@@ -113,7 +113,9 @@ def test_measure_enforces_window(tmp_path, monkeypatch, capsys):
     rc = _cmd_outcomes(args28, config)
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert out["summary"]["verdict"] == "improved"  # cliques/impressões subiram
+    # SEO-INC-012: veredito multiaxial. Impressões E cliques subiram ->
+    # traffic_up (o rótulo genérico "improved" deixou de existir).
+    assert out["summary"]["verdict"] == "traffic_up"
     assert out["summary"]["elapsed_days"] >= 28
 
     args90 = argparse.Namespace(action="measure", item_id=1, measure_days=90,

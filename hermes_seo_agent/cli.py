@@ -2721,8 +2721,9 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
         if args.action == "measure":
             from .report.impact import impact_deltas
             from .report.impact_ga4 import (
-                baseline_ga4, baseline_gsc, combined_verdict, engagement_deltas,
+                baseline_ga4, baseline_gsc, engagement_deltas,
             )
+            from .report.verdicts import multiaxial_verdict
             item = storage.get_checklist_item(args.item_id or 0)
             if not item or not item.get("url") or not config.google_credentials:
                 print(json.dumps({"status": "error",
@@ -2762,7 +2763,7 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
             # Engajamento (GA4): baseline persistido x janela mais recente.
             now_ga4 = storage.ga4_metrics_for_url(item["url"]) or None
             ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
-            verdict = combined_verdict(gsc_deltas, ga4_deltas)
+            verdict, verdict_axes = multiaxial_verdict(gsc_deltas, ga4_deltas)
             result = {
                 "status": "ok",
                 "summary": {"command": "checklist", "action": "measure",
@@ -4477,7 +4478,8 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     continue
                 try:
                     from .report.impact import impact_deltas
-                    from .report.impact_ga4 import baseline_gsc, baseline_ga4, combined_verdict, engagement_deltas
+                    from .report.impact_ga4 import baseline_gsc, baseline_ga4, engagement_deltas
+                    from .report.verdicts import multiaxial_verdict
                     # Janela POS-implementacao: os 7 dias seguintes a correcao
                     # (limitada a hoje) — mede o efeito da intervencao, nao a
                     # ultima semana qualquer.
@@ -4501,7 +4503,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     now_ga4 = storage.ga4_metrics_for_url(outcome["url"]) or None
                     gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
                     ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
-                    verdict = combined_verdict(gsc_deltas, ga4_deltas)
+                    verdict, verdict_axes = multiaxial_verdict(gsc_deltas, ga4_deltas)
                     storage.set_outcome_verdict(
                         outcome["id"], verdict=verdict, days=_mdays,
                         result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
@@ -4714,9 +4716,10 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
             try:
                 from .report.impact import impact_deltas
                 from .report.impact_ga4 import (
-                    baseline_gsc, baseline_ga4, combined_verdict,
+                    baseline_gsc, baseline_ga4,
                     engagement_deltas,
                 )
+                from .report.verdicts import multiaxial_verdict
                 gsc = SearchConsoleClient(config)
                 end = date.today()
                 start = end - timedelta(days=config.search_analytics_days)
@@ -4725,7 +4728,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 now_ga4 = storage.ga4_metrics_for_url(url) or None
                 gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
                 ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
-                verdict = combined_verdict(gsc_deltas, ga4_deltas)
+                verdict, verdict_axes = multiaxial_verdict(gsc_deltas, ga4_deltas)
                 result_payload = {
                     "gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
                     "now_gsc": now_metrics, "now_ga4": now_ga4,

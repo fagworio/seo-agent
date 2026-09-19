@@ -1586,7 +1586,8 @@ class Storage:
             "AND (url = ? OR url LIKE ? OR url LIKE ?) "
             "AND ("
             "  (implemented_at IS NOT NULL AND implemented_at >= ?) "
-            "  OR (COALESCE(verdict, '') NOT IN ('worsened', 'mixed'))"
+            "  OR (COALESCE(verdict, '') NOT IN "
+            "('worsened', 'mixed', 'regressed'))"
             ") LIMIT 1",
             (url, '%' + path + '/', '%' + path, cutoff),
         ).fetchone()
