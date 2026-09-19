@@ -1494,8 +1494,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         # 2) Daily GSC inspect window.
         inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
         if _gsc_daily:
+            # Inspect com TETO POR CICLO: o budget diário (1800) num único run
+            # travava o scheduler por dezenas de minutos. Distribuído pelos
+            # ciclos do dia (~12), o mesmo budget é consumido sem bloquear.
+            _inspect_budget = max(50, int(getattr(config, "url_inspection_daily_budget", 0) or 0) // 12)
             run_silently(_cmd_inspect,
-                         args=_ns(budget=0, dry_run=False, json=True,
+                         args=_ns(budget=_inspect_budget, dry_run=False, json=True,
                                   _run_context=run_context), config=config)
             if config.google_credentials:
                 run_silently(_cmd_demand,
@@ -2973,10 +2977,11 @@ def _cmd_demand(args: argparse.Namespace, config: Any) -> int:
                                               window_end=end.isoformat())
             # SEO-INC-014: CTR por dispositivo (1 requisicao, dimensoes page+device).
             try:
-                _dev_rows = (shared.gsc_page_device(start.isoformat(), end.isoformat())
-                             if _use_ctx else
-                             gsc.search_analytics_page_device(start_date=start.isoformat(),
-                                                              end_date=end.isoformat()))
+                if shared is not None and shared.search_console() is not None:
+                    _dev_rows = shared.gsc_page_device(start.isoformat(), end.isoformat())
+                else:
+                    _dev_rows = gsc.search_analytics_page_device(
+                        start_date=start.isoformat(), end_date=end.isoformat())
                 _dev_saved = storage.save_page_device_metrics(
                     _dev_rows, window_start=start.isoformat(), window_end=end.isoformat())
             except Exception:  # noqa: BLE001 — device e enriquecimento, nao bloqueia
@@ -4574,9 +4579,12 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     # sem isso o diagnostico nao distingue "CTR anomalo com
                     # titulo alinhado" de "gap real de cobertura".
                     _align = query_alignment(storage, outcome.get("url") or "")
+                    from .report.baseline import device_split as _device_split
+                    _device = _device_split(storage, outcome.get("url") or "")
                     _eval = evaluate_result(gsc_deltas, ga4_deltas,
                                             query_aligned=_align.get("aligned"),
-                                            baseline=_baseline)
+                                            baseline=_baseline,
+                                            device_split=_device)
                     verdict = _eval["measurement"]["verdict"]
                     verdict_axes = _eval["measurement"]["axes"]
                     _diag = _eval["diagnosis"]

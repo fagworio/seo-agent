@@ -144,7 +144,8 @@ def _f(value: Any, default: float = 0.0) -> float:
 
 def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
                     query_aligned: bool | None = None,
-                    baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+                    baseline: dict[str, Any] | None = None,
+                    device_split: dict[str, Any] | None = None) -> dict[str, Any]:
     """Códigos de diagnóstico — o que é OBSERVÁVEL, sem inferir causa externa.
 
     `cause` permanece "undetermined" por contrato: a API do Search Console não
@@ -189,6 +190,11 @@ def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
         codes.append("ranking_loss")
     if _f(ga4.get("engagement_rate_pct")) <= -20:
         codes.append("engagement_loss")
+    # Mobile capturando muito menos que desktop NA MESMA pagina: pista de
+    # experiencia/formato mobile (acionavel), nao de titulo.
+    if device_split and device_split.get("mobile_minus_desktop") is not None:
+        if _f(device_split.get("mobile_minus_desktop")) <= -0.01:
+            codes.append("ctr_device_gap")
     if impressions < 100 and not codes:
         codes.append("insufficient_data")
     if not codes:
@@ -221,6 +227,11 @@ def recommend(verdict: str, axes: dict[str, str], diag: dict[str, Any]) -> dict[
                 "rationale": "sem base de comparação suficiente"}
 
     # Anomalia de CTR com query alinhada e visibilidade não pior: NÃO mexer
+    if "ctr_device_gap" in codes:
+        return {"actionability": "investigate", "recommended_action": "review_mobile",
+                "review_required": True,
+                "rationale": "mobile captura muito menos que desktop na mesma página: "
+                             "revisar experiência/formato mobile, não título"}
     if "ctr_zero_sitewide" in codes:
         return {"actionability": "investigate", "recommended_action": "no_title_change",
                 "review_required": True,
@@ -257,10 +268,12 @@ def recommend(verdict: str, axes: dict[str, str], diag: dict[str, Any]) -> dict[
 
 def evaluate_result(gsc: dict[str, Any], ga4: dict[str, Any], *,
                     query_aligned: bool | None = None,
-                    baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+                    baseline: dict[str, Any] | None = None,
+                    device_split: dict[str, Any] | None = None) -> dict[str, Any]:
     """Contrato completo: medição + diagnóstico + decisão (SEO-INC-012/013)."""
     verdict, axes = multiaxial_verdict(gsc, ga4)
-    diag = diagnosis_codes(gsc, ga4, query_aligned=query_aligned, baseline=baseline)
+    diag = diagnosis_codes(gsc, ga4, query_aligned=query_aligned, baseline=baseline,
+                           device_split=device_split)
     dec = recommend(verdict, axes, diag)
     return {"measurement": {"verdict": verdict, "axes": axes},
             "diagnosis": diag, "decision": dec}

@@ -113,7 +113,7 @@ class SearchConsoleClient:
         *,
         start_date: str,
         end_date: str,
-        row_limit: int = 50_000,
+        row_limit: int = 25_000,
     ) -> list[dict[str, Any]]:
         """SEO-INC-014: página × dispositivo (MOBILE/DESKTOP/TABLET).
 

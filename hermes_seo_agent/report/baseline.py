@@ -211,6 +211,34 @@ def dominant_entity_class(storage: Any, url: str) -> str:
     return "unknown"
 
 
+def device_split(storage: Any, url: str) -> dict[str, Any]:
+    """CTR por dispositivo + o gap mobile−desktop (SEO-INC-014).
+
+    É a pista acionável mais direta quando existe: se o mobile captura muito
+    menos que o desktop na MESMA página, o problema é de experiência/formato
+    mobile — não de título.
+    """
+    rows: list[dict[str, Any]] = []
+    if hasattr(storage, "device_metrics_for_url"):
+        try:
+            rows = storage.device_metrics_for_url(url)
+        except Exception:  # noqa: BLE001
+            rows = []
+    by_device = {str(r.get("device") or "").lower(): r for r in rows}
+    gap = None
+    mob, desk = by_device.get("mobile") or {}, by_device.get("desktop") or {}
+    try:
+        m_imp = float(mob.get("impressions") or 0)
+        d_imp = float(desk.get("impressions") or 0)
+        if m_imp >= 50 and d_imp >= 50:
+            gap = round(float(mob.get("ctr") or 0) - float(desk.get("ctr") or 0), 5)
+    except (TypeError, ValueError):
+        gap = None
+    return {"devices": by_device, "mobile_minus_desktop": gap,
+            "mobile_impressions": float(mob.get("impressions") or 0),
+            "desktop_impressions": float(desk.get("impressions") or 0)}
+
+
 def classify_ctr(ctr: Any, bucket: dict[str, Any] | None, *,
                  min_sample: int = MIN_CTX_SAMPLE) -> str:
     """Onde o CTR cai dentro do próprio contexto.

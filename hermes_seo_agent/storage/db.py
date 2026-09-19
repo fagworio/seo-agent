@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
