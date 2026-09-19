@@ -123,6 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("user", "Control plane: manage users, roles and bootstrap admin"),
         ("refresh-data", "Control plane: coletar fontes como AgentRun refresh_data (R3)"),
         ("producers-cycle", "Run all Caixa producers in one process"),
+        ("baseline", "Baseline do proprio site: percentis de CTR por contexto (SEO-INC-013)"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--limit", type=int, default=0, help="cap URLs audited (0 = config max)")
@@ -420,6 +421,15 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_outcomes)
         elif name == "today":
             p.set_defaults(func=_cmd_today)
+        elif name == "baseline":
+            p.add_argument("--window", default=None, help="window_end (default: mais recente)")
+            p.add_argument("--min-impressions", type=int, default=100,
+                           help="volume minimo para entrar no baseline")
+            p.add_argument("--position", type=float, default=None,
+                           help="classifica um CTR pontual nesta posicao")
+            p.add_argument("--impressions", type=float, default=None)
+            p.add_argument("--ctr", type=float, default=None)
+            p.set_defaults(func=_cmd_baseline)
         elif name == "serve":
             p.add_argument("--host", default="127.0.0.1", help="host de bind")
             p.add_argument("--port", type=int, default=8000, help="porta HTTP")
@@ -4414,6 +4424,15 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
     e recalibrar pesos por regras simples (determinístico, sem modelo ainda)."""
     with Storage(config.sqlite_path) as storage:
         if args.action == "revalidate-due":
+            # Baseline proprio do site (SEO-INC-013): percentis de CTR por
+            # contexto, construidos UMA vez por run — o diagnostico julga a
+            # pagina contra o comportamento do proprio segmento.
+            from .report.baseline import build_baseline as _build_baseline
+
+            try:
+                _baseline = _build_baseline(storage)
+            except Exception:  # noqa: BLE001 — sem baseline o diagnostico degrada
+                _baseline = None
             # Devidos mais ANTIGOS primeiro (list_outcomes_due): garante que
             # nenhum item fica para tras quando o volume passa do limit.
             _mdays = int(getattr(args, "measure_days", 0) or 0) or 7
@@ -4479,6 +4498,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 try:
                     from .report.impact import impact_deltas
                     from .report.impact_ga4 import baseline_gsc, baseline_ga4, engagement_deltas
+                    from .report.align import query_alignment
                     from .report.verdicts import evaluate_result, multiaxial_verdict
                     # Janela POS-implementacao: os 7 dias seguintes a correcao
                     # (limitada a hoje) — mede o efeito da intervencao, nao a
@@ -4507,7 +4527,13 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     # completo). O veredito sozinho NÃO decide ação: uma regressão
                     # pode ter causa que o título não resolve (perda de posição,
                     # concorrência, sazonalidade, mudança de intenção...).
-                    _eval = evaluate_result(gsc_deltas, ga4_deltas)
+                    # Alinhamento query x titulo (mesmo criterio do gerador):
+                    # sem isso o diagnostico nao distingue "CTR anomalo com
+                    # titulo alinhado" de "gap real de cobertura".
+                    _align = query_alignment(storage, outcome.get("url") or "")
+                    _eval = evaluate_result(gsc_deltas, ga4_deltas,
+                                            query_aligned=_align.get("aligned"),
+                                            baseline=_baseline)
                     verdict = _eval["measurement"]["verdict"]
                     verdict_axes = _eval["measurement"]["axes"]
                     _diag = _eval["diagnosis"]
@@ -4517,7 +4543,8 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                         result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
                                 "now_gsc": now_metrics, "now_ga4": now_ga4,
                                 "elapsed_days": elapsed, "observation": "preliminary_7d",
-                                "diagnosis": _diag, "decision": _dec},
+                                "diagnosis": _diag, "decision": _dec,
+                                "alignment": _align},
                     )
                     # Ação na Caixa conforme a DECISÃO (nunca pelo veredito cru).
                     if _dec.get("recommended_action") == "review_title":
@@ -4844,6 +4871,32 @@ def _finding(f: dict[str, Any], url: str) -> dict[str, Any]:
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _cmd_baseline(args: argparse.Namespace, config: Any) -> int:
+    """SEO-INC-013: percentis de CTR do PROPRIO site, por contexto.
+
+    Substitui benchmark externo: a anomalia é julgada contra o comportamento
+    do próprio segmento (faixa de posição × faixa de impressões).
+    """
+    from .report.baseline import build_baseline, ctr_verdict
+
+    with Storage(config.sqlite_path) as storage:
+        base = build_baseline(storage, window_end=getattr(args, "window", None),
+                              min_impressions=getattr(args, "min_impressions", 100) or 100)
+        summary: dict[str, Any] = {"command": "baseline", "pages": base["pages"],
+                                   "window_end": base["window_end"],
+                                   "contexts": len(base["contexts"]),
+                                   "min_impressions": base["min_impressions"]}
+        if (getattr(args, "position", None) is not None
+                and getattr(args, "ctr", None) is not None):
+            summary["classification"] = ctr_verdict(
+                storage, position=args.position,
+                impressions=getattr(args, "impressions", None) or 0,
+                ctr=args.ctr, baseline=base)
+        _emit({"status": "ok", "summary": summary, "contexts": base["contexts"]},
+              force_json=getattr(args, "json", False))
+        return 0
 
 
 def _cmd_today(args: argparse.Namespace, config: Any) -> int:

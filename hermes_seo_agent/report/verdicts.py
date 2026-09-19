@@ -143,7 +143,8 @@ def _f(value: Any, default: float = 0.0) -> float:
 
 
 def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
-                    query_aligned: bool | None = None) -> dict[str, Any]:
+                    query_aligned: bool | None = None,
+                    baseline: dict[str, Any] | None = None) -> dict[str, Any]:
     """Códigos de diagnóstico — o que é OBSERVÁVEL, sem inferir causa externa.
 
     `cause` permanece "undetermined" por contrato: a API do Search Console não
@@ -162,10 +163,23 @@ def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
         pos = gsc.get("position_before")
     impressions = max(_f(gsc.get("impressions_after")), _f(gsc.get("impressions_before")))
     ctr_after = gsc.get("ctr_after")
-    # anomalia de CTR: posição boa + volume relevante + CTR praticamente zero
-    if (pos is not None and _f(pos) <= 10 and impressions >= 100
-            and ctr_after is not None and _f(ctr_after) < 0.01):
-        codes.append("ctr_anomaly")
+    # CTR julgado contra o BASELINE DO PROPRIO SITE (nunca benchmark externo):
+    #   ctr_below_baseline  - abaixo do P10 do proprio contexto
+    #   ctr_zero_sitewide   - o segmento inteiro captura ~0 (padrao do site,
+    #                         nao da pagina: investigar estrutural, nao titulo)
+    if ctr_after is not None and pos is not None:
+        from .baseline import ctr_verdict as _ctr_verdict
+        _vb = _ctr_verdict(None, position=pos, impressions=impressions,
+                           ctr=ctr_after, baseline=baseline) if baseline else None
+        _bucket = (_vb or {}).get("bucket") or {}
+        if _vb and _vb.get("verdict") == "below_p10":
+            codes.append("ctr_below_baseline")
+        elif (_f(ctr_after) <= 0.002 and _f(_bucket.get("p50")) <= 0.002
+              and int(_bucket.get("n") or 0) >= 5):
+            codes.append("ctr_zero_sitewide")
+        elif baseline is None and _f(ctr_after) < 0.01 and impressions >= 100 and _f(pos) <= 10:
+            # sem baseline disponivel: mantem o criterio conservador anterior
+            codes.append("ctr_anomaly")
 
     if _f(gsc.get("impressions_delta")) < 0 and _f(gsc.get("impressions_pct")) <= -20:
         codes.append("visibility_loss")
@@ -182,7 +196,8 @@ def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
 
     return {
         "codes": codes,
-        "ctr_anomaly": "ctr_anomaly" in codes,
+        "ctr_anomaly": bool({"ctr_anomaly", "ctr_below_baseline",
+                             "ctr_zero_sitewide"} & set(codes)),
         "query_alignment": ("ok" if "query_title_aligned" in codes else
                             "gap" if "query_title_gap" in codes else "unknown"),
         # NUNCA inferir causa externa: a API não expõe o recorte de IA
@@ -206,10 +221,16 @@ def recommend(verdict: str, axes: dict[str, str], diag: dict[str, Any]) -> dict[
                 "rationale": "sem base de comparação suficiente"}
 
     # Anomalia de CTR com query alinhada e visibilidade não pior: NÃO mexer
-    if "ctr_anomaly" in codes and "query_title_aligned" in codes and vis in (UP, FLAT):
+    if "ctr_zero_sitewide" in codes:
+        return {"actionability": "investigate", "recommended_action": "no_title_change",
+                "review_required": True,
+                "rationale": "CTR do segmento inteiro ~0 (padrão do site): "
+                             "investigar snippet/estrutura, não título"}
+    if (codes & {"ctr_anomaly", "ctr_below_baseline"}) and \
+            "query_title_aligned" in codes and vis in (UP, FLAT):
         return {"actionability": "monitor", "recommended_action": "no_title_change",
                 "review_required": False,
-                "rationale": "alinhamento ok; CTR anômalo sem causa determinada"}
+                "rationale": "alinhamento ok; CTR abaixo do baseline do próprio contexto"}
 
     # Perda de tráfego COM gap de query/título: aí sim o título é candidato
     if "traffic_loss" in codes and "query_title_gap" in codes:
@@ -235,10 +256,11 @@ def recommend(verdict: str, axes: dict[str, str], diag: dict[str, Any]) -> dict[
 
 
 def evaluate_result(gsc: dict[str, Any], ga4: dict[str, Any], *,
-                    query_aligned: bool | None = None) -> dict[str, Any]:
-    """Contrato completo: medição + diagnóstico + decisão (SEO-INC-012)."""
+                    query_aligned: bool | None = None,
+                    baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Contrato completo: medição + diagnóstico + decisão (SEO-INC-012/013)."""
     verdict, axes = multiaxial_verdict(gsc, ga4)
-    diag = diagnosis_codes(gsc, ga4, query_aligned=query_aligned)
+    diag = diagnosis_codes(gsc, ga4, query_aligned=query_aligned, baseline=baseline)
     dec = recommend(verdict, axes, diag)
     return {"measurement": {"verdict": verdict, "axes": axes},
             "diagnosis": diag, "decision": dec}
