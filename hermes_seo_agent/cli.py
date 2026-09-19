@@ -4514,7 +4514,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     # morrer no relatorio. Enfileira na Caixa de Trabalho para o
                     # agente propor novo titulo (ou o humano reverter — o
                     # rollback fica salvo em actions.rollback_json).
-                    if verdict in {"worsened", "mixed"}:
+                    if verdict in {"worsened", "mixed", "regressed"}:
                         try:
                             _imp = gsc_deltas.get("impressions_delta")
                             _clk = gsc_deltas.get("clicks_delta")

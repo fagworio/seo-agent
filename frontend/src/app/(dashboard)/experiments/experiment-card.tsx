@@ -26,6 +26,19 @@ function numeric(value: unknown): number | null { return typeof value === "numbe
 function MetricRow({ label, before, after, delta, decimals = false }: { label: string; before: unknown; after: unknown; delta: unknown; decimals?: boolean }) { const values = [before, after, delta].map(numeric); const format = (value: number | null, signed = false) => value === null ? "—" : `${signed && value > 0 ? "+" : ""}${value.toLocaleString("pt-BR", { maximumFractionDigits: decimals ? 1 : 0 })}`; return <tr className="border-t border-[var(--border)]"><th className="px-3 py-2 text-left font-medium">{label}</th><td className="px-3 py-2 tabular-nums">{format(values[0])}</td><td className="px-3 py-2 tabular-nums">{format(values[1])}</td><td className="px-3 py-2 tabular-nums">{format(values[2], true)}</td></tr>; }
 function Row({ label, value }: { label: string; value: string }) { return <div className="flex justify-between gap-4"><dt className="text-[var(--muted)]">{label}</dt><dd className="max-w-[65%] break-words text-right">{value}</dd></div>; }
 function stateLabel(value: string) { return ({ measured: "Resultado medido", measuring: "Medição em andamento", waiting_data: "Aguardando dados" } as Record<string, string>)[value] ?? value; }
-function verdictLabel(value: string) { return ({ improved: "Melhora observada", worsened: "Piora observada", neutral: "Sem mudança relevante" } as Record<string, string>)[value] ?? value; }
+function verdictLabel(value: string) { return ({
+  // SEO-INC-012: veredito multiaxial (CTR é um sinal, não o veredito)
+  traffic_up: "Tráfego em alta (cliques)",
+  visibility_up: "Visibilidade em alta — sem clique correspondente",
+  engagement_up: "Engajamento em alta (GA4)",
+  regressed: "Regressão de visibilidade/aquisição",
+  no_change: "Sem mudança relevante",
+  mixed: "Sinais misturados",
+  insufficient_data: "Sem dados no período",
+  // rótulos legados (medidos antes de 19/09/2026)
+  improved: "Melhora observada",
+  worsened: "Piora observada",
+  neutral: "Sem mudança relevante",
+} as Record<string, string>)[value] ?? value; }
 function stateTone(value: string): "success" | "warning" | "info" | "neutral" { if (value === "measured") return "success"; if (value === "measuring") return "info"; return "warning"; }
-function verdictTone(value: string): "success" | "warning" | "danger" | "neutral" { if (value === "improved") return "success"; if (value === "worsened") return "danger"; if (value === "neutral") return "neutral"; return "warning"; }
+function verdictTone(value: string): "success" | "warning" | "danger" | "neutral" { if (["traffic_up", "improved", "engagement_up"].includes(value)) return "success"; if (["regressed", "worsened"].includes(value)) return "danger"; if (["no_change", "neutral", "insufficient_data"].includes(value)) return "neutral"; return "warning"; }
