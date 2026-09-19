@@ -76,6 +76,17 @@ browser tool. The CLI does the mechanics; you interpret and report.
    **respeitado** pela fila (`next_audit_at`, senão a URL martela o servidor a
    cada ciclo); e `current_title` usa a fonte **mais recente** (corpus atrasado
    não acusa gap em título já corrigido).
+4g. Decisão de título EMPÍRICA ponta a ponta (SEO-INC-017/018/019): a seleção
+   inicial usa o **baseline do próprio site** (CTR abaixo do P10 do segmento;
+   `below_comparable` quando o acervo capta ~0 mas as comparáveis captam) — não
+   existe mais o corte fixo "CTR <= 2%" (`--max-ctr` é só teto de sanidade).
+   `_covered()` exige também os **termos de intenção** (idade/altura/elenco/onde
+   assistir...): cobrir a entidade não cobre a intenção. E alterar título exige
+   a **cadeia completa** via `empirical_title_case` — demanda real (página E
+   query) + anomalia vs baseline + intenção + gap + posição acionável +
+   pós-clique saudável (GA4); faltando elo, cai em `investigate_cause`,
+   `gather_more_data` ou `no_title_change`, sempre com `evidence` citável e
+   `confidence`. GA4/Trends **priorizam**, nunca criam a necessidade.
 4f. Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
    `measurement` (veredito multiaxial — `regressed`, `visibility_up`,
    `traffic_up`, `engagement_up`, `no_change`, `mixed`, `insufficient_data`),
