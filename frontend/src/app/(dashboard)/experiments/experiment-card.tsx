@@ -10,7 +10,7 @@ export function ExperimentCard({ experiment }: { experiment: Experiment }) {
   const current = metricGroup(experiment.current, "gsc");
   const delta = metricGroup(experiment.delta, "gsc");
   return <Card title={experiment.keyword || experiment.url || "Intervenção sem título"}>
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><Badge tone={stateTone(experiment.measurement_state)}>{stateLabel(experiment.measurement_state)}</Badge>{experiment.verdict && <Badge tone={verdictTone(experiment.verdict)}>{verdictLabel(experiment.verdict)}</Badge>}</div>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><Badge tone={stateTone(experiment.measurement_state)}>{stateLabel(experiment.measurement_state)}</Badge>{experiment.verdict && <Badge tone={verdictTone(experiment.verdict)}>{verdictLabel(experiment.verdict)}</Badge>}</div>{(experiment.diagnosis?.ctr_anomaly || experiment.decision?.recommended_action) && <div className="mb-3 flex flex-wrap items-center gap-2">{experiment.diagnosis?.ctr_anomaly && <Badge tone="warning">CTR anômalo</Badge>}{experiment.decision?.recommended_action === "no_title_change" && <Badge tone="neutral">Decisão: não alterar título</Badge>}{experiment.decision?.recommended_action === "investigate_cause" && <Badge tone="warning">Decisão: investigar causa</Badge>}{experiment.decision?.recommended_action === "review_title" && <Badge tone="danger">Decisão: revisar título</Badge>}{experiment.decision?.rationale && <span className="text-xs text-slate-500">{experiment.decision.rationale}</span>}</div>}
     <dl className="space-y-1 text-sm"><Row label="Intervenção" value={experiment.implemented_action || experiment.opportunity_type || "Não informada"} /><Row label="Implementada em" value={experiment.implemented_at || "Não informada"} /><Row label="Página" value={experiment.url || "Não informada"} /></dl>
     <div className="mt-4 overflow-x-auto rounded-md border border-[var(--border)]"><table className="w-full text-sm"><thead className="bg-[var(--surface-raised)] text-left text-xs text-[var(--muted)]"><tr><th className="px-3 py-2">Métrica</th><th className="px-3 py-2">Antes</th><th className="px-3 py-2">Atual</th><th className="px-3 py-2">Variação observada</th></tr></thead><tbody><MetricRow label="Cliques" before={baseline.clicks} after={current.clicks} delta={delta.clicks_delta} /><MetricRow label="Impressões" before={baseline.impressions} after={current.impressions} delta={delta.impressions_delta} /><MetricRow label="Posição média" before={baseline.position} after={current.position} delta={delta.position_delta} decimals /></tbody></table></div>
     {!Object.keys(current).length && <p className="mt-3 rounded-md border border-dashed border-[var(--border)] p-3 text-sm text-[var(--muted)]">A janela atual ainda não possui dados comparáveis. Isso não significa resultado zero.</p>}
@@ -29,7 +29,7 @@ function stateLabel(value: string) { return ({ measured: "Resultado medido", mea
 function verdictLabel(value: string) { return ({
   // SEO-INC-012: veredito multiaxial (CTR é um sinal, não o veredito)
   traffic_up: "Tráfego em alta (cliques)",
-  visibility_up: "Visibilidade em alta — sem clique correspondente",
+  visibility_up: "Visibilidade em alta",
   engagement_up: "Engajamento em alta (GA4)",
   regressed: "Regressão de visibilidade/aquisição",
   no_change: "Sem mudança relevante",

@@ -548,6 +548,20 @@ export interface Experiment {
   latest_result_window: string;
   revalidation: Partial<Revalidation>;
   verdict: string | null;
+  // SEO-INC-012: medição / diagnóstico / decisão em camadas separadas
+  diagnosis?: {
+    codes?: string[];
+    ctr_anomaly?: boolean;
+    query_alignment?: string;
+    cause?: string;
+    confidence?: string;
+  };
+  decision?: {
+    actionability?: string;
+    recommended_action?: string;
+    review_required?: boolean;
+    rationale?: string;
+  };
   windows: Record<string, boolean>;
   measurement_state: string;
   limitations?: string;

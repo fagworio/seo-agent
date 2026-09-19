@@ -29,6 +29,11 @@ def engagement_deltas(before: dict[str, Any] | None,
     for key in _ENGAGEMENT_METRICS:
         b = before.get(key)
         a = after.get(key)
+        # SEO-INC-012: o veredito multiaxial precisa de *_before/*_after para
+        # aplicar tolerancia relativa — sem eles a comparacao era absoluta
+        # (1 sessao de diferenca ja virava movimento).
+        deltas[f"{key}_before"] = b
+        deltas[f"{key}_after"] = a
         if b is None or a is None:
             deltas[f"{key}_delta"] = None
             deltas[f"{key}_pct"] = None

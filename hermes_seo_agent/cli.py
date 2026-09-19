@@ -2723,7 +2723,7 @@ def _cmd_checklist(args: argparse.Namespace, config: Any) -> int:
             from .report.impact_ga4 import (
                 baseline_ga4, baseline_gsc, engagement_deltas,
             )
-            from .report.verdicts import multiaxial_verdict
+            from .report.verdicts import evaluate_result, multiaxial_verdict
             item = storage.get_checklist_item(args.item_id or 0)
             if not item or not item.get("url") or not config.google_credentials:
                 print(json.dumps({"status": "error",
@@ -4479,7 +4479,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                 try:
                     from .report.impact import impact_deltas
                     from .report.impact_ga4 import baseline_gsc, baseline_ga4, engagement_deltas
-                    from .report.verdicts import multiaxial_verdict
+                    from .report.verdicts import evaluate_result, multiaxial_verdict
                     # Janela POS-implementacao: os 7 dias seguintes a correcao
                     # (limitada a hoje) — mede o efeito da intervencao, nao a
                     # ultima semana qualquer.
@@ -4503,34 +4503,55 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     now_ga4 = storage.ga4_metrics_for_url(outcome["url"]) or None
                     gsc_deltas = impact_deltas(baseline_gsc(baseline) or {}, now_metrics)
                     ga4_deltas = engagement_deltas(baseline_ga4(baseline), now_ga4)
-                    verdict, verdict_axes = multiaxial_verdict(gsc_deltas, ga4_deltas)
+                    # SEO-INC-012: medição -> diagnóstico -> decisão (contrato
+                    # completo). O veredito sozinho NÃO decide ação: uma regressão
+                    # pode ter causa que o título não resolve (perda de posição,
+                    # concorrência, sazonalidade, mudança de intenção...).
+                    _eval = evaluate_result(gsc_deltas, ga4_deltas)
+                    verdict = _eval["measurement"]["verdict"]
+                    verdict_axes = _eval["measurement"]["axes"]
+                    _diag = _eval["diagnosis"]
+                    _dec = _eval["decision"]
                     storage.set_outcome_verdict(
                         outcome["id"], verdict=verdict, days=_mdays,
                         result={"gsc_deltas": gsc_deltas, "ga4_deltas": ga4_deltas,
                                 "now_gsc": now_metrics, "now_ga4": now_ga4,
-                                "elapsed_days": elapsed, "observation": "preliminary_7d"},
+                                "elapsed_days": elapsed, "observation": "preliminary_7d",
+                                "diagnosis": _diag, "decision": _dec},
                     )
-                    # Retriagem: intervencao que PIOROU (ou ficou misto) nao pode
-                    # morrer no relatorio. Enfileira na Caixa de Trabalho para o
-                    # agente propor novo titulo (ou o humano reverter — o
-                    # rollback fica salvo em actions.rollback_json).
-                    if verdict in {"worsened", "mixed", "regressed"}:
+                    # Ação na Caixa conforme a DECISÃO (nunca pelo veredito cru).
+                    if _dec.get("recommended_action") == "review_title":
                         try:
-                            _imp = gsc_deltas.get("impressions_delta")
-                            _clk = gsc_deltas.get("clicks_delta")
+                            _imp = gsc_deltas.get("impressions_delta") or 0
+                            _clk = gsc_deltas.get("clicks_delta") or 0
                             storage.save_checklist_item(
                                 url=outcome.get("url") or "",
                                 item="title_regression",
                                 reason=(
-                                    f"Medicao 7d ({outcome.get('implemented_at', '')[:10]}): "
-                                    f"titulo aplicado resultou em {verdict} "
+                                    f"Medicao {_mdays}d ({outcome.get('implemented_at', '')[:10]}): "
+                                    f"{_dec.get('rationale')} "
                                     f"(impressoes {_imp:+d} / cliques {_clk:+d}). "
                                     "Re-triar: novo titulo melhor OU rollback da acao."
                                 ),
-                                action="retriar_titulo",
-                                gain_clicks=0,
+                                action="retriar_titulo", gain_clicks=0,
                             )
                         except Exception:  # noqa: BLE001 — nao invalidar a medicao
+                            pass
+                    elif _dec.get("recommended_action") == "investigate_cause":
+                        try:
+                            _imp = gsc_deltas.get("impressions_delta") or 0
+                            storage.save_checklist_item(
+                                url=outcome.get("url") or "",
+                                item="regression_investigation",
+                                reason=(
+                                    f"Medicao {_mdays}d: {verdict} sem causa determinada "
+                                    f"(impressoes {_imp:+d}; cause={_diag.get('cause')}; "
+                                    f"codes={','.join(_diag.get('codes') or [])}). "
+                                    "Investigar antes de mexer no titulo."
+                                ),
+                                action="investigar_regressao", gain_clicks=0,
+                            )
+                        except Exception:  # noqa: BLE001
                             pass
                     measured += 1
                 except Exception as exc:  # noqa: BLE001 — item remains retryable
@@ -4719,7 +4740,7 @@ def _cmd_outcomes(args: argparse.Namespace, config: Any) -> int:
                     baseline_gsc, baseline_ga4,
                     engagement_deltas,
                 )
-                from .report.verdicts import multiaxial_verdict
+                from .report.verdicts import evaluate_result, multiaxial_verdict
                 gsc = SearchConsoleClient(config)
                 end = date.today()
                 start = end - timedelta(days=config.search_analytics_days)

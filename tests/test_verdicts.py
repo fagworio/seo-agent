@@ -1,70 +1,124 @@
-"""SEO-INC-012: veredito multiaxial — CTR é UM sinal, nunca o veredito.
+"""SEO-INC-012: medição multiaxial + diagnóstico + decisão.
 
-Contexto (19/09/2026): páginas em posição alta com CTR ~0 (resultados
-compostos: AI Overviews citam a URL e vários links compartilham a posição)
-produziam "worsened" por um clique a menos e disparavam retriagem de título
-sem causa real. Agora cada eixo (visibility/acquisition/engagement) é medido
-separadamente e o veredito composto é explícito.
+O teste mais importante aqui é o de INTEGRAÇÃO: `impact_deltas()` (contrato
+real do pipeline) alimentando o veredito. A versão anterior passava `before`
+como None no fluxo integrado, então +2% de impressões já virava "up" — o
+teste unitário com dicionário montado à mão não pegava isso.
 """
 
-from hermes_seo_agent.report.verdicts import axis_verdicts, multiaxial_verdict
+from hermes_seo_agent.report.impact import impact_deltas
+from hermes_seo_agent.report.verdicts import (
+    DOWN, FLAT, MIXED, UNKNOWN, UP,
+    diagnosis_codes, evaluate_result, merge_axes, multiaxial_verdict, recommend,
+)
 
 
-def _gsc(imp, imp2, clk, clk2, ctr, ctr2, pos, pos2):
-    """Deltas no formato do impact_deltas (com o 'before' p/ limite relativo)."""
-    return {
-        "impressions_delta": imp2 - imp, "impressions_before": imp,
-        "clicks_delta": clk2 - clk, "clicks_before": clk,
-        "ctr_delta": ctr2 - ctr, "ctr_before": ctr,
-        "position_delta": pos2 - pos, "position_before": pos,
-    }
+# -- o bug real: contrato integrado ----------------------------------------
+
+def test_integracao_ruido_nao_vira_movimento():
+    """+2% de impressões/cliques e -0,1 de posição = no_change (não 'up')."""
+    before = {"impressions": 1000, "clicks": 100, "ctr": 0.10, "position": 5.0}
+    after = {"impressions": 1020, "clicks": 102, "ctr": 0.10, "position": 4.9}
+    deltas = impact_deltas(before, after)
+    verdict, axes = multiaxial_verdict(deltas, {})
+    assert verdict == "no_change", (verdict, axes)
+    assert axes["visibility"] == FLAT and axes["acquisition"] == FLAT
 
 
-def test_anomalia_de_ctr_nao_e_regressao():
-    """Visibilidade sobe, cliques ficam ~zero: NÃO é falha do título."""
-    gsc = _gsc(imp=1000, imp2=1500, clk=2, clk2=2, ctr=0.002, ctr2=0.0013,
-               pos=4.0, pos2=3.5)
+def test_integracao_um_clique_nao_e_regressao():
+    """Base 100: perder 1 clique (1%) é ruído — não pode virar regressed."""
+    before = {"impressions": 5000, "clicks": 100, "ctr": 0.02, "position": 4.0}
+    after = {"impressions": 4990, "clicks": 99, "ctr": 0.0198, "position": 4.05}
+    deltas = impact_deltas(before, after)
+    verdict, _ = multiaxial_verdict(deltas, {})
+    assert verdict != "regressed", verdict
+
+
+def test_integracao_queda_real_e_regressao():
+    """-40% de impressões e -50% de cliques: aí sim regrediu."""
+    before = {"impressions": 5000, "clicks": 200, "ctr": 0.04, "position": 3.0}
+    after = {"impressions": 3000, "clicks": 100, "ctr": 0.033, "position": 3.2}
+    deltas = impact_deltas(before, after)
+    verdict, axes = multiaxial_verdict(deltas, {})
+    assert verdict == "regressed", (verdict, axes)
+
+
+# -- eixos preservam conflito ----------------------------------------------
+
+def test_merge_preserva_conflito():
+    assert merge_axes(UP, DOWN) == MIXED
+    assert merge_axes(DOWN, FLAT) == DOWN
+    assert merge_axes(UP, UNKNOWN) == UP
+    assert merge_axes(UNKNOWN, UNKNOWN) == UNKNOWN
+
+
+def test_visibility_mixed_quando_impressoes_caem_e_posicao_melhora():
+    gsc = {"impressions_delta": -100, "impressions_before": 1000, "impressions_after": 900,
+           "position_delta": -4.0, "position_before": 8.0, "position_after": 4.0}
     verdict, axes = multiaxial_verdict(gsc, {})
-    assert axes["visibility"] == "up"
-    assert axes["acquisition"] == "flat"
-    assert verdict == "visibility_up", "nao pode virar regressed/worsened"
+    assert axes["visibility"] == MIXED, axes
+    assert verdict == "mixed", verdict
 
 
-def test_piora_real_regride():
-    """Impressões e posição caíram sem nenhuma melhora -> regressed."""
-    gsc = _gsc(imp=1000, imp2=600, clk=10, clk2=5, ctr=0.01, ctr2=0.008,
-               pos=3.0, pos2=6.0)
+def test_vis_down_com_acq_up_e_mixed_nao_traffic_up():
+    """Perdeu metade da visibilidade mas os cliques subiram -> mixed."""
+    gsc = {"impressions_delta": -50000, "impressions_before": 100000,
+           "impressions_after": 50000, "position_delta": 0.0, "position_before": 3.0,
+           "position_after": 3.0, "clicks_delta": 200, "clicks_before": 2000,
+           "clicks_after": 2200, "ctr_delta": 0.02, "ctr_before": 0.02, "ctr_after": 0.044}
     verdict, axes = multiaxial_verdict(gsc, {})
-    assert axes["visibility"] == "down"
-    assert verdict == "regressed"
+    assert verdict == "mixed", (verdict, axes)
 
 
-def test_cliques_subindo_e_traffic_up():
-    gsc = _gsc(imp=1000, imp2=1200, clk=10, clk2=25, ctr=0.01, ctr2=0.021,
-               pos=5.0, pos2=4.0)
-    verdict, _ = multiaxial_verdict(gsc, {})
-    assert verdict == "traffic_up"
-
-
-def test_ruido_nao_e_movimento():
-    """Variação dentro do piso (0,1 clique / 0,1 p.p. de CTR) = no_change."""
-    gsc = _gsc(imp=1000, imp2=1005, clk=10, clk2=10, ctr=0.01, ctr2=0.0101,
-               pos=4.0, pos2=4.0)
+def test_visibility_anomalia_nao_e_regressao():
+    """Posição alta + impressões crescendo + CTR ~0 -> visibility_up."""
+    gsc = {"impressions_delta": 5000, "impressions_before": 2000, "impressions_after": 7000,
+           "position_delta": -1.0, "position_before": 4.0, "position_after": 3.0,
+           "clicks_delta": 0, "clicks_before": 2, "clicks_after": 2,
+           "ctr_delta": 0.0, "ctr_before": 0.001, "ctr_after": 0.001}
     verdict, axes = multiaxial_verdict(gsc, {})
-    assert verdict == "no_change", axes
+    assert verdict == "visibility_up", (verdict, axes)
 
 
-def test_engajamento_sustenta_engagement_up():
-    gsc = _gsc(imp=1000, imp2=1000, clk=10, clk2=10, ctr=0.01, ctr2=0.01,
-               pos=4.0, pos2=4.0)
-    ga4 = {"sessions_delta": 5, "sessions_before": 10,
-           "engagement_rate_delta": 0.1, "engagement_rate_before": 0.4}
-    verdict, axes = multiaxial_verdict(gsc, ga4)
-    assert axes["engagement"] == "up"
-    assert verdict == "engagement_up"
+# -- diagnóstico e decisão --------------------------------------------------
+
+def test_diagnostico_ctr_anomalo_com_query_alinhada_nao_mexe_titulo():
+    gsc = {"position_after": 1.6, "impressions_after": 344, "ctr_after": 0.0,
+           "impressions_delta": 100, "impressions_before": 244, "position_delta": -0.2,
+           "position_before": 1.8, "clicks_delta": 0, "clicks_before": 0, "clicks_after": 0}
+    out = evaluate_result(gsc, {}, query_aligned=True)
+    assert out["measurement"]["verdict"] == "visibility_up"
+    assert out["diagnosis"]["ctr_anomaly"] is True
+    assert out["diagnosis"]["cause"] == "undetermined"
+    assert out["decision"]["recommended_action"] == "no_title_change"
+    assert out["decision"]["review_required"] is False
 
 
-def test_sem_dados_em_nenhum_eixo():
-    verdict, axes = multiaxial_verdict({}, {})
-    assert verdict == "insufficient_data"
-    assert set(axes.values()) == {"unknown"}
+def test_regressao_sem_causa_nao_vira_revisao_de_titulo():
+    gsc = {"impressions_delta": -3000, "impressions_before": 5000, "impressions_after": 2000,
+           "impressions_pct": -60.0, "clicks_delta": -80, "clicks_before": 100,
+           "clicks_after": 20, "clicks_pct": -80.0, "position_after": 3.0,
+           "position_before": 3.0, "position_delta": 0.0}
+    out = evaluate_result(gsc, {}, query_aligned=True)
+    assert out["measurement"]["verdict"] == "regressed"
+    assert out["decision"]["recommended_action"] == "investigate_cause"
+    assert out["decision"]["review_required"] is True
+
+
+def test_perda_de_trafego_com_gap_de_query_vira_revisao_de_titulo():
+    gsc = {"impressions_delta": -2000, "impressions_before": 3000, "impressions_after": 1000,
+           "impressions_pct": -66.0, "clicks_delta": -50, "clicks_before": 60,
+           "clicks_after": 10, "clicks_pct": -83.0, "position_after": 6.0,
+           "position_before": 6.0, "position_delta": 0.0}
+    diag = diagnosis_codes(gsc, {}, query_aligned=False)
+    dec = recommend("regressed", {"visibility": DOWN, "acquisition": DOWN}, diag)
+    assert "query_title_gap" in diag["codes"]
+    assert dec["recommended_action"] == "review_title"
+    assert dec["review_required"] is True
+
+
+def test_sem_dados_e_monitor():
+    out = evaluate_result({}, {})
+    assert out["measurement"]["verdict"] == "insufficient_data"
+    assert out["decision"]["recommended_action"] == "gather_more_data"
+    assert out["decision"]["review_required"] is False

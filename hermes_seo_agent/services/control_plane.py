@@ -607,6 +607,10 @@ class ControlPlaneService:
                 "latest_result_window": latest_window,
                 "revalidation": revalidations.get(outcome["id"], {}),
                 "verdict": outcome.get("verdict") or None,
+                # SEO-INC-012: diagnóstico (códigos) e decisão (ação recomendada)
+                # separados da medição — o card mostra as três camadas.
+                "diagnosis": result.get("diagnosis") or {},
+                "decision": result.get("decision") or {},
                 "windows": windows,
                 "measurement_state": self._measurement_state(outcome.get("verdict"), recorded),
                 "limitations": self._measurement_limitations(outcome.get("verdict"), recorded),

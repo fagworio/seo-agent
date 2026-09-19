@@ -13,11 +13,19 @@ _METRICS = ("clicks", "impressions", "ctr", "position")
 
 
 def impact_deltas(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    """Absolute and relative deltas between two GSC metric windows."""
+    """Absolute and relative deltas between two GSC metric windows.
+
+    Tambem devolve `*_before`/`*_after` (SEO-INC-012): o veredito multiaxial
+    precisa deles para aplicar a tolerancia RELATIVA (5%). Sem esses campos,
+    `before` chegava None no fluxo integrado e QUALQUER variacao de 1
+    impressao/clique virava movimento — inflando regressoes.
+    """
     deltas: dict[str, Any] = {}
     for key in _METRICS:
         b = before.get(key)
         a = after.get(key)
+        deltas[f"{key}_before"] = b
+        deltas[f"{key}_after"] = a
         if b is None or a is None:
             deltas[f"{key}_delta"] = None
             deltas[f"{key}_pct"] = None
