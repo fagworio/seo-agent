@@ -111,6 +111,7 @@ export interface TodayResponse {
     improvement_summary: ImprovementSummary;
     change_summary: ChangeSummary;
     title_funnel: TitleFunnel;
+    audit_coverage?: AuditCoverage;
     observed_impact: ObservedImpact;
     measurement_summary: MeasurementSummary;
     next_executions: NextExecution[];
@@ -198,6 +199,16 @@ export interface ChangeSummary {
   internal_links: number;
   technical: number;
   previous_period_delta: number | null;
+}
+
+// SEO-INC-008: cobertura real do acervo (fila incremental por URL).
+export interface AuditCoverage {
+  known: number;
+  never_audited: number;
+  dirty: number;
+  stale: number;
+  failed: number;
+  fresh: number;
 }
 
 export interface TitleFunnel {

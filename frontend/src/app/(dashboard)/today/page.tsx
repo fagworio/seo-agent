@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { api, TodayResponse, ApiError, ChangeSummary, GoogleDataSummary, ImprovementSummary, MeasurementSummary, NextExecution, ObservedImpact, TitleFunnel } from "@/lib/api";
+import { api, TodayResponse, ApiError, AuditCoverage, ChangeSummary, GoogleDataSummary, ImprovementSummary, MeasurementSummary, NextExecution, ObservedImpact, TitleFunnel } from "@/lib/api";
 import { presentOpportunity } from "@/lib/opportunity-presentation";
 import { opportunityEvidenceSummary } from "@/features/opportunities/decision-insight";
 import { GoogleTrust, GoogleSignalsPanel, OrganicTrend, TopSearches } from "@/features/today/dashboard-insights";
@@ -43,6 +43,10 @@ export default function TodayPage() {
     internal_links: 0, technical: 0, previous_period_delta: null,
     ...rawToday.change_summary,
   };
+  const auditCoverage: AuditCoverage = {
+    known: 0, never_audited: 0, dirty: 0, stale: 0, failed: 0, fresh: 0,
+    ...rawToday.audit_coverage,
+  };
   const titleFunnel: TitleFunnel = {
     opportunities: 0, approved: 0, changed: 0, measured: 0, improved: 0,
     ...rawToday.title_funnel,
@@ -74,6 +78,16 @@ export default function TodayPage() {
     { id: "title-impact", label: "Impacto acumulado dos títulos", className: "xl:col-span-2", content: <TitleImpactWidget /> },
     { id: "outcome-summary", label: "Resumo de resultados", className: "xl:col-span-2", content: <OutcomeKpis changes={changeSummary} impact={observedImpact} measurement={measurementSummary} executions={nextExecutions} /> },
     { id: "google-trust", label: "Saúde dos dados Google", className: "xl:col-span-2", content: <GoogleTrust data={googleData} /> },
+    { id: "audit-coverage", label: "Cobertura de auditoria do acervo", content: (
+      <dl className="grid grid-cols-2 gap-3 text-sm">
+        <div><dt className="text-xs text-muted-foreground">URLs conhecidas</dt><dd className="text-lg font-semibold">{auditCoverage.known}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Nunca auditadas</dt><dd className="text-lg font-semibold text-amber-500">{auditCoverage.never_audited}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Na fila (dirty)</dt><dd className="text-lg font-semibold">{auditCoverage.dirty}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Desatualizadas (stale)</dt><dd className="text-lg font-semibold">{auditCoverage.stale}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Em falha (backoff)</dt><dd className="text-lg font-semibold text-red-500">{auditCoverage.failed}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Auditadas (fresh)</dt><dd className="text-lg font-semibold text-emerald-600">{auditCoverage.fresh}</dd></div>
+      </dl>
+    ) },
     { id: "title-funnel", label: "Funil de otimização de títulos", content: <TitleFunnelPanel funnel={titleFunnel} /> },
     { id: "automation", label: "Próximas execuções", content: <AutomationPanel executions={nextExecutions} /> },
     { id: "observed-impact", label: "Impacto observado", content: <ObservedImpactPanel impact={observedImpact} /> },
