@@ -1551,7 +1551,11 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
         #    com um run parcial apenas retoma e drena a fila até finalizar.
         if _corpus_weekly:
-            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0,
+            # Teto por ciclo: a fila do corpus tem dezenas de milhares de itens e
+            # `limit=0` (drenar tudo) travava o scheduler por horas. O rebuild é
+            # retomável (claim atômico + lease), então drenar por partes é seguro.
+            _corpus_limit = int(getattr(config, "corpus_build_limit_per_run", 1000) or 1000)
+            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=_corpus_limit,
                                                _run_context=run_context),
                          config=config)
             _mark("corpus:last_rebuild")
