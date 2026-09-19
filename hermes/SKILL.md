@@ -38,8 +38,17 @@ browser tool. The CLI does the mechanics; you interpret and report.
 1. `hermes-seo-agent inventory --json` — one call; reconciliation
    WP × static sitemap (summary: missing_from_sitemap, orphan_in_sitemap,
    wp_static_mismatch, …).
-2. `hermes-seo-agent audit --json --limit N` — deterministic checks on a
-   bounded sample; findings carry `rule_id`/`severity`/`detail`.
+2. `hermes-seo-agent audit --json --limit N` — deterministic checks driven by
+   an **incremental per-URL queue** (SEO-INC): the run syncs cheap state
+   (WordPress `modified` + sitemap `lastmod`) against `url_audit_state` and
+   consumes up to `N` URLs that actually NEED auditing — `dirty` (changed/new/
+   missing) > never-audited > failed-retry > stale. `--limit 500` therefore
+   means "up to 500 URLs that need work", NOT "the next 500 sitemap positions".
+   The JSON carries `inventory` (the delta) and `coverage`
+   (known/never_audited/dirty/stale/failed/fresh). Findings carry
+   `rule_id`/`severity`/`detail`; a non-2xx page yields ONLY its root cause
+   (a 404 no longer spawns title/meta/canonical findings). Failed URLs come
+   back with backoff (1h/6h/24h/3d).
 3. `hermes-seo-agent report` — persists a cycle snapshot (SQLite) and prints a
    Markdown report.
 4. `hermes-seo-agent inspect --dry-run` — builds the URL Inspection queue
