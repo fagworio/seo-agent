@@ -60,6 +60,11 @@ class Config:
     corpus_lease_seconds: int = 3600         # TTL do lease de URL no corpus rebuild
     # TTL do full audit: força auditar mesmo sem mudança detectada no fingerprint.
     audit_full_ttl_seconds: int = 24 * 3600  # default 24h (antes: fixo 7 dias)
+
+    # SEO-INC-011: teto do rodizio de paginas SAUDAVEIS por ciclo (coverage
+    # sweep). Reserva no maximo N vagas do lote para as URLs stale, garantindo
+    # que o incremental (dirty/nova/falha) nunca fique atras do rodizio.
+    coverage_sweep_per_run: int = 100
     # SSRF: resolver DNS dos hosts e rejeitar IP interno. Off por default (o
     # ambiente de CI/testes pode não ter DNS); ligue SSRF_RESOLVE_DNS=1 em prod.
     ssrf_resolve_dns: bool = False
@@ -255,6 +260,7 @@ def load_config() -> Config:
         http_timeout=_float("HTTP_TIMEOUT", 15.0, 1.0, 120.0),
         max_redirect_hops=_int("MAX_REDIRECT_HOPS", 5, 1, 20),
         max_urls_per_run=_int("MAX_URLS_PER_RUN", 500, 1, 100_000),
+        coverage_sweep_per_run=_int("COVERAGE_SWEEP_PER_RUN", 100, 0, 100_000),
         max_safe_fix_per_cycle=_int("MAX_SAFE_FIX_PER_CYCLE", 10, 0, 1000),
         sqlite_path=_env("SQLITE_PATH", "./state/seo_agent.db"),
         session_idle_seconds=_int("SESSION_IDLE_SECONDS", 8 * 3600, 60, 30 * 24 * 3600),

@@ -135,3 +135,28 @@ def test_posts_cache_rebusca_quando_sinal_muda(tmp_path):
     ctx._posts = None
     RunContext.posts(ctx)
     assert chamadas["lista"] == 2, "sinal mudou -> deve rebuscar"
+
+
+def test_sweep_respeita_o_teto_por_ciclo(tmp_path):
+    """SEO-INC-011: o rodizio de paginas saas nao atropela o incremental."""
+    import datetime as dt
+
+    with _storage(tmp_path) as s:
+        atras = (dt.datetime.now(dt.timezone.utc)
+                 - dt.timedelta(days=10)).isoformat()
+        for i in range(3):  # paginas saas vencidas (P3/P4)
+            url = f"https://www.u.com/saudavel-{i}/"
+            s.upsert_url_audit_state(url=url, dirty=False)
+            s.conn.execute(
+                "UPDATE url_audit_state SET last_audited_at = ?, next_audit_at = ? "
+                "WHERE url = ?", (atras, atras, url))
+        s.upsert_url_audit_state(url="https://www.u.com/nova/", dirty=True,
+                                 dirty_reason="new_url")  # expresso (P0)
+        s.conn.commit()
+        fila = s.get_urls_for_audit(limit=10, sweep_limit=1)
+        duros = [c for c in fila if c["dirty_reason"] or not c["last_audited_at"]]
+        saas = [c for c in fila if not c["dirty_reason"] and c["last_audited_at"]]
+        assert len(duros) == 1, "o expresso sempre entra"
+        assert len(saas) == 1, "o rodizio respeita o teto do ciclo"
+        # sweep_limit=0 -> nenhum rodizio, so o expresso
+        assert len(s.get_urls_for_audit(limit=10, sweep_limit=0)) == 1

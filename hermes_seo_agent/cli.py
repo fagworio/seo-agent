@@ -665,7 +665,9 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         inventory_delta = sync_audit_inventory(
             state_storage, posts, sitemap_entries,
             static_host=_static_host(config))
-        candidatos = state_storage.get_urls_for_audit(limit=limit)
+        candidatos = state_storage.get_urls_for_audit(
+            limit=limit,
+            sweep_limit=getattr(config, "coverage_sweep_per_run", 100))
         coverage_before = state_storage.audit_coverage()
     sample = [c["url"] for c in candidatos]
     findings: list[dict[str, Any]] = []
@@ -801,6 +803,13 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     plan = build_action_plan(findings, max_safe_fix=config.max_safe_fix_per_cycle)
     summary = {"command": "audit", "cycle_id": cycle_id, **report.summary(),
                "audited_urls": len(sample), "findings": len(findings),
+               # SEO-INC-011: transparência do lote — quanto veio do trilho
+               # expresso (dirty/nova/falha/nunca auditada) e quanto do rodízio
+               # de páginas sãs.
+               "incremental": sum(1 for c in candidatos if c.get("dirty_reason")
+                                  or not c.get("last_audited_at")),
+               "sweep": sum(1 for c in candidatos if not c.get("dirty_reason")
+                            and c.get("last_audited_at")),
                # SEO-INC-008: cobertura real do acervo — "500 auditadas" sozinho
                # nao diz se o agente conhece o site (nem o que falta cobrir).
                "inventory": inventory_delta,

@@ -3240,8 +3240,13 @@ class Storage:
         if commit:
             self.conn.commit()
 
-    def get_urls_for_audit(self, *, limit=500):
-        """Fila priorizada: dirty > nunca auditada > falha > stale.
+    def get_urls_for_audit(self, *, limit=500, sweep_limit=None):
+        """Fila de auditoria em dois trilhos (SEO-INC-004/011).
+
+        Expresso (P0-P2): dirty/nova/nunca auditada/falha — sempre tem
+        precedencia e pode consumir o lote inteiro. Rodizio (P3-P4): paginas
+        saudaveis vencidas (stale), limitado a `sweep_limit` vagas por ciclo,
+        para o sweep nunca atropelar o incremental.
 
         Substitui o cursor do sitemap: --limit passa a significar "processe
         ate N URLs que PRECISAM de auditoria".
@@ -3249,24 +3254,38 @@ class Storage:
         import datetime as _dt
 
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
-        rows = self.conn.execute(
-            "SELECT url, wp_post_id, dirty_reason, failure_count, last_audited_at "
-            "FROM url_audit_state "
-            "WHERE dirty = 1 OR last_audited_at IS NULL "
-            "   OR (next_audit_at IS NOT NULL AND next_audit_at <= ?) "
-            "ORDER BY CASE dirty_reason "
-            "  WHEN 'new_url' THEN 1 WHEN 'wordpress_modified' THEN 2 "
-            "  WHEN 'sitemap_modified' THEN 3 WHEN 'missing_from_sitemap' THEN 4 "
-            "  WHEN 'previous_failure' THEN 5 ELSE 10 END, "
-            "  CASE WHEN last_audited_at IS NULL THEN 0 ELSE 1 END, "
-            "  last_audited_at ASC LIMIT ?",
-            (now, limit),
-        ).fetchall()
-        return [
-            {"url": r[0], "wp_post_id": r[1], "dirty_reason": r[2] or "",
-             "failure_count": int(r[3] or 0), "last_audited_at": r[4] or ""}
-            for r in rows
-        ]
+        _cols = "url, wp_post_id, dirty_reason, failure_count, last_audited_at"
+        _order = ("ORDER BY CASE dirty_reason "
+                  "  WHEN 'new_url' THEN 1 WHEN 'wordpress_modified' THEN 2 "
+                  "  WHEN 'sitemap_modified' THEN 3 "
+                  "  WHEN 'missing_from_sitemap' THEN 4 "
+                  "  WHEN 'previous_failure' THEN 5 ELSE 10 END, "
+                  "  CASE WHEN last_audited_at IS NULL THEN 0 ELSE 1 END, "
+                  "  last_audited_at ASC")
+
+        def _rows(where: str, params: tuple, n: int) -> list[dict[str, Any]]:
+            res = self.conn.execute(
+                f"SELECT {_cols} FROM url_audit_state WHERE {where} {_order} LIMIT ?",
+                (*params, n)).fetchall()
+            return [{"url": r[0], "wp_post_id": r[1], "dirty_reason": r[2] or "",
+                     "failure_count": int(r[3] or 0), "last_audited_at": r[4] or ""}
+                    for r in res]
+
+        # Trilho expresso (P0-P2): dirty / nova / nunca auditada / falha.
+        expresso = _rows("dirty = 1 OR last_audited_at IS NULL", (), limit)
+        vagas = limit - len(expresso)
+        if vagas <= 0:
+            return expresso
+        # Trilho de rodizio (P3-P4): paginas saas vencidas, no maximo
+        # `sweep_limit` por ciclo — o sweep nunca atropela o incremental.
+        teto = vagas if sweep_limit is None else min(vagas, max(0, int(sweep_limit)))
+        if teto <= 0:
+            return expresso
+        rodizio = _rows(
+            "dirty = 0 AND last_audited_at IS NOT NULL "
+            "AND next_audit_at IS NOT NULL AND next_audit_at <= ?",
+            (now,), teto)
+        return expresso + rodizio
 
     def mark_url_audited(self, *, url, status_code, content_hash="",
                          revalidate_days=7):

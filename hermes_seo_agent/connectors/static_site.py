@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import gzip
 import hashlib
+import json
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -177,22 +178,72 @@ class StaticSiteClient:
         return _parse_sitemap_urls(response.text, is_index=False)
 
     def all_sitemap_entries(self, sitemap_url: str | None = None) -> list[tuple[str, str]]:
-        """Resolve the sitemap tree into (url, lastmod) entries.
+        """Resolve o sitemap em (url, lastmod) entries.
 
-        `lastmod` ("" quando ausente) é o sinal de mudança de CONTEÚDO do sitemap:
-        permite ao audit incremental detectar alterações em URLs que continuam
-        presentes na lista (a lista de URLs sozinha não captura isso).
+        `lastmod` ("" quando ausente) é o sinal de mudança de CONTEÚDO do
+        sitemap: permite ao audit incremental detectar alterações em URLs que
+        continuam presentes na lista (a lista sozinha não captura isso).
+
+        SEO-INC-010: as entries parseadas (~19k) ficam em cache no estado,
+        validadas pelo ETag/Last-Modified do ÍNDICE do sitemap. Quando nada foi
+        publicado/removido, o ciclo não baixa os sub-sitemaps nem reparseia a
+        árvore — só o índice (um request condicional 304).
         """
+        index_url = sitemap_url or self.config.sitemap_url
+        store = self._get_store()
+        cache_key = f"sitemap:entries:{index_url}"
+
+        etag = ""
+        index_body = ""
+        try:
+            head = self._cached_get(index_url, cache_body=True)
+            etag = str(head.headers.get("ETag")
+                       or head.headers.get("Last-Modified") or "")
+            if head.status_code == 200:
+                index_body = head.text
+        except Exception:  # noqa: BLE001 — cache é best-effort
+            etag = ""
+
+        if etag:
+            try:
+                raw = store.get_setting(cache_key, "")
+            except Exception:  # noqa: BLE001
+                raw = ""
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    payload = None
+                if isinstance(payload, dict) and payload.get("etag") == etag:
+                    return [(str(a), str(b))
+                            for a, b in (payload.get("entries") or [])]
+
+        if not index_body:
+            index_body = self.fetch_and_read_index(index_url)
         entries: list[tuple[str, str]] = []
         seen: set[str] = set()
-        index_url = sitemap_url or self.config.sitemap_url
-        for child in self.fetch_sitemap_index(index_url):
+        for child in _parse_sitemap_urls(index_body, is_index=True):
             resolved = urljoin(index_url, child)
             for loc, lastmod in self._fetch_sitemap_entries(resolved):
                 if loc not in seen:
                     seen.add(loc)
                     entries.append((loc, lastmod))
+
+        if etag:
+            try:
+                store.set_setting(cache_key, json.dumps(
+                    {"etag": etag, "entries": entries}, ensure_ascii=False))
+            except Exception:  # noqa: BLE001
+                pass
         return entries
+
+    def fetch_and_read_index(self, index_url: str) -> str:
+        """Corpo do índice do sitemap (usado quando o cache de entries falha)."""
+        try:
+            response = self._cached_get(index_url, cache_body=True)
+            return response.text if response.status_code == 200 else ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _fetch_sitemap_entries(self, url: str) -> list[tuple[str, str]]:
         response = self._cached_get(url, cache_body=True)
