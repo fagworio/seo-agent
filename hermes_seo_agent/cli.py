@@ -654,13 +654,20 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     robots = static.fetch_robots()
     blocked = robots_check.sitemap_urls_blocked(robots, sitemap_urls)
 
-    # Bounded deterministic audit of the sitemap sample.
-    sample_start = 0
-    if sitemap_urls and len(sitemap_urls) > limit:
-        with Storage(config.sqlite_path) as cursor_storage:
-            sample_start = int(cursor_storage.get_setting("audit:sitemap_cursor", "0") or 0) % len(sitemap_urls)
-            cursor_storage.set_setting("audit:sitemap_cursor", str((sample_start + limit) % len(sitemap_urls)))
-    sample = (sitemap_urls[sample_start:] + sitemap_urls[:sample_start])[:limit]
+    # SEO-INC-003/004: inventario incremental + fila priorizada de URLs.
+    # O audit nao anda mais um cursor cego sobre o sitemap (que revisitava
+    # paginas saudaveis e podia nunca tocar a URL que mudou): sincroniza o
+    # estado barato (WP modified + sitemap lastmod) e processa ate `limit`
+    # URLs que REALMENTE precisam de auditoria (dirty > nova > falha > stale).
+    from .services.audit_inventory import sync_audit_inventory
+
+    with Storage(config.sqlite_path) as state_storage:
+        inventory_delta = sync_audit_inventory(
+            state_storage, posts, sitemap_entries,
+            static_host=_static_host(config))
+        candidatos = state_storage.get_urls_for_audit(limit=limit)
+        coverage_before = state_storage.audit_coverage()
+    sample = [c["url"] for c in candidatos]
     findings: list[dict[str, Any]] = []
     # Fetch tolerante por URL: uma página que falhe (SSRF bloqueado, limite de
     # tamanho, rede) não pode abortar o audit inteiro — entra como "não buscada".
@@ -683,6 +690,7 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
     # Segue a cadeia de redirect SOMENTE quando a página responde 3xx (200/404 =
     # 1 request; 3xx = requests extras apenas nesse caso) — sem perda da regra.
     page_by_url = {p.url: p for p in pages}
+    audit_results: list[tuple[str, int, str]] = []
     for url in sample:
         page = page_by_url.get(url)
         status = page.status_code if page else 0
@@ -713,47 +721,47 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
             findings.append({"rule_id": "redirect_chain", "url": url,
                              "severity": "medium",
                              "detail": f"{state['redirect_hops']} hops -> {state['final_url']}"})
+        audit_results.append((url, int(state.get("status_code") or 0),
+                              (getattr(page, "content_hash", "") or "") if page else ""))
 
-    # wp_static_mismatch: published post whose expected static URL is not
-    # rendered (bounded sample, deterministic GET).
-    for post in posts[:limit]:
-        expected = wp_link_to_static(post.get("link", ""), _static_host(config))
-        page = page_by_url.get(expected)
-        if page is None:
-            try:
-                page = static.fetch_page(expected)
-                page_by_url[expected] = page
-            except Exception:
-                page = None
-        status = page.status_code if page else 0
-        state = {"status_code": status, "final_url": page.url if page else expected,
-                 "redirect_hops": 0, "redirect_loop": False,
-                 "error": "page not fetched" if page is None else ""}
-        if status in {301, 302, 303, 307, 308}:
-            try:
-                info = check_http(static.http, expected, validate_url=static.validate_url)
-                state = {"status_code": info.get("status_code", 0),
-                         "final_url": info.get("final_url", expected),
-                         "redirect_hops": info.get("redirect_hops", 0),
-                         "redirect_loop": info.get("redirect_loop", False),
-                         "error": info.get("error", "")}
-            except Exception as exc:  # noqa: BLE001
-                state["error"] = str(exc)
-        if state.get("redirect_loop"):
-            findings.append({"rule_id": "redirect_loop", "url": expected,
-                             "severity": "critical", "detail": "loop on expected static URL"})
-        elif state["status_code"] == 0 or state["status_code"] >= 400:
+    # SEO-INC-005: fecha o loop do incremental — sucesso limpa o dirty e agenda
+    # a revalidacao; falha volta para a fila com backoff (nunca martela a URL).
+    with Storage(config.sqlite_path) as result_storage:
+        for url, status_code, content_hash in audit_results:
+            if 200 <= status_code < 300:
+                result_storage.mark_url_audited(
+                    url=url, status_code=status_code, content_hash=content_hash)
+            elif status_code == 0 or status_code >= 400:
+                result_storage.mark_url_audit_failed(url=url, status_code=status_code)
+        coverage_after = result_storage.audit_coverage()
+
+    # SEO-INC-006: o mismatch WP->estatico segue o MESMO conjunto auditado
+    # (candidatos com wp_post_id), nunca `posts[:limit]` — que revisitava sempre
+    # os primeiros 500 posts e ignorava o resto do acervo. O 404 ja e a causa
+    # raiz: aqui apenas o mapeamos para o post de origem.
+    _link_por_id = {p.get("id"): str(p.get("link") or "") for p in posts}
+    _cand_por_url = {c["url"]: c for c in candidatos}
+    for _url, _status, _hash in audit_results:
+        _cand = _cand_por_url.get(_url) or {}
+        _pid = _cand.get("wp_post_id")
+        if not _pid:
+            continue
+        if _status == 0 or _status >= 400:
             findings.append(
                 {
                     "rule_id": "wp_static_mismatch",
-                    "url": post.get("link", ""),
+                    "url": _link_por_id.get(_pid) or _url,
                     "severity": "high",
-                    "detail": f"expected static URL {expected} -> HTTP {state['status_code']}"
-                              f" ({state.get('error', 'not rendered')})",
+                    "detail": f"expected static URL {_url} -> HTTP {_status}",
                 }
             )
 
-    for page in pages:
+    # SEO-INC-001: erro HTTP e CAUSA RAIZ. Auditar SEO on-page de uma pagina
+    # inexistente gerava findings derivados em cascata (um 404 produzia
+    # title_missing + meta_missing + canonical_missing). O root cause ja foi
+    # registrado no passe de HTTP acima (broken_internal_link / wp_static_mismatch).
+    auditavel = [p for p in pages if 200 <= p.status_code < 300]
+    for page in auditavel:
         expected = _expected_canonical(page.url, config)
         findings.extend(
             _finding(f, page.url) for f in meta_check.meta_findings(page)
@@ -761,7 +769,7 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         findings.extend(
             _finding(f, page.url) for f in meta_check.canonical_findings(page, expected_canonical=expected)
         )
-    for f in meta_check.duplicate_title_findings(pages):
+    for f in meta_check.duplicate_title_findings(auditavel):
         rule = get_rule("title_duplicate")
         findings.append(
             {
@@ -792,7 +800,11 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
 
     plan = build_action_plan(findings, max_safe_fix=config.max_safe_fix_per_cycle)
     summary = {"command": "audit", "cycle_id": cycle_id, **report.summary(),
-               "audited_urls": len(sample), "findings": len(findings)}
+               "audited_urls": len(sample), "findings": len(findings),
+               # SEO-INC-008: cobertura real do acervo — "500 auditadas" sozinho
+               # nao diz se o agente conhece o site (nem o que falta cobrir).
+               "inventory": inventory_delta,
+               "coverage": coverage_after}
 
     result = {
         "status": "ok",

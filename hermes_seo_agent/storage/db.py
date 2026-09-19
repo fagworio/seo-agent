@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -606,6 +606,30 @@ CREATE TABLE IF NOT EXISTS work_item_lifecycle (
     updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lifecycle_status ON work_item_lifecycle(canonical_status);
+
+-- SEO-INC-002: estado de auditoria POR URL (incremental de verdade).
+-- Substitui o seletor por cursor do sitemap: cada URL tem estado leve
+-- (modified/lastmod/hash/audit) e o audit consome uma FILA (dirty/new/failed/
+-- stale) em vez de "as proximas 500 posicoes".
+CREATE TABLE IF NOT EXISTS url_audit_state (
+    url TEXT PRIMARY KEY,
+    wp_post_id INTEGER,
+    wp_modified TEXT,
+    sitemap_lastmod TEXT,
+    last_audited_at TEXT,
+    last_success_at TEXT,
+    last_status_code INTEGER,
+    content_hash TEXT,
+    audit_version INTEGER DEFAULT 1,
+    dirty INTEGER NOT NULL DEFAULT 1,
+    dirty_reason TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    next_audit_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_url_audit_dirty ON url_audit_state(dirty, next_audit_at);
+CREATE INDEX IF NOT EXISTS idx_url_audit_last_audited ON url_audit_state(last_audited_at);
 """
 
 
@@ -685,6 +709,7 @@ class Storage:
             ],
             "improvement_checklist": [
                 ("responsible", "TEXT"), ("deadline", "TEXT"),
+                ("resolution_json", "TEXT"),
                 ("rejection_reason", "TEXT"), ("intervention_type", "TEXT"),
                 ("implemented_at", "TEXT"), ("baseline_json", "TEXT"),
                 ("hypothesis_key", "TEXT"), ("evidence_fingerprint", "TEXT"),
@@ -3041,7 +3066,8 @@ class Storage:
                              baseline: dict[str, Any] | None = None,
                              measurement_unavailable: bool | None = None) -> bool:
         import json as _json
-        valid = {"done", "rejected", "snoozed", "superseded", "expired", "pending"}
+        valid = {"done", "rejected", "snoozed", "superseded", "expired", "pending",
+                 "resolved_no_action"}
         if status not in valid:
             return False
         set_parts = ["status = ?"]
@@ -3133,6 +3159,32 @@ class Storage:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def resolve_checklist_no_action(self, checklist_id, *, reason="", evidence=None,
+                                    next_review_days=28):
+        """SEO-INC-007: estado terminal "investigado, nenhuma acao necessaria".
+
+        Sem isto o item volta a cada ciclo e o agente redescobre a mesma coisa
+        para sempre (os 15 title_regression ficavam pending eternamente). O
+        ``deadline`` agenda a revisita; a evidencia fica registrada.
+        """
+        import datetime as _dt
+        import json as _json
+
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        now = now_dt.isoformat()
+        next_review = (now_dt + _dt.timedelta(days=next_review_days)).isoformat()
+        cur = self.conn.execute(
+            "UPDATE improvement_checklist SET status = 'resolved_no_action', "
+            "rejection_reason = ?, resolution_json = ?, deadline = ?, done_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (reason or "nenhuma acao necessaria",
+             _json.dumps(evidence or {}, ensure_ascii=False), next_review, now,
+             checklist_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+
     def mark_checklist_done(self, checklist_id: int) -> bool:
         cur = self.conn.execute(
             "UPDATE improvement_checklist SET status = 'done', done_at = ? WHERE id = ? AND status = 'pending'",
@@ -3140,6 +3192,150 @@ class Storage:
         )
         self.conn.commit()
         return cur.rowcount > 0
+
+
+    # -- SEO-INC: estado de auditoria por URL (fila incremental) --------------
+
+    def get_url_audit_state(self, url):
+        """Estado leve de uma URL (None = nunca vista pelo auditor)."""
+        row = self.conn.execute(
+            "SELECT url, wp_post_id, wp_modified, sitemap_lastmod, last_audited_at, "
+            "last_success_at, last_status_code, content_hash, dirty, dirty_reason, "
+            "failure_count, next_audit_at FROM url_audit_state WHERE url = ?",
+            (url,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "url": row[0], "wp_post_id": row[1], "wp_modified": row[2] or "",
+            "sitemap_lastmod": row[3] or "", "last_audited_at": row[4] or "",
+            "last_success_at": row[5] or "", "last_status_code": row[6],
+            "content_hash": row[7] or "", "dirty": bool(row[8]),
+            "dirty_reason": row[9] or "", "failure_count": int(row[10] or 0),
+            "next_audit_at": row[11] or "",
+        }
+
+    def upsert_url_audit_state(self, *, url, wp_post_id=None, wp_modified="",
+                               sitemap_lastmod="", dirty=True, dirty_reason="",
+                               commit=True):
+        """Atualiza o estado leve preservando o historico de auditoria.
+
+        dirty so sobe (nunca e limpo aqui): quem limpa e mark_url_audited.
+        """
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        self.conn.execute(
+            "INSERT INTO url_audit_state (url, wp_post_id, wp_modified, sitemap_lastmod, "
+            "dirty, dirty_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET wp_post_id = excluded.wp_post_id, "
+            "wp_modified = excluded.wp_modified, "
+            "sitemap_lastmod = excluded.sitemap_lastmod, "
+            "dirty = CASE WHEN excluded.dirty = 1 THEN 1 ELSE url_audit_state.dirty END, "
+            "dirty_reason = CASE WHEN excluded.dirty = 1 THEN excluded.dirty_reason "
+            "ELSE url_audit_state.dirty_reason END, updated_at = excluded.updated_at",
+            (url, wp_post_id, wp_modified, sitemap_lastmod,
+             1 if dirty else 0, dirty_reason, now, now),
+        )
+        if commit:
+            self.conn.commit()
+
+    def get_urls_for_audit(self, *, limit=500):
+        """Fila priorizada: dirty > nunca auditada > falha > stale.
+
+        Substitui o cursor do sitemap: --limit passa a significar "processe
+        ate N URLs que PRECISAM de auditoria".
+        """
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        rows = self.conn.execute(
+            "SELECT url, wp_post_id, dirty_reason, failure_count, last_audited_at "
+            "FROM url_audit_state "
+            "WHERE dirty = 1 OR last_audited_at IS NULL "
+            "   OR (next_audit_at IS NOT NULL AND next_audit_at <= ?) "
+            "ORDER BY CASE dirty_reason "
+            "  WHEN 'new_url' THEN 1 WHEN 'wordpress_modified' THEN 2 "
+            "  WHEN 'sitemap_modified' THEN 3 WHEN 'missing_from_sitemap' THEN 4 "
+            "  WHEN 'previous_failure' THEN 5 ELSE 10 END, "
+            "  CASE WHEN last_audited_at IS NULL THEN 0 ELSE 1 END, "
+            "  last_audited_at ASC LIMIT ?",
+            (now, limit),
+        ).fetchall()
+        return [
+            {"url": r[0], "wp_post_id": r[1], "dirty_reason": r[2] or "",
+             "failure_count": int(r[3] or 0), "last_audited_at": r[4] or ""}
+            for r in rows
+        ]
+
+    def mark_url_audited(self, *, url, status_code, content_hash="",
+                         revalidate_days=7):
+        """Sucesso: limpa o dirty e agenda a revalidacao periodica (stale)."""
+        import datetime as _dt
+
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        now = now_dt.isoformat()
+        nxt = (now_dt + _dt.timedelta(days=revalidate_days)).isoformat()
+        self.conn.execute(
+            "UPDATE url_audit_state SET dirty = 0, dirty_reason = NULL, "
+            "last_audited_at = ?, last_success_at = ?, last_status_code = ?, "
+            "content_hash = ?, failure_count = 0, next_audit_at = ?, updated_at = ? "
+            "WHERE url = ?",
+            (now, now, status_code, content_hash, nxt, now, url),
+        )
+        self.conn.commit()
+
+    def mark_url_audit_failed(self, *, url, status_code=0, error=""):
+        """Falha: mantem dirty com backoff (1h -> 6h -> 24h -> 3d)."""
+        import datetime as _dt
+
+        row = self.conn.execute(
+            "SELECT failure_count FROM url_audit_state WHERE url = ?", (url,)
+        ).fetchone()
+        n = int((row[0] if row else 0) or 0) + 1
+        delay_h = {1: 1, 2: 6, 3: 24}.get(n, 72)
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        now = now_dt.isoformat()
+        nxt = (now_dt + _dt.timedelta(hours=delay_h)).isoformat()
+        if row:
+            self.conn.execute(
+                "UPDATE url_audit_state SET dirty = 1, dirty_reason = 'previous_failure', "
+                "failure_count = ?, last_status_code = ?, last_audited_at = ?, "
+                "next_audit_at = ?, updated_at = ? WHERE url = ?",
+                (n, status_code, now, nxt, now, url),
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO url_audit_state (url, dirty, dirty_reason, failure_count, "
+                "last_status_code, last_audited_at, next_audit_at, created_at, updated_at) "
+                "VALUES (?, 1, 'previous_failure', ?, ?, ?, ?, ?, ?)",
+                (url, n, status_code, now, nxt, now, now),
+            )
+        self.conn.commit()
+
+    def audit_coverage(self):
+        """Cobertura real do acervo (SEO-INC-008): known/never/dirty/stale/fresh."""
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        row = self.conn.execute(
+            "SELECT COUNT(*), "
+            "SUM(CASE WHEN last_audited_at IS NULL THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN dirty = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN last_audited_at IS NOT NULL AND (next_audit_at IS NULL "
+            "         OR next_audit_at <= ?) THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN failure_count > 0 THEN 1 ELSE 0 END) "
+            "FROM url_audit_state",
+            (now,),
+        ).fetchone()
+        total = int(row[0] or 0)
+        never = int(row[1] or 0)
+        dirty = int(row[2] or 0)
+        stale = int(row[3] or 0)
+        failed = int(row[4] or 0)
+        return {"known": total, "never_audited": never, "dirty": dirty,
+                "stale": stale, "failed": failed,
+                "fresh": max(0, total - never - stale)}
 
     def close(self) -> None:
         self.conn.close()

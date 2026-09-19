@@ -834,6 +834,9 @@ class ControlPlaneService:
             # receives a compact product summary instead of rebuilding SEO logic.
             "change_summary": self._change_summary(),
             "title_funnel": self._title_funnel(),
+            # SEO-INC-008: cobertura real do acervo (o dashboard precisa dizer
+            # se o agente conhece o site inteiro — never_audited/dirty/stale).
+            "audit_coverage": self._audit_coverage(),
             "observed_impact": self._observed_impact(),
             "measurement_summary": self._measurement_summary(all_revalidations),
             "next_executions": self._next_executions(),
@@ -1123,6 +1126,15 @@ class ControlPlaneService:
         if previous:
             summary["previous_period_delta"] = len(current) - previous
         return summary
+
+    def _audit_coverage(self) -> dict[str, Any]:
+        """Cobertura de auditoria por URL (SEO-INC-008)."""
+        try:
+            return self.storage.audit_coverage()
+        except Exception:
+            return {"known": 0, "never_audited": 0, "dirty": 0, "stale": 0,
+                    "failed": 0, "fresh": 0}
+
 
     def _title_funnel(self) -> dict[str, Any]:
         result = {"opportunities": 0, "approved": 0, "changed": 0,

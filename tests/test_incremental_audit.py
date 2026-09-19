@@ -1,0 +1,82 @@
+"""SEO-INC: auditoria incremental por URL (fila, backoff, cobertura, lifecycle).
+
+Cobre as mudancas SEO-INC-002/003/005/007: o audit deixa de andar um cursor
+cego sobre o sitemap e passa a consumir uma fila por URL, alimentada por um
+inventario que compara o estado barato (WP modified + sitemap lastmod).
+"""
+from hermes_seo_agent.services.audit_inventory import sync_audit_inventory
+from hermes_seo_agent.storage.db import Storage
+
+
+def _storage(tmp_path, name="inc.db"):
+    return Storage(str(tmp_path / name))
+
+
+def test_fila_incremental_por_url(tmp_path):
+    """Auditado sai da fila; nunca auditado entra; falha volta com backoff."""
+    with _storage(tmp_path) as s:
+        s.upsert_url_audit_state(url="https://x.com/nova/", dirty=True,
+                                 dirty_reason="new_url")
+        fila = s.get_urls_for_audit(limit=10)
+        assert [f["url"] for f in fila] == ["https://x.com/nova/"]
+
+        s.mark_url_audited(url="https://x.com/nova/", status_code=200,
+                           content_hash="h")
+        assert s.get_urls_for_audit(limit=10) == []
+        cov = s.audit_coverage()
+        assert cov["known"] == 1 and cov["never_audited"] == 0 and cov["stale"] == 0
+
+        s.mark_url_audit_failed(url="https://x.com/quebrada/", status_code=404)
+        s.mark_url_audit_failed(url="https://x.com/quebrada/", status_code=404)
+        fila = s.get_urls_for_audit(limit=10)
+        assert fila[0]["dirty_reason"] == "previous_failure"
+        assert fila[0]["failure_count"] == 2
+        assert s.audit_coverage()["failed"] == 1
+
+
+def test_inventory_detecta_apenas_o_que_mudou(tmp_path):
+    """WP modified / sitemap lastmod: so o delta vira dirty (nao o acervo)."""
+    posts = [
+        {"id": 1, "link": "https://prod.x.com/a/", "modified": "2026-09-01T10:00"},
+        {"id": 2, "link": "https://prod.x.com/b/", "modified": "2026-09-01T10:00"},
+    ]
+    sm = [("https://www.x.com/a/", "2026-09-01"), ("https://www.x.com/b/", "2026-09-01")]
+    with _storage(tmp_path, "inv.db") as s:
+        d1 = sync_audit_inventory(s, posts, sm, static_host="www.x.com")
+        assert d1["new_url"] == 2, "primeira varredura: tudo novo"
+
+        # nada mudou -> nada dirty (sem reprocessar o acervo)
+        d2 = sync_audit_inventory(s, posts, sm, static_host="www.x.com")
+        assert d2["unchanged"] == 2 and d2["new_url"] == 0
+
+        # 1 post modificado + 1 fora do sitemap
+        posts2 = [
+            {"id": 1, "link": "https://prod.x.com/a/", "modified": "2026-09-18T09:00"},
+            {"id": 2, "link": "https://prod.x.com/b/", "modified": "2026-09-01T10:00"},
+        ]
+        d3 = sync_audit_inventory(s, posts2, [sm[0]], static_host="www.x.com")
+        assert d3["wordpress_modified"] == 1
+        assert d3["missing_from_sitemap"] == 1
+        fila = {f["url"] for f in s.get_urls_for_audit(limit=10)}
+        assert "https://www.x.com/a/" in fila and "https://www.x.com/b/" in fila
+
+
+def test_resolve_no_action_encerra_o_item(tmp_path):
+    """SEO-INC-007: item triado sem acao vira estado terminal (nao fica pending)."""
+    with _storage(tmp_path, "life.db") as s:
+        s.save_checklist_item(url="https://x.com/a/", item="title_regression",
+                              reason="medicao 7d: worsened", action="retriar",
+                              gain_clicks=0)
+        cid = s.conn.execute("SELECT id FROM improvement_checklist").fetchone()[0]
+        assert s.resolve_checklist_no_action(
+            cid, reason="query_already_present",
+            evidence={"impressions": 162, "position": 4.85}, next_review_days=28)
+        row = s.conn.execute(
+            "SELECT status, rejection_reason, resolution_json, deadline "
+            "FROM improvement_checklist WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "resolved_no_action"
+        assert row[1] == "query_already_present"
+        assert "162" in (row[2] or "")
+        assert row[3], "next_review agendado"
+        # resolver de novo nao reabre (idempotente por status)
+        assert s.resolve_checklist_no_action(cid, reason="x") is False
