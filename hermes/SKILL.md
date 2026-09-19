@@ -64,6 +64,18 @@ browser tool. The CLI does the mechanics; you interpret and report.
    (dirty/nova/falha/nunca auditada, precedência total) e **rodízio** de
    páginas sãs vencidas, limitado a `COVERAGE_SWEEP_PER_RUN` (default 100) por
    ciclo. O summary mostra `incremental` vs `sweep`.
+4d. Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
+   `measurement` (veredito multiaxial — `regressed`, `visibility_up`,
+   `traffic_up`, `engagement_up`, `no_change`, `mixed`, `insufficient_data`),
+   `diagnosis` (códigos `ctr_zero_sitewide`, `ctr_below_baseline`,
+   `query_title_aligned|gap`, `visibility_loss`, `traffic_loss`,
+   `ranking_loss`; `cause` sempre `undetermined`: a API do GSC não expõe
+   recorte de IA) e `decision` (`review_title`, `no_title_change`,
+   `investigate_cause`, `monitor_28d`, `keep`). **Nunca** reescreva título por
+   `verdict == regressed` — só quando a DECISÃO mandar. `baseline --json`
+   devolve os percentis de CTR do PRÓPRIO site por contexto (faixa de posição
+   × impressões): anomalia é julgada contra o próprio segmento, nunca contra
+   benchmark externo.
 5. `hermes-seo-agent opportunities` — low-CTR/zero-click (GSC) + Core Web
    Vitals (CrUX). Needs API keys; without them it emits warnings, not findings.
 6. `hermes-seo-agent apply actions.json` — executes `safe_fix` from an intent
