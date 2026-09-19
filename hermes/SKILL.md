@@ -87,6 +87,12 @@ browser tool. The CLI does the mechanics; you interpret and report.
    pós-clique saudável (GA4); faltando elo, cai em `investigate_cause`,
    `gather_more_data` ou `no_title_change`, sempre com `evidence` citável e
    `confidence`. GA4/Trends **priorizam**, nunca criam a necessidade.
+   Regras de rigor (SEO-INC-019b): só `below_p10`/`below_comparable` autorizam
+   `review_title` (o `low`, entre P10 e P25, vira `investigate_cause`); a
+   demanda da query vem de `decision["gsc"]["impressions"]` — a MESMA query
+   escolhida, nunca `queries[0]` (ordenação diferente cruzava a evidência);
+   `position=None` **não** é acionável; GA4 ausente é ausência de evidência (não
+   bloqueia, mas a confiança nunca é `high`).
 4f. Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
    `measurement` (veredito multiaxial — `regressed`, `visibility_up`,
    `traffic_up`, `engagement_up`, `no_change`, `mixed`, `insufficient_data`),
