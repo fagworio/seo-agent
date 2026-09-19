@@ -108,6 +108,21 @@ class SearchConsoleClient:
         """Rows with BOTH dimensions: {keys:[query, page], impressions, clicks, ...}"""
         return self._sa_query(["query", "page"], start_date, end_date, row_limit)
 
+    def search_analytics_page_device(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        row_limit: int = 50_000,
+    ) -> list[dict[str, Any]]:
+        """SEO-INC-014: página × dispositivo (MOBILE/DESKTOP/TABLET).
+
+        Uma requisição traz o corte por device sem multiplicar a coleta de
+        query×página — é o que permite julgar CTR mobile contra o próprio
+        segmento mobile em vez de uma média que esconde o problema.
+        """
+        return self._sa_query(["page", "device"], start_date, end_date, row_limit)
+
     def top_queries(
         self,
         page_url: str,

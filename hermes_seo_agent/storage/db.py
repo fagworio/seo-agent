@@ -607,6 +607,23 @@ CREATE TABLE IF NOT EXISTS work_item_lifecycle (
 );
 CREATE INDEX IF NOT EXISTS idx_lifecycle_status ON work_item_lifecycle(canonical_status);
 
+-- SEO-INC-014: CTR por pagina x DISPOSITIVO (mobile/desktop/tablet). Uma
+-- requisicao ao GSC (dimensoes page+device) — permite julgar o CTR mobile
+-- contra o proprio segmento mobile em vez de uma media que esconde o problema.
+CREATE TABLE IF NOT EXISTS page_device_metrics (
+    url TEXT NOT NULL,
+    device TEXT NOT NULL,
+    window_start TEXT NOT NULL,
+    window_end TEXT NOT NULL,
+    clicks REAL,
+    impressions REAL,
+    ctr REAL,
+    position REAL,
+    PRIMARY KEY (url, device, window_start, window_end)
+);
+CREATE INDEX IF NOT EXISTS idx_page_device_url
+ON page_device_metrics(url, window_end);
+
 -- SEO-INC-002: estado de auditoria POR URL (incremental de verdade).
 -- Substitui o seletor por cursor do sitemap: cada URL tem estado leve
 -- (modified/lastmod/hash/audit) e o audit consome uma FILA (dirty/new/failed/
@@ -3356,6 +3373,43 @@ class Storage:
         return {"known": total, "never_audited": never, "dirty": dirty,
                 "stale": stale, "failed": failed,
                 "fresh": max(0, total - never - stale)}
+
+    # -- SEO-INC-014: pagina x dispositivo -------------------------------------
+
+    def save_page_device_metrics(self, rows: list[dict[str, Any]], *,
+                                 window_start: str, window_end: str) -> int:
+        """Persiste CTR por pagina x dispositivo (idempotente por janela)."""
+        saved = 0
+        for row in rows:
+            keys = row.get("keys") or []
+            if len(keys) < 2:
+                continue
+            try:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO page_device_metrics (url, device, "
+                    "window_start, window_end, clicks, impressions, ctr, position) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(keys[0]), str(keys[1]).lower(), window_start, window_end,
+                     row.get("clicks"), row.get("impressions"), row.get("ctr"),
+                     row.get("position")),
+                )
+                saved += 1
+            except Exception:  # noqa: BLE001
+                continue
+        self.conn.commit()
+        return saved
+
+    def device_metrics_for_url(self, url: str, *,
+                               window_end: str | None = None) -> list[dict[str, Any]]:
+        """CTR por dispositivo da pagina (janela mais recente por padrao)."""
+        rows = self.conn.execute(
+            "SELECT device, clicks, impressions, ctr, position FROM page_device_metrics "
+            "WHERE url = ? AND window_end = COALESCE(?, "
+            "(SELECT MAX(window_end) FROM page_device_metrics))",
+            (url, window_end),
+        ).fetchall()
+        return [{"device": r[0], "clicks": r[1], "impressions": r[2],
+                 "ctr": r[3], "position": r[4]} for r in rows]
 
     def close(self) -> None:
         self.conn.close()

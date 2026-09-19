@@ -1,17 +1,20 @@
-"""Baseline PRÓPRIO do site (SEO-INC-013): percentis de CTR por contexto.
+"""Baseline PRÓPRIO do site (SEO-INC-013/014): percentis de CTR por contexto.
 
-Substitui benchmarks externos ("posição 1-3 = 20% de CTR") por comportamento
-observado do próprio UnicornioHater. Completamente determinístico — nada de IA,
-nada de curva de CTR importada de terceiros.
+Substitui benchmarks externos por comportamento observado do próprio
+UnicornioHater. Completamente determinístico — nada de IA.
 
-Contexto = faixa de posição × faixa de impressões (as duas dimensões que o
-Search Console entrega e que mais explicam CTR). Cada bucket guarda P10/P25/
-P50/P75 e o n (tamanho de amostra), para a anomalia ser julgada contra o
-comportamento do próprio segmento e não contra um número arbitrário.
+Contexto PRIMÁRIO: faixa de posição × faixa de impressões (as duas dimensões
+que o Search Console entrega e que mais explicam CTR). SEMPRE calculado.
+
+SEGMENTO opcional (só usado quando tem amostra suficiente, senão cai no
+primário — evita fragmentar o baseline em buckets de 1-2 páginas):
+  content_type — listicle / explicacao / noticia / guia / outro (do título)
+  entity_class — game / franchise / term (entidade dominante do corpus)
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -22,7 +25,40 @@ POSITION_BANDS: tuple[tuple[float, float, str], ...] = (
 IMPRESSION_BANDS: tuple[tuple[float, float, str], ...] = (
     (1, 500, "imp<500"), (500, 2000, "imp500-2k"), (2000, 1e9, "imp2k+"),
 )
-MIN_CTX_SAMPLE = 5   # abaixo disso o bucket não sustenta conclusão
+MIN_CTX_SAMPLE = 5       # abaixo disso o bucket não sustenta conclusão
+MIN_SEGMENT_SAMPLE = 8   # segmento exige amostra maior (é mais fino)
+
+# Tipo de conteúdo pelo título — determinístico, sem IA.
+_CONTENT_PATTERNS: tuple[tuple[str, str], ...] = (
+    # listicle: "10 melhores", "os 10 vilões", "ordem e sequência", ranking
+    ("listicle", r"\b\d{1,2}\s+(melhores|maiores|piores|mais|curiosidades|fatos|"
+                 r"coisas|jogos|s[eé]ries|filmes|animes|vil[oõ]es|personagens|"
+                 r"motivos|dicas|erros)|\b(os|as)\s+\d{1,2}\b|"
+                 r"\b(ordem e sequ[êe]ncia|ranking)\b"),
+    # guia: intent de AÇÃO (assistir/jogar/baixar/como fazer)
+    ("guia", r"\b(como|onde assistir|onde jogar|vale a pena|guia|tutorial|"
+             r"passo a passo|requisitos)\b"),
+    # explicação: pergunta respondida, perfil, origem/história, título da obra
+    ("explicacao", r"\b(quem (é|foi|s[ãa]o)|quantos anos|qual a|quais s[ãa]o|"
+                   r"o que (é|foi|significa)|onde fica|por que|porque|"
+                   r"diferen[çc]a entre|origem e|tudo (sobre|o que)|"
+                   r"poderes|fraqueza|explicad[oa]|entend[ae]|hist[óo]ria de|"
+                   r"[ée] irm[ãa]o|s[ãa]o irm[ãa]os|significado)\b"),
+    ("noticia", r"\b(estreia|estrear|lan[çc]amento|lan[çc]a|trailer|confirma|"
+                r"confirmad[oa]|anuncia|revela|chega|ganha|ganhou|novo|nova|"
+                r"atualiza|vaza|data de|adiad[oa])\b"),
+)
+
+
+def content_type(title: Any) -> str:
+    """listicle | explicacao | noticia | guia | outro | unknown."""
+    text = str(title or "").strip().lower()
+    if not text:
+        return "unknown"
+    for label, pattern in _CONTENT_PATTERNS:
+        if re.search(pattern, text):
+            return label
+    return "outro"
 
 
 def _band(value: Any, bands: tuple[tuple[float, float, str], ...]) -> str:
@@ -51,16 +87,27 @@ def _percentile(values: list[float], q: float) -> float | None:
 
 
 def context_key(position: Any, impressions: Any) -> str:
-    """Chave do contexto (estável, aparece no JSON)."""
+    """Chave do contexto primário (posição × impressões)."""
     return f"{_band(position, POSITION_BANDS)}|{_band(impressions, IMPRESSION_BANDS)}"
 
 
-def build_baseline(storage: Any, *, window_end: str | None = None,
-                   min_impressions: int = 100) -> dict[str, Any]:
-    """Percentis de CTR por contexto, a partir das janelas já coletadas.
+def segment_key(content: Any, entity: Any) -> str:
+    """Chave do segmento (tipo de conteúdo × classe de entidade)."""
+    return f"{content or 'unknown'}|{entity or 'unknown'}"
 
-    Usa a janela mais recente por padrão; passa `window_end` para comparar
-    períodos. Somente páginas com volume mínimo entram (ruído não vira baseline).
+
+def _bucket_summary(ctrs: list[float]) -> dict[str, Any]:
+    return {"n": len(ctrs), "p10": _percentile(ctrs, 0.10),
+            "p25": _percentile(ctrs, 0.25), "p50": _percentile(ctrs, 0.50),
+            "p75": _percentile(ctrs, 0.75)}
+
+
+def build_baseline(storage: Any, *, window_end: str | None = None,
+                   min_impressions: int = 100,
+                   with_segments: bool = True) -> dict[str, Any]:
+    """Percentis de CTR por contexto (+ segmentos), das janelas já coletadas.
+
+    Somente páginas com volume mínimo entram (ruído não vira baseline).
     """
     rows = storage.conn.execute(
         "SELECT url, SUM(impressions) AS i, SUM(clicks) AS c, AVG(position) AS p "
@@ -70,8 +117,15 @@ def build_baseline(storage: Any, *, window_end: str | None = None,
         (window_end, min_impressions),
     ).fetchall()
 
-    buckets: dict[str, list[float]] = defaultdict(list)
-    for _url, impressions, clicks, position in rows:
+    from .align import current_title  # import tardio: evita ciclo de módulos
+
+    # Lookups em LOTE (1 query cada): com 1 query por URL o build levava ~10s.
+    _titles = _titles_by_path(storage) if with_segments else {}
+    _entities = _entity_class_by_path(storage) if with_segments else {}
+
+    contexts: dict[str, list[float]] = defaultdict(list)
+    segments: dict[str, list[float]] = defaultdict(list)
+    for url, impressions, clicks, position in rows:
         try:
             imp = float(impressions or 0)
             clk = float(clicks or 0)
@@ -79,27 +133,91 @@ def build_baseline(storage: Any, *, window_end: str | None = None,
             continue
         if imp <= 0:
             continue
-        buckets[context_key(position, imp)].append(clk / imp)
+        ctr = clk / imp
+        contexts[context_key(position, imp)].append(ctr)
+        if with_segments:
+            from ..inventory.reconcile import normalize_url as _nurl
+            path = _nurl(str(url))
+            title = _titles.get(path) or current_title(storage, str(url))
+            entity = _entities.get(path, "unknown")
+            segments[segment_key(content_type(title), entity)].append(ctr)
 
-    out: dict[str, Any] = {}
-    for key, ctrs in sorted(buckets.items()):
-        out[key] = {
-            "n": len(ctrs),
-            "p10": _percentile(ctrs, 0.10),
-            "p25": _percentile(ctrs, 0.25),
-            "p50": _percentile(ctrs, 0.50),
-            "p75": _percentile(ctrs, 0.75),
-        }
-    return {"window_end": window_end or "", "min_impressions": min_impressions,
-            "pages": len(rows), "contexts": out}
+    return {
+        "window_end": window_end or "",
+        "min_impressions": min_impressions,
+        "pages": len(rows),
+        "contexts": {k: _bucket_summary(v) for k, v in sorted(contexts.items())},
+        "segments": {k: _bucket_summary(v) for k, v in sorted(segments.items())},
+    }
 
 
-def classify_ctr(ctr: Any, bucket: dict[str, Any] | None) -> str:
+def _titles_by_path(storage: Any) -> dict[str, str]:
+    """{path: título} em UMA query (corpus tem prioridade sobre a captura)."""
+    from ..inventory.reconcile import normalize_url
+
+    out: dict[str, str] = {}
+    try:
+        rows = storage.conn.execute(
+            "SELECT url, seo_title, title FROM corpus_documents").fetchall()
+    except Exception:  # noqa: BLE001
+        return out
+    for url, seo_title, title in rows:
+        value = str(seo_title or title or "").strip()
+        if value:
+            out[normalize_url(str(url))] = value
+    return out
+
+
+def _entity_class_by_path(storage: Any) -> dict[str, str]:
+    """{path: classe dominante} em UMA query (game > franchise > term)."""
+    from ..inventory.reconcile import normalize_url
+
+    best: dict[str, tuple[int, str]] = {}
+    prio = {"game": 3, "franchise": 2, "term": 1}
+    try:
+        rows = storage.conn.execute(
+            "SELECT url, entity_type, COUNT(*) AS n FROM corpus_entities "
+            "GROUP BY url, entity_type").fetchall()
+    except Exception:  # noqa: BLE001
+        return {}
+    for url, entity_type, n in rows:
+        path = normalize_url(str(url))
+        score = int(n or 0) * 10 + prio.get(str(entity_type), 0)
+        current = best.get(path)
+        if current is None or score > current[0]:
+            best[path] = (score, str(entity_type or "unknown"))
+    return {path: value[1] for path, value in best.items()}
+
+
+def dominant_entity_class(storage: Any, url: str) -> str:
+    """game | franchise | term — classe da entidade mais citada na página."""
+    from ..inventory.reconcile import normalize_url
+
+    needle = f"%{normalize_url(url).rstrip('/')}%"
+    try:
+        rows = storage.conn.execute(
+            "SELECT entity_type, COUNT(*) AS n, url FROM corpus_entities "
+            "WHERE url LIKE ? GROUP BY entity_type, url "
+            "ORDER BY CASE entity_type WHEN 'game' THEN 1 WHEN 'franchise' THEN 2 "
+            "ELSE 3 END, n DESC LIMIT 20",
+            (needle,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    path = normalize_url(url)
+    for entity_type, _n, row_url in rows:
+        if normalize_url(str(row_url)) == path:
+            return str(entity_type or "unknown")
+    return "unknown"
+
+
+def classify_ctr(ctr: Any, bucket: dict[str, Any] | None, *,
+                 min_sample: int = MIN_CTX_SAMPLE) -> str:
     """Onde o CTR cai dentro do próprio contexto.
 
     below_p10 | low | typical | high | above_p75 | unknown
     """
-    if bucket is None or int(bucket.get("n") or 0) < MIN_CTX_SAMPLE:
+    if bucket is None or int(bucket.get("n") or 0) < min_sample:
         return "unknown"
     try:
         value = float(ctr)
@@ -118,11 +236,31 @@ def classify_ctr(ctr: Any, bucket: dict[str, Any] | None) -> str:
 
 
 def ctr_verdict(storage: Any, *, position: Any, impressions: Any, ctr: Any,
-                baseline: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Classifica o CTR da página contra o baseline do PRÓPRIO contexto."""
+                baseline: dict[str, Any] | None = None,
+                content: str | None = None,
+                entity: str | None = None) -> dict[str, Any]:
+    """Classifica o CTR contra o baseline do PRÓPRIO contexto/segmento.
+
+    Prefere o segmento (tipo × entidade) quando ele tem amostra suficiente;
+    senão cai no contexto primário (posição × impressões). O resultado sempre
+    informa qual nível foi usado (`level`), para o diagnóstico ser auditável.
+    """
     base = baseline if baseline is not None else build_baseline(storage)
     key = context_key(position, impressions)
     bucket = (base.get("contexts") or {}).get(key)
-    return {"context": key, "bucket": bucket or {},
-            "verdict": classify_ctr(ctr, bucket),
+    level = "context"
+
+    seg_key = segment_key(content, entity)
+    seg_bucket = (base.get("segments") or {}).get(seg_key)
+    if seg_bucket and int(seg_bucket.get("n") or 0) >= MIN_SEGMENT_SAMPLE:
+        # O segmento é mais específico: só usamos se ele próprio sustenta
+        # (posição × impressões continua como fallback auditável).
+        bucket = seg_bucket
+        level = "segment"
+
+    return {"context": key, "segment": seg_key, "level": level,
+            "bucket": bucket or {},
+            "verdict": classify_ctr(ctr, bucket,
+                                    min_sample=MIN_SEGMENT_SAMPLE if level == "segment"
+                                    else MIN_CTX_SAMPLE),
             "baseline_window": base.get("window_end") or ""}

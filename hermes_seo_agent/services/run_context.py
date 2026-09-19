@@ -72,6 +72,7 @@ class RunContext:
         # reutilizada pelas etapas do ciclo (demand/title-opportunities/post-audit).
         self._gsc_by_page: dict[tuple[str, str, int], Any] = {}
         self._gsc_query_pages: dict[tuple[str, str, int], Any] = {}
+        self._gsc_page_device: dict[tuple[str, str, int], Any] = {}
         self._ga4_organic: dict[tuple[str, str, int, str, bool], Any] = {}
         self._ga4_status: dict[tuple[str, str], Any] = {}
         self._crux = None
@@ -172,6 +173,17 @@ class RunContext:
         else:
             self._hit("dataset_cache_hit")
         return self._gsc_by_page[key]
+
+    def gsc_page_device(self, start: str, end: str, row_limit: int = 50_000):
+        """SEO-INC-014: página × dispositivo (memoizado dentro do ciclo)."""
+        key = (start, end, row_limit)
+        if key not in self._gsc_page_device:
+            if self.search_console() is not None:
+                self._gsc_page_device[key] = self._gsc.search_analytics_page_device(
+                    start_date=start, end_date=end, row_limit=row_limit)
+            else:
+                self._gsc_page_device[key] = []
+        return self._gsc_page_device[key]
 
     def gsc_query_pages(self, start: str, end: str, row_limit: int = 25_000):
         key = (start, end, row_limit)

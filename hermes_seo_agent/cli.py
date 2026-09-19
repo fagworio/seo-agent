@@ -1445,6 +1445,37 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     from .services.run_context import RunContext
     run_context = RunContext(config)
     try:
+        # Vencimento por IDADE (idempotente), nunca por hora exata: com
+        # `now.hour == 6` (default do --inspect-hours) um ciclo de 2h em
+        # horários deslocados NUNCA casa — a coleta do GSC, a revalidação
+        # 7d/28d, o GA4 e o corpus ficavam reféns do relógio.
+        _daily_state = run_context.storage()
+
+        if True:
+            def _due(key: str, min_hours: float) -> bool:
+                raw = str(_daily_state.get_setting(key, "") or "")
+                if not raw:
+                    return True
+                try:
+                    last = datetime.datetime.fromisoformat(raw)
+                except Exception:  # noqa: BLE001
+                    return True
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=datetime.timezone.utc)
+                age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 3600.0
+                return age >= min_hours
+
+            def _mark(key: str) -> None:
+                try:
+                    _daily_state.set_setting(
+                        key, datetime.datetime.now(datetime.timezone.utc).isoformat())
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _gsc_daily = _due("gsc:last_daily", 20)
+            _ga4_daily = _due("ga4:last_daily", 20)
+            _corpus_weekly = _due("corpus:last_rebuild", 144)
+
 
         # 1) Bounded audit + report (always).
         run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run, json=True,
@@ -1462,7 +1493,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         # 2) Daily GSC inspect window.
         inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
-        if now.hour in inspect_hours:
+        if _gsc_daily:
             run_silently(_cmd_inspect,
                          args=_ns(budget=0, dry_run=False, json=True,
                                   _run_context=run_context), config=config)
@@ -1482,6 +1513,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                              args=_ns(action="revalidate-due", limit=200, measure_days=28,
                                       _run_context=run_context), config=config)
                 steps.append("revalidate-28d")
+                _mark("gsc:last_daily")
             # Background: mantém a fila de melhorias crescendo diariamente.
             run_silently(_cmd_post_audit,
                          args=_ns(limit=20, min_impressions=50, write=False, json=True,
@@ -1501,11 +1533,11 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         # 4) Weekly GA4 collection (A2): janela fechada, persistida; degrada em
         #    silêncio quando GA4_PROPERTY_ID não está configurado.
-        if config.ga4_property_id and now.weekday() == args.deep_weekday \
-                and now.hour == min(inspect_hours or {6}):
+        if config.ga4_property_id and _ga4_daily:
             run_silently(_cmd_ga4,
                          args=_ns(action="collect", days=28, store=True,
                                   _run_context=run_context), config=config)
+            _mark("ga4:last_daily")
             steps.append("ga4-collect")
 
         # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
@@ -1514,10 +1546,11 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         #    nunca retomava (bug do corpus eternamente incompleto). O rebuild é
         #    concorrente-seguro (claim atômico + lease fencing), então chamar mesmo
         #    com um run parcial apenas retoma e drena a fila até finalizar.
-        if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
+        if _corpus_weekly:
             run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=0,
                                                _run_context=run_context),
                          config=config)
+            _mark("corpus:last_rebuild")
             steps.append("corpus-rebuild")
 
         # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um
@@ -2938,6 +2971,16 @@ def _cmd_demand(args: argparse.Namespace, config: Any) -> int:
                 })
             stored = storage.save_query_pages(payload, window_start=start.isoformat(),
                                               window_end=end.isoformat())
+            # SEO-INC-014: CTR por dispositivo (1 requisicao, dimensoes page+device).
+            try:
+                _dev_rows = (shared.gsc_page_device(start.isoformat(), end.isoformat())
+                             if _use_ctx else
+                             gsc.search_analytics_page_device(start_date=start.isoformat(),
+                                                              end_date=end.isoformat()))
+                _dev_saved = storage.save_page_device_metrics(
+                    _dev_rows, window_start=start.isoformat(), window_end=end.isoformat())
+            except Exception:  # noqa: BLE001 — device e enriquecimento, nao bloqueia
+                _dev_saved = 0
 
         cannibalization = storage.cannibalization_candidates(
             min_impressions=float(args.min_impressions), window_start=start.isoformat()
