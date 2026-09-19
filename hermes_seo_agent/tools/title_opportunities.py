@@ -378,20 +378,34 @@ def empirical_title_case(
     checks: dict[str, bool] = {
         "impressions_sufficient": float(impressions or 0) >= min_impressions,
         "query_demand": float(query_impressions or 0) >= min_query_impressions,
+        # Alta confiança: a anomalia precisa ser de SEVERIDADE (abaixo do P10 do
+        # segmento ou `below_comparable`). O veredicto `low` (entre P10 e P25) é
+        # sinal mais FRACO: fica registrado em `ctr_low` e, no máximo, leva a
+        # `investigate_cause` — nunca a reescrever título.
         "ctr_below_baseline": str((baseline_verdict or {}).get("verdict")
-                                  or "") in {"below_p10", "low", "below_comparable"},
+                                  or "") in {"below_p10", "below_comparable"},
         "query_title_gap": bool(query) and not _covered(query, title),
-        "position_actionable": position is None or float(position) <= max_position,
+        # Sem posição NÃO é "acionável": cadeia completa exige o dado (antes
+        # position=None passava como True e a proposta saía sem esse alicerce).
+        "position_actionable": position is not None and float(position) <= max_position,
     }
+    checks["ctr_low"] = str((baseline_verdict or {}).get("verdict") or "") == "low"
     engagement_note = ""
-    if ga4 and float(ga4.get("sessions") or 0) >= 5:
-        er = ga4.get("engagement_rate")
+    ga4_known = False
+    ga4_data: dict[str, Any] = ga4 or {}
+    if ga4_data:
+        try:
+            ga4_known = float(ga4_data.get("sessions") or 0) >= 5
+        except (TypeError, ValueError):
+            ga4_known = False
+    if ga4_known:
+        er = ga4_data.get("engagement_rate")
         try:
             if er is not None and float(er) < 0.30:
                 checks["post_click_healthy"] = False
                 engagement_note = "engajamento pós-clique baixo (GA4 < 30%)"
         except (TypeError, ValueError):
-            pass
+            ga4_known = False
     checks.setdefault("post_click_healthy", True)
 
     criticos = ("impressions_sufficient", "query_demand", "ctr_below_baseline",
@@ -399,7 +413,10 @@ def empirical_title_case(
     faltando = [k for k in criticos if not checks.get(k)]
 
     if not faltando:
-        action, confidence = "review_title", "high"
+        action = "review_title"
+        # GA4 ausente é AUSÊNCIA DE EVIDÊNCIA: não bloqueia (a decisão não é
+        # sobre pós-clique), mas rebaixa a confiança — nunca `high` sem dado.
+        confidence = "high" if ga4_known else "medium"
     elif not checks["impressions_sufficient"] or not checks["query_demand"]:
         action, confidence = "gather_more_data", "low"
     elif "query_title_gap" in faltando:

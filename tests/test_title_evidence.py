@@ -105,6 +105,81 @@ def test_ga4_e_trends_nao_criam_necessidade():
     assert case["checks"]["ctr_below_baseline"] is False
 
 
+def test_low_nao_autoriza_mudanca_de_titulo():
+    """`low` (entre P10 e P25) é sinal fraco: no máximo investigar.
+
+    Mesmo com gap de intenção presente, um CTR apenas "low" não autoriza
+    reescrever título (só `below_p10`/`below_comparable` autorizam).
+    """
+    case = empirical_title_case(
+        impressions=1500, ctr=0.01, position=5.0,
+        baseline_verdict={"verdict": "low"},
+        query="quantos anos tem gojo", query_impressions=400,
+        title="Gojo: poderes e história",   # <- gap de intenção presente
+        ga4={"sessions": 80, "engagement_rate": 0.6},
+    )
+    assert case["action"] == "investigate_cause"
+    assert case["checks"]["ctr_low"] is True
+    assert case["checks"]["ctr_below_baseline"] is False
+    assert case["checks"]["query_title_gap"] is True
+
+
+def test_posicao_ausente_nao_e_acionavel():
+    """Sem posição a cadeia está incompleta — não vira review_title."""
+    case = empirical_title_case(
+        impressions=1500, ctr=0.0, position=None,
+        baseline_verdict={"verdict": "below_p10"},
+        query="quantos anos tem gojo", query_impressions=300,
+        title="Gojo: poderes",
+        ga4={"sessions": 50, "engagement_rate": 0.6},
+    )
+    assert case["action"] != "review_title"
+    assert "position_actionable" in case["missing"]
+
+
+def test_ga4_ausente_rebaixa_confianca():
+    """GA4 ausente = ausência de evidência: não bloqueia, mas nunca `high`."""
+    case = empirical_title_case(
+        impressions=1800, ctr=0.002, position=4.0,
+        baseline_verdict={"verdict": "below_p10"},
+        query="quantos anos tem gojo", query_impressions=500,
+        title="Gojo: poderes e história",
+        ga4=None,
+    )
+    assert case["action"] == "review_title"
+    assert case["confidence"] == "medium"
+
+
+def test_demanda_vem_da_query_escolhida(tmp_path):
+    """SEO-INC-019b: a demanda é da query que o seletor escolheu, não do topo.
+
+    `queries[0]` (ordenado por cliques) pode ter impressões altas enquanto a
+    query escolhida tem pouca demanda — usar queries[0] inflava o gate.
+    """
+    from hermes_seo_agent.tools.title_opportunities import strategic_title
+
+    queries = [
+        {"keys": ["gojo"], "impressions": 800, "clicks": 20, "position": 4.0, "ctr": 0.025},
+        {"keys": ["quantos anos tem gojo"], "impressions": 7, "clicks": 0,
+         "position": 3.0, "ctr": 0.0},
+    ]
+    decision = strategic_title("Gojo: poderes e história", queries)
+    assert decision is not None
+    escolhida = decision["keyword"]
+    imp_escolhida = float((decision.get("gsc") or {}).get("impressions", 0))
+    if escolhida != "gojo":
+        assert imp_escolhida == 7.0, (escolhida, imp_escolhida)
+        case = empirical_title_case(
+            impressions=800, ctr=0.025, position=4.0,
+            baseline_verdict={"verdict": "below_p10"},
+            query=escolhida, query_impressions=imp_escolhida,
+            title="Gojo: poderes e história",
+            ga4={"sessions": 50, "engagement_rate": 0.6},
+        )
+        assert case["checks"]["query_demand"] is False
+        assert case["action"] == "gather_more_data"
+
+
 def test_below_comparable_exige_captura_material():
     """SEO-INC-017b: p75 ~ruído não sustenta 'anomalia relativa'."""
     ruido = {"n": 8, "p10": 0.0, "p25": 0.0, "p50": 0.0, "p75": 0.001}

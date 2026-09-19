@@ -2021,10 +2021,15 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
             # SEO-INC-019: a proposta carrega a cadeia de evidencia COMPLETA e
             # auditavel (demanda, anomalia vs baseline proprio, intencao, gap,
             # posicao, pos-clique) — nao apenas "o score era alto".
+            # SEO-INC-019b: a demanda da query tem de vir da MESMA query que o
+            # strategic_title escolheu. `queries[0]` vem ordenado por cliques,
+            # enquanto o seletor reordena por impressões/posição/CTR/Trends/GA4
+            # — usar queries[0] cruzava a evidência (query escolhida X com
+            # impressões da query Y) e podia aprovar um gate de demanda falso.
             _q_imp = 0.0
             try:
-                _q_imp = float((queries[0].get("impressions") if queries else 0) or 0)
-            except (TypeError, ValueError, IndexError):
+                _q_imp = float((decision.get("gsc") or {}).get("impressions", 0) or 0)
+            except (TypeError, ValueError):
                 _q_imp = 0.0
             case = empirical_title_case(
                 impressions=float(row.get("impressions", 0) or 0),
