@@ -64,7 +64,13 @@ browser tool. The CLI does the mechanics; you interpret and report.
    (dirty/nova/falha/nunca auditada, precedência total) e **rodízio** de
    páginas sãs vencidas, limitado a `COVERAGE_SWEEP_PER_RUN` (default 100) por
    ciclo. O summary mostra `incremental` vs `sweep`.
-4d. Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
+4d. **`schedule` = o ciclo COMPLETO** (não use `cycle` sozinho): `schedule
+   --json` roda audit incremental + refresh WordPress/sitemap + coleta diária do
+   GSC (`demand`) + **revalidação 7d/28d** (as medições!) + GA4 diário + corpus
+   semanal, todos por **vencimento por idade** (idempotente — rodar 2x no mesmo
+   dia não repete). `cycle` executa **apenas** o audit: sem coleta e **sem
+   medição** — um agente que só chama `cycle` nunca mede as mudanças aplicadas.
+   Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
    `measurement` (veredito multiaxial — `regressed`, `visibility_up`,
    `traffic_up`, `engagement_up`, `no_change`, `mixed`, `insufficient_data`),
    `diagnosis` (códigos `ctr_zero_sitewide`, `ctr_below_baseline`,
