@@ -27,6 +27,11 @@ IMPRESSION_BANDS: tuple[tuple[float, float, str], ...] = (
 )
 MIN_CTX_SAMPLE = 5       # abaixo disso o bucket não sustenta conclusão
 MIN_SEGMENT_SAMPLE = 8   # segmento exige amostra maior (é mais fino)
+# Piso de materialidade do P75 do segmento: abaixo disto a "captura" das
+# comparáveis é ruído do GSC (os buckets degenerados do acervo ficam em <=0,1%;
+# os que têm captura real ficam >=0,4%). Usado só no veredicto
+# `below_comparable` — a anomalia RELATIVA da página dentro do segmento.
+MIN_COMPARABLE_CTR = 0.004
 
 # Tipo de conteúdo pelo título — determinístico, sem IA.
 _CONTENT_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -254,6 +259,15 @@ def classify_ctr(ctr: Any, bucket: dict[str, Any] | None, *,
     p10, p25, p50, p75 = (bucket.get(k) for k in ("p10", "p25", "p50", "p75"))
     if p10 is not None and value < p10:
         return "below_p10"
+    # SEO-INC-017b: caso degenerado do próprio acervo. Quando o P10 do segmento
+    # é 0 (≥10% das comparáveis capta ~0) mas EXISTE captura comparável
+    # MATERIAL (P75 ≥ MIN_COMPARABLE_CTR), a página que não capta nada é a
+    # anomalia RELATIVA: o problema não é "o site inteiro", é esta página frente
+    # às suas comparáveis. Fica num veredicto PRÓPRIO (não `below_p10`) para não
+    # confundir com `ctr_zero_sitewide` — onde o segmento INTEIRO não capta.
+    if (p10 is not None and float(p10) <= 0 and value <= 0
+            and float(p75 or 0) >= MIN_COMPARABLE_CTR):
+        return "below_comparable"
     if p25 is not None and value < p25:
         return "low"
     if p75 is not None and value > p75:
@@ -288,6 +302,7 @@ def ctr_verdict(storage: Any, *, position: Any, impressions: Any, ctr: Any,
 
     return {"context": key, "segment": seg_key, "level": level,
             "bucket": bucket or {},
+            "sample_size": int((bucket or {}).get("n") or 0),
             "verdict": classify_ctr(ctr, bucket,
                                     min_sample=MIN_SEGMENT_SAMPLE if level == "segment"
                                     else MIN_CTX_SAMPLE),

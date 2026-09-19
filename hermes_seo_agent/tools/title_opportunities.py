@@ -33,6 +33,39 @@ _SMALL = {"a", "o", "os", "as", "de", "da", "do", "das", "dos", "e", "em",
 _STOP = _SMALL | {"como", "qual", "quais", "quanto", "quantos", "quando",
                   "onde", "porque", "serie", "sao", "foi", "era", "tem", "ter"}
 
+# SEO-INC-018: grupos de INTENCAO. Cobrir a ENTIDADE nao cobre a INTENCAO:
+# "quantos anos tem gojo" exige idade/anos no titulo — "Gojo: poderes e
+# historia" nao responde a pergunta. Antes isso passava na regra lexical de 50%
+# e o pipeline concluia "query ja coberta" (deixando de achar o gap real).
+INTENT_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("idade", ("idade", "anos", "velho", "nascimento", "nasceu", "aniversario")),
+    ("altura", ("altura", "mede", "metro", "tamanho")),
+    ("morte", ("morte", "morreu", "morre", "falecido", "morrido")),
+    ("elenco", ("elenco", "ator", "atriz", "dublador", "dubladora", "quem faz")),
+    ("ordem", ("ordem", "cronologia", "sequencia")),
+    ("onde_assistir", ("assistir", "streaming", "plataforma", "onde ver")),
+    ("final", ("explicado", "o final")),
+    ("poderes", ("poder", "habilidade", "habilidades", "fraqueza", "skill")),
+    ("preco", ("preco", "custa", "valor", "barato")),
+    ("estreia", ("estreia", "lancamento", "quando sai", "data de")),
+)
+
+
+def intent_terms(query: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Grupos de INTENCAO presentes na query (SEO-INC-018).
+
+    Cada grupo devolvido precisa estar representado no titulo (por qualquer
+    variante) para a query ser considerada coberta — a entidade sozinha nao
+    responde a intencao.
+    """
+    q_tokens = _tokens(query)
+    frase = " " + " ".join(re.findall(r"[a-zà-ú0-9]+", (query or "").lower())) + " "
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for label, variantes in INTENT_GROUPS:
+        if any(_norm_word(v) in q_tokens or v in frase for v in variantes):
+            out.append((label, variantes))
+    return tuple(out)
+
 
 def pick_top_query(rows: list[dict[str, Any]]) -> str:
     """Legacy: highest-value raw query (kept for backward compatibility)."""
@@ -274,13 +307,17 @@ def _engagement_factor(ga4: dict[str, Any] | None) -> float:
 
 
 def _covered(query: str, current_title: str) -> bool:
-    """True when the current title already covers the query keywords.
+    """True when the current title already covers the query keywords AND intent.
 
     Coverage = fraction of significant query tokens present in the title.
     Tokens of <=3 chars (acronyms like "mha", "ps5") are ambiguous and never
     count as missing. A query is covered at >=50%: "eri mha idade" vs
     "Quantos anos tem Eri em My Hero Academia?" -> eri present, idade absent,
     mha ignored => 1/2 = 50% => covered (the intent is already answered).
+
+    SEO-INC-018: além dos 50% lexicais, TODOS os grupos de intenção presentes
+    na query precisam aparecer no título. "Gojo: poderes e história" não cobre
+    "quantos anos tem gojo" (falta idade/anos), ainda que cubra a entidade.
     """
     q_tokens = _tokens(query)
     if not q_tokens:
@@ -293,7 +330,124 @@ def _covered(query: str, current_title: str) -> bool:
     required = hits + len(missing_long)
     if required == 0:
         return True
-    return hits >= required * 0.5
+    if hits < required * 0.5:
+        return False
+    # Intenção (SEO-INC-018): entidade coberta não basta.
+    title_low = (current_title or "").lower()
+    for _label, variantes in intent_terms(query):
+        coberto = False
+        for v in variantes:
+            if _norm_word(v) in title_tokens or v in title_low:
+                coberto = True
+                break
+        if not coberto:
+            return False
+    return True
+
+
+def empirical_title_case(
+    *,
+    impressions: float,
+    ctr: float,
+    position: float | None,
+    baseline_verdict: dict[str, Any] | None,
+    query: str,
+    query_impressions: float,
+    title: str,
+    ga4: dict[str, Any] | None = None,
+    trends: dict[str, Any] | None = None,
+    min_impressions: float = 100.0,
+    min_query_impressions: float = 10.0,
+    max_position: float = 30.0,
+) -> dict[str, Any]:
+    """Cadeia de EVIDENCIA para decidir alterar um titulo (SEO-INC-019).
+
+    Substitui o gatilho heuristico "CTR <= 2%". Exige, simultaneamente:
+
+      1. demanda real        — impressoes da pagina E da query de valor
+      2. anomalia real       — CTR abaixo do P10 do PROPRIO segmento (baseline)
+      3. intencao            — query de valor identificada no GSC
+      4. gap                 — intencao nao representada no titulo atual
+      5. posicao acionavel   — a pagina ja e competitiva o suficiente
+      6. pos-clique saudavel — GA4 nao mostra experiencia claramente ruim
+
+    GA4 e Trends **priorizam**, nunca criam a necessidade. Sem qualquer elo
+    critico, a acao degrada para `investigate`/`monitor`/`gather_more_data`.
+    O retorno carrega a evidencia citavel (auditavel), nao so a decisao.
+    """
+    checks: dict[str, bool] = {
+        "impressions_sufficient": float(impressions or 0) >= min_impressions,
+        "query_demand": float(query_impressions or 0) >= min_query_impressions,
+        "ctr_below_baseline": str((baseline_verdict or {}).get("verdict")
+                                  or "") in {"below_p10", "low", "below_comparable"},
+        "query_title_gap": bool(query) and not _covered(query, title),
+        "position_actionable": position is None or float(position) <= max_position,
+    }
+    engagement_note = ""
+    if ga4 and float(ga4.get("sessions") or 0) >= 5:
+        er = ga4.get("engagement_rate")
+        try:
+            if er is not None and float(er) < 0.30:
+                checks["post_click_healthy"] = False
+                engagement_note = "engajamento pós-clique baixo (GA4 < 30%)"
+        except (TypeError, ValueError):
+            pass
+    checks.setdefault("post_click_healthy", True)
+
+    criticos = ("impressions_sufficient", "query_demand", "ctr_below_baseline",
+                "query_title_gap", "position_actionable", "post_click_healthy")
+    faltando = [k for k in criticos if not checks.get(k)]
+
+    if not faltando:
+        action, confidence = "review_title", "high"
+    elif not checks["impressions_sufficient"] or not checks["query_demand"]:
+        action, confidence = "gather_more_data", "low"
+    elif "query_title_gap" in faltando:
+        action, confidence = "no_title_change", "medium"
+    else:
+        action, confidence = "investigate_cause", "medium"
+
+    razoes = []
+    if checks["ctr_below_baseline"]:
+        b = baseline_verdict or {}
+        razoes.append(f"CTR abaixo do P10 do próprio segmento "
+                      f"({b.get('context') or 'n/d'}; n={b.get('sample_size') or 0})")
+    if checks["query_demand"]:
+        razoes.append(f"query '{query}' com demanda comprovada "
+                      f"({int(query_impressions)} impressões)")
+    if checks["query_title_gap"]:
+        razoes.append("intenção não coberta pelo título atual")
+    if checks["position_actionable"] and position is not None:
+        razoes.append(f"posição já competitiva ({float(position):.1f})")
+    if checks["post_click_healthy"] and ga4:
+        razoes.append("engajamento pós-clique saudável")
+    if engagement_note:
+        razoes.append(engagement_note)
+    if trends and float(trends.get("interest") or 0) >= 50:
+        razoes.append(f"interesse de busca em alta (Trends {int(float(trends['interest']))})")
+
+    return {
+        "action": action,
+        "confidence": confidence,
+        "checks": checks,
+        "missing": faltando,
+        "reason": razoes,
+        # Evidencia auditavel — quem le a Caixa consegue reproduzir a decisao.
+        "evidence": {
+            "gsc": {"impressions": impressions, "ctr": ctr, "position": position,
+                    "query": query, "query_impressions": query_impressions},
+            "baseline": baseline_verdict or {},
+            "alignment": {"query": query, "title": title,
+                          "intent_covered": not checks["query_title_gap"]},
+            "ga4": ga4 or {},
+            "trends": trends or {},
+            # O GSC devolve principalmente as linhas principais (por design do
+            # Google): "sem gap" significa "entre as queries OBSERVAVEIS a
+            # intencao esta coberta", nunca "conhecemos todas as buscas".
+            "query_evidence": {"source": "gsc_query_page",
+                               "coverage": "partial"},
+        },
+    }
 
 
 def strategic_title(

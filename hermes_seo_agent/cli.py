@@ -160,8 +160,9 @@ def _build_parser() -> argparse.ArgumentParser:
         if name == "title-opportunities":
             p.add_argument("--min-impressions", type=int, default=500,
                            help="impressions mínimas para considerar uma página")
-            p.add_argument("--max-ctr", type=float, default=0.02,
-                           help="CTR máximo para considerar (oportunidade de título)")
+            p.add_argument("--max-ctr", type=float, default=0.0,
+                           help="Teto absoluto de CTR (default 0 = desligado; "
+                                "quem decide é o baseline do próprio site)")
             p.add_argument("--write", action="store_true",
                            help="grava title-opportunities-fixes.json")
             p.add_argument("--persist", action="store_true",
@@ -1345,7 +1346,9 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
     stages = [("refresh-data", _cmd_refresh_data, _ns(sources="", json=True)),
               ("demand", _cmd_demand, _ns(store=True, min_impressions=0)),
               ("title-opportunities", _cmd_title_opportunities,
-               _ns(persist=True, limit=0, min_impressions=500, max_ctr=0.02)),
+               # SEO-INC-017: sem teto de CTR — a selecao e pelo baseline do
+               # proprio site (anomalia no segmento), nao por "CTR <= 2%".
+               _ns(persist=True, limit=0, min_impressions=500, max_ctr=0.0)),
               ("content-brief", _cmd_content_brief,
                _ns(single_url="", store=True, limit=20, json=True)),
               ("editorial-backlog", _cmd_editorial_backlog, _ns(json=True))]
@@ -1789,7 +1792,7 @@ def _title_matches_visible(expected: str, visible: str) -> bool:
 
 def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     """Research real queries -> title candidates anchored in GSC data."""
-    from .tools.title_opportunities import strategic_title
+    from .tools.title_opportunities import empirical_title_case, strategic_title
 
     warnings: list[str] = []
     if not config.google_credentials:
@@ -1815,11 +1818,34 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         return 2
 
     candidates_rows: list[dict[str, Any]] = []
-    low_ctr = [
-        r for r in pages
-        if float(r.get("impressions", 0)) >= args.min_impressions
-        and float(r.get("ctr", 0)) <= args.max_ctr
-    ]
+    # SEO-INC-017: a selecao inicial passa a usar o BASELINE DO PROPRIO SITE em
+    # vez do corte global de CTR. "CTR <= 2%" erra nos dois sentidos: deixa
+    # entrar pagina saudavel de segmento fraco e deixa FORA a anomalia real de
+    # segmento forte (ex.: P10 = 3% numa faixa posicao 5-10; CTR 2,5% e anomalo
+    # la e o corte global nao enxerga). A pergunta empirica passa a ser:
+    # "esta pagina capta significativamente menos cliques que paginas
+    # comparaveis do proprio UnicornioHater?". `--max-ctr` (quando > 0) fica
+    # apenas como teto absoluto de sanidade opcional.
+    from .report.baseline import build_baseline
+    from .report.baseline import ctr_verdict as _ctr_verdict
+
+    with Storage(config.sqlite_path) as _base_store:
+        _baseline = build_baseline(_base_store,
+                                   min_impressions=int(args.min_impressions or 100))
+    _anomalas: list[dict[str, Any]] = []
+    for r in pages:
+        imp = float(r.get("impressions", 0) or 0)
+        ctr = float(r.get("ctr", 0) or 0)
+        if imp < float(args.min_impressions or 0):
+            continue
+        if (args.max_ctr or 0) > 0 and ctr > float(args.max_ctr):
+            continue  # teto de sanidade opcional (default: desligado)
+        vb = _ctr_verdict(None, position=r.get("position"), impressions=imp,
+                          ctr=ctr, baseline=_baseline)
+        if vb.get("verdict") in {"below_p10", "low", "below_comparable"}:
+            r["_baseline"] = vb
+            _anomalas.append(r)
+    low_ctr = _anomalas
     low_ctr.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
 
     # — Google Discover (site-wide): momento da superficie de descoberta.
@@ -1992,6 +2018,38 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                 # candidate (a worse fragment must never be proposed).
                 skipped.append({"url": url, "reason": "titulo atual ja otimo"})
                 continue
+            # SEO-INC-019: a proposta carrega a cadeia de evidencia COMPLETA e
+            # auditavel (demanda, anomalia vs baseline proprio, intencao, gap,
+            # posicao, pos-clique) — nao apenas "o score era alto".
+            _q_imp = 0.0
+            try:
+                _q_imp = float((queries[0].get("impressions") if queries else 0) or 0)
+            except (TypeError, ValueError, IndexError):
+                _q_imp = 0.0
+            case = empirical_title_case(
+                impressions=float(row.get("impressions", 0) or 0),
+                ctr=float(row.get("ctr", 0) or 0),
+                position=row.get("position"),
+                baseline_verdict=row.get("_baseline"),
+                query=str(decision["keyword"] or ""),
+                query_impressions=_q_imp,
+                title=current,
+                ga4=_ga4,
+                trends=decision.get("trends"),
+                min_impressions=float(args.min_impressions or 100),
+            )
+            # SEO-INC-019: alterar título exige a cadeia COMPLETA. Faltando
+            # qualquer elo crítico a proposta não é gerada — o caso vai para o
+            # skip carregando a evidência e a ação recomendada (auditável).
+            if case.get("action") != "review_title":
+                skipped.append({
+                    "url": url,
+                    "reason": f"cadeia incompleta -> {case.get('action')}: "
+                              f"{', '.join(case.get('missing') or [])}",
+                    "evidence": case.get("evidence"),
+                    "confidence": case.get("confidence"),
+                })
+                continue
             candidates_rows.append({
                 "url": url,
                 "current_title": current,
@@ -2010,6 +2068,11 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
                 "score": decision["score"],
                 "trends": decision.get("trends"),
                 "post_id": post["id"] if post else None,
+                # cadeia de evidencia (auditavel) + confianca
+                "case": case,
+                "evidence": case["evidence"],
+                "confidence": case["confidence"],
+                "reason": case["reason"],
             })
 
     # O --limit vale para as PROPOSTAS (as de maior score), nao para os targets

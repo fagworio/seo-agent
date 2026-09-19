@@ -173,7 +173,9 @@ def diagnosis_codes(gsc: dict[str, Any], ga4: dict[str, Any], *,
         _vb = _ctr_verdict(None, position=pos, impressions=impressions,
                            ctr=ctr_after, baseline=baseline) if baseline else None
         _bucket = (_vb or {}).get("bucket") or {}
-        if _vb and _vb.get("verdict") == "below_p10":
+        if _vb and _vb.get("verdict") in {"below_p10", "below_comparable"}:
+            # below_comparable: a pagina nao capta MAS existem comparaveis que
+            # captam (P75 > 0) -> anomalia relativa da pagina, nao do acervo.
             codes.append("ctr_below_baseline")
         elif (_f(ctr_after) <= 0.002 and _f(_bucket.get("p50")) <= 0.002
               and int(_bucket.get("n") or 0) >= 5):
