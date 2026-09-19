@@ -54,11 +54,16 @@ browser tool. The CLI does the mechanics; you interpret and report.
 4. `hermes-seo-agent inspect --dry-run` — builds the URL Inspection queue
    (GSC tiers; real execution needs `GOOGLE_APPLICATION_CREDENTIALS` +
    `DRY_RUN=false` and consumes the daily budget).
-4b. Coleta de posts: `RunContext.posts()` usa **sinal leve + cache**
-   (SEO-INC-009). Uma requisição (`X-WP-Total` + `modified` do post mais
-   recente) decide se o cache em disco vale: quando nada mudou, o ciclo **não**
-   varre as ~190 páginas REST (~46s → ~0,3s, 187x). Full refresh quando o sinal
-   muda (post novo/editado) ou quando o cache expira (`audit_full_ttl_seconds`).
+4b. Coleta barata (SEO-INC-009/010): `RunContext.posts()` usa **sinal leve +
+   cache** (1 request: `X-WP-Total` + `modified` do mais recente) e
+   `all_sitemap_entries()` cacheia as entries validando o **ETag do índice** —
+   quando nada mudou, o ciclo não varre as ~190 páginas REST nem os
+   sub-sitemaps (~46s → ~0,4s combinado). Full refresh quando o sinal muda ou
+   o cache expira (`audit_full_ttl_seconds`).
+4c. Coverage sweep (SEO-INC-011): a fila tem dois trilhos — **expresso**
+   (dirty/nova/falha/nunca auditada, precedência total) e **rodízio** de
+   páginas sãs vencidas, limitado a `COVERAGE_SWEEP_PER_RUN` (default 100) por
+   ciclo. O summary mostra `incremental` vs `sweep`.
 5. `hermes-seo-agent opportunities` — low-CTR/zero-click (GSC) + Core Web
    Vitals (CrUX). Needs API keys; without them it emits warnings, not findings.
 6. `hermes-seo-agent apply actions.json` — executes `safe_fix` from an intent
