@@ -70,7 +70,13 @@ browser tool. The CLI does the mechanics; you interpret and report.
    semanal, todos por **vencimento por idade** (idempotente — rodar 2x no mesmo
    dia não repete). `cycle` executa **apenas** o audit: sem coleta e **sem
    medição** — um agente que só chama `cycle` nunca mede as mudanças aplicadas.
-   Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
+4e. Escala (SEO-INC-015/016): o sync do inventário é **em lote** (1 SELECT do
+   estado + comparação em memória + 1 commit — medido: 1.900 posts em 0,13 s / 1
+   commit, contra 2,30 s / 1.900 commits antes); o **backoff** de falha é
+   **respeitado** pela fila (`next_audit_at`, senão a URL martela o servidor a
+   cada ciclo); e `current_title` usa a fonte **mais recente** (corpus atrasado
+   não acusa gap em título já corrigido).
+4f. Medição → diagnóstico → decisão (SEO-INC-012/013): as medições trazem
    `measurement` (veredito multiaxial — `regressed`, `visibility_up`,
    `traffic_up`, `engagement_up`, `no_change`, `mixed`, `insufficient_data`),
    `diagnosis` (códigos `ctr_zero_sitewide`, `ctr_below_baseline`,
