@@ -29,6 +29,28 @@ class WordPressClient:
 
     # -- reads ---------------------------------------------------------------
 
+    def posts_signal(self, status: str = "publish") -> dict[str, Any]:
+        """Sinal LEVE da coleção de posts (SEO-INC-009).
+
+        Uma única requisição responde "a coleção mudou?" sem varrer as ~190
+        páginas: usa `X-WP-Total` (quantidade) + `modified` do post mais
+        recente. Serve de chave de cache para não baixar 18.971 registros a
+        cada tick.
+        """
+        response = self.http.get(
+            f"{self.base_url}/posts",
+            params={"status": status, "per_page": 1, "orderby": "modified",
+                    "order": "desc", "_fields": "id,modified"},
+        )
+        response.raise_for_status()
+        try:
+            body = response.json() or []
+        except Exception:
+            body = []
+        total = response.headers.get("X-WP-Total") or str(len(body))
+        last_modified = str((body[0].get("modified") if body else "") or "")
+        return {"total": str(total), "last_modified": last_modified}
+
     def list_posts(
         self,
         *,

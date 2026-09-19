@@ -80,3 +80,58 @@ def test_resolve_no_action_encerra_o_item(tmp_path):
         assert row[3], "next_review agendado"
         # resolver de novo nao reabre (idempotente por status)
         assert s.resolve_checklist_no_action(cid, reason="x") is False
+
+
+def test_posts_cache_pula_varredura_quando_sinal_igual(tmp_path):
+    """SEO-INC-009: sinal igual -> nao baixa os 19k posts de novo (187x)."""
+    from types import SimpleNamespace
+
+    from hermes_seo_agent.services.run_context import RunContext
+
+    chamadas = {"lista": 0}
+
+    class WP:
+        def posts_signal(self, status="publish"):
+            return {"total": "3", "last_modified": "2026-09-19T10:00:00"}
+
+        def list_posts(self, status="publish"):
+            chamadas["lista"] += 1
+            return [{"id": 1, "link": "https://prod/x/", "modified": "m1",
+                     "slug": "x", "status": "publish"}]
+
+    ctx = SimpleNamespace(config=SimpleNamespace(sqlite_path=str(tmp_path / "s.db")))
+    ctx.wordpress = lambda: WP()
+    ctx._posts = None
+    assert len(RunContext.posts(ctx)) == 1
+    assert chamadas["lista"] == 1
+    ctx._posts = None  # nova "instancia"
+    assert len(RunContext.posts(ctx)) == 1
+    assert chamadas["lista"] == 1, "nao deveria refazer a varredura completa"
+
+
+def test_posts_cache_rebusca_quando_sinal_muda(tmp_path):
+    """Post novo/editado (sinal diferente) -> full refresh."""
+    from types import SimpleNamespace
+
+    from hermes_seo_agent.services.run_context import RunContext
+
+    chamadas = {"lista": 0}
+    estado = {"total": "3"}
+
+    class WP:
+        def posts_signal(self, status="publish"):
+            return {"total": estado["total"], "last_modified": "2026-09-19T10:00:00"}
+
+        def list_posts(self, status="publish"):
+            chamadas["lista"] += 1
+            return [{"id": 1, "link": "https://prod/x/", "modified": "m1",
+                     "slug": "x", "status": "publish"}]
+
+    ctx = SimpleNamespace(config=SimpleNamespace(sqlite_path=str(tmp_path / "s.db")))
+    ctx.wordpress = lambda: WP()
+    ctx._posts = None
+    RunContext.posts(ctx)
+    estado["total"] = "4"
+    ctx._posts = None
+    RunContext.posts(ctx)
+    assert chamadas["lista"] == 2, "sinal mudou -> deve rebuscar"

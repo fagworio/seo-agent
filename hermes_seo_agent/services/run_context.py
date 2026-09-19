@@ -9,7 +9,47 @@ share a single ``Storage`` (instead of each HTTP request opening its own
 """
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
 from typing import Any
+
+
+def _posts_cache_path(config: Any) -> Path:
+    """Arquivo de cache dos posts (ao lado do SQLite de estado)."""
+    sqlite_path = str(getattr(config, "sqlite_path", "state/seo_agent.db"))
+    return Path(sqlite_path).parent / "wp_posts_cache.json"
+
+
+def _read_posts_cache(path: Path) -> dict[str, Any] | None:
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _cache_age(cached: dict[str, Any]) -> float:
+    """Idade do cache em segundos (infinito se não datado)."""
+    try:
+        return max(0.0, time.time() - float(cached.get("cached_at") or 0))
+    except Exception:
+        return float("inf")
+
+
+def _write_posts_cache(path: Path, posts: list[dict[str, Any]],
+                       signal: dict[str, str]) -> None:
+    """Grava o cache atomicamente (tmp + replace); falha em silêncio."""
+    payload = {"cached_at": time.time(), "signal": signal, "posts": posts}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        tmp.replace(path)
+    except Exception:
+        pass
 
 
 class RunContext:
@@ -72,8 +112,37 @@ class RunContext:
         return self._ga4
 
     def posts(self):
-        if self._posts is None:
-            self._posts = self.wordpress().list_posts(status="publish")
+        """Posts publicados com cache validado por sinal leve (SEO-INC-009).
+
+        Baixar 18.971 posts (~190 requisições REST, ~46s) a cada tick era o
+        gargalo de I/O do ciclo. Agora UMA requisição decide se o cache em
+        disco pode ser reusado: quando nada mudou no WordPress, o ciclo não
+        varre nada. O full refresh acontece quando o sinal muda (total ou
+        `modified` do post mais recente) ou quando o cache expira
+        (`audit_full_ttl_seconds`, garantindo que edições antigas apareçam).
+        """
+        if self._posts is not None:
+            return self._posts
+        wp = self.wordpress()
+        cache_path = _posts_cache_path(self.config)
+        cached = _read_posts_cache(cache_path)
+        if cached:
+            ttl = float(getattr(self.config, "audit_full_ttl_seconds", 86400) or 86400)
+            if _cache_age(cached) < ttl:
+                try:
+                    signal = wp.posts_signal()
+                except Exception:
+                    signal = None
+                if signal and cached.get("signal") == signal:
+                    self._posts = cached.get("posts") or []
+                    return self._posts
+        posts = wp.list_posts(status="publish")
+        try:
+            signal = wp.posts_signal()
+        except Exception:
+            signal = {}
+        _write_posts_cache(cache_path, posts, signal)
+        self._posts = posts
         return self._posts
 
     def sitemap_entries(self):
