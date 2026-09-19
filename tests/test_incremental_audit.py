@@ -28,6 +28,17 @@ def test_fila_incremental_por_url(tmp_path):
 
         s.mark_url_audit_failed(url="https://x.com/quebrada/", status_code=404)
         s.mark_url_audit_failed(url="https://x.com/quebrada/", status_code=404)
+        # SEO-INC-015: a 2ª falha agenda backoff de 6h -> a URL fica FORA da
+        # fila (antes ela voltava a cada ciclo e martelava o servidor).
+        fila = s.get_urls_for_audit(limit=10)
+        assert fila == [], "URL em backoff nao deve furar a fila"
+        assert s.audit_coverage()["failed"] == 1
+
+        # vencido o backoff, volta com o historico de falhas preservado
+        import datetime as _dt
+        passado = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=1)).isoformat()
+        s.conn.execute("UPDATE url_audit_state SET next_audit_at = ?", (passado,))
+        s.conn.commit()
         fila = s.get_urls_for_audit(limit=10)
         assert fila[0]["dirty_reason"] == "previous_failure"
         assert fila[0]["failure_count"] == 2

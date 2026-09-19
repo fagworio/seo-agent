@@ -3289,21 +3289,126 @@ class Storage:
                      "failure_count": int(r[3] or 0), "last_audited_at": r[4] or ""}
                     for r in res]
 
-        # Trilho expresso (P0-P2): dirty / nova / nunca auditada / falha.
-        expresso = _rows("dirty = 1 OR last_audited_at IS NULL", (), limit)
-        vagas = limit - len(expresso)
+        # P0: mudancas reais (nova/modificada/slug/mismatch) — na frente de tudo.
+        p0 = _rows("dirty = 1 AND dirty_reason IN ('new_url', 'wordpress_modified', "
+                   "'sitemap_modified', 'missing_from_sitemap')", (), limit)
+        vagas = limit - len(p0)
         if vagas <= 0:
-            return expresso
+            return p0
+        # P1: nunca auditadas e ainda sem dirty (o dirty de mudança já entrou no
+        # P0) — o filtro de backoff vale aqui também.
+        p1 = _rows("last_audited_at IS NULL AND (dirty = 0 OR dirty IS NULL) "
+                   "AND (next_audit_at IS NULL OR next_audit_at <= ?)", (now,), vagas)
+        vagas -= len(p1)
+        if vagas <= 0:
+            return p0 + p1
+        # P2: falhas — SO quando o backoff venceu (SEO-INC-015). A selecao
+        # antiga usava `dirty = 1` puro e ignorava `next_audit_at`: uma URL que
+        # falhou voltava a cada ciclo (2h) e martelava o servidor, ainda que o
+        # backoff 1h/6h/24h/3d estivesse gravado.
+        p2 = _rows("dirty = 1 AND dirty_reason = 'previous_failure' "
+                   "AND (next_audit_at IS NULL OR next_audit_at <= ?)", (now,), vagas)
+        vagas -= len(p2)
+        if vagas <= 0:
+            return p0 + p1 + p2
         # Trilho de rodizio (P3-P4): paginas saas vencidas, no maximo
         # `sweep_limit` por ciclo — o sweep nunca atropela o incremental.
         teto = vagas if sweep_limit is None else min(vagas, max(0, int(sweep_limit)))
         if teto <= 0:
-            return expresso
+            return p0 + p1 + p2
         rodizio = _rows(
             "dirty = 0 AND last_audited_at IS NOT NULL "
             "AND next_audit_at IS NOT NULL AND next_audit_at <= ?",
             (now,), teto)
-        return expresso + rodizio
+        fila = p0 + p1 + p2 + rodizio
+        # dedupe defensivo: nenhuma URL pode aparecer em dois trilhos.
+        vistos: set[str] = set()
+        unica: list[dict[str, Any]] = []
+        for cand in fila:
+            u = str(cand.get("url") or "")
+            if not u or u in vistos:
+                continue
+            vistos.add(u)
+            unica.append(cand)
+        return unica
+
+    def get_all_url_audit_states(self) -> dict[str, dict[str, Any]]:
+        """Estado de TODAS as URLs em UMA query (SEO-INC-015).
+
+        O sync chamava `get_url_audit_state(url)` para cada post (~19 mil
+        SELECTs por ciclo, medido). Aqui o estado inteiro vem de uma vez e a
+        comparacao acontece em memoria.
+        """
+        from ..inventory.reconcile import normalize_url
+
+        rows = self.conn.execute(
+            "SELECT url, wp_post_id, wp_modified, sitemap_lastmod, dirty, "
+            "dirty_reason FROM url_audit_state").fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            try:
+                key = normalize_url(r[0])
+            except Exception:
+                key = r[0] or ""
+            if not key:
+                continue
+            out[key] = {"url": r[0], "wp_post_id": r[1],
+                        "wp_modified": r[2] or "", "sitemap_lastmod": r[3] or "",
+                        "dirty": bool(r[4]), "dirty_reason": r[5] or ""}
+        return out
+
+    def upsert_url_audit_states_batch(self, rows: list[dict[str, Any]]) -> int:
+        """Grava varios estados em UMA transacao (SEO-INC-015).
+
+        Antes: 1 SELECT + 1 UPSERT + 1 COMMIT por post (medido: 1.900 commits
+        para 1.900 posts). Agora: um executemany + um commit, e so as URLs que
+        realmente mudaram entram no lote.
+        """
+        if not rows:
+            return 0
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        payload = [(str(r.get("url") or ""), r.get("wp_post_id"),
+                    str(r.get("wp_modified") or ""), str(r.get("sitemap_lastmod") or ""),
+                    1 if r.get("dirty") else 0, r.get("dirty_reason") or "", now, now)
+                   for r in rows if r.get("url")]
+        if not payload:
+            return 0
+        self.conn.executemany(
+            "INSERT INTO url_audit_state (url, wp_post_id, wp_modified, sitemap_lastmod, "
+            "dirty, dirty_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET wp_post_id = excluded.wp_post_id, "
+            "wp_modified = excluded.wp_modified, sitemap_lastmod = excluded.sitemap_lastmod, "
+            "dirty = CASE WHEN excluded.dirty = 1 THEN 1 ELSE url_audit_state.dirty END, "
+            "dirty_reason = CASE WHEN excluded.dirty = 1 THEN excluded.dirty_reason "
+            "ELSE url_audit_state.dirty_reason END, updated_at = excluded.updated_at",
+            payload)
+        self.conn.commit()
+        return len(payload)
+
+    def mark_urls_audited_batch(self, results: list[tuple[str, int, str]],
+                                *, revalidate_days: int = 7) -> int:
+        """Marca varias URLs como auditadas em UMA transacao (SEO-INC-015).
+
+        Antes: 1 COMMIT por URL auditada (500 commits por ciclo).
+        """
+        if not results:
+            return 0
+        import datetime as _dt
+
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        now = now_dt.isoformat()
+        nxt = (now_dt + _dt.timedelta(days=revalidate_days)).isoformat()
+        self.conn.executemany(
+            "UPDATE url_audit_state SET dirty = 0, dirty_reason = NULL, "
+            "last_audited_at = ?, last_success_at = ?, last_status_code = ?, "
+            "content_hash = ?, failure_count = 0, next_audit_at = ?, updated_at = ? "
+            "WHERE url = ?",
+            [(now, now, int(sc or 0), ch or "", nxt, now, url)
+             for url, sc, ch in results])
+        self.conn.commit()
+        return len(results)
 
     def mark_url_audited(self, *, url, status_code, content_hash="",
                          revalidate_days=7):

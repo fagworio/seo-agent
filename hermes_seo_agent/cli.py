@@ -732,15 +732,17 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
         audit_results.append((url, int(state.get("status_code") or 0),
                               (getattr(page, "content_hash", "") or "") if page else ""))
 
-    # SEO-INC-005: fecha o loop do incremental — sucesso limpa o dirty e agenda
-    # a revalidacao; falha volta para a fila com backoff (nunca martela a URL).
+    # SEO-INC-005/015: fecha o loop do incremental — sucesso limpa o dirty e
+    # agenda a revalidacao; falha volta com backoff (nunca martela a URL).
+    # Gravacao em LOTE: uma transacao para os sucessos + uma para as falhas
+    # (antes: 1 COMMIT por URL auditada — 500 commits por ciclo).
     with Storage(config.sqlite_path) as result_storage:
-        for url, status_code, content_hash in audit_results:
-            if 200 <= status_code < 300:
-                result_storage.mark_url_audited(
-                    url=url, status_code=status_code, content_hash=content_hash)
-            elif status_code == 0 or status_code >= 400:
-                result_storage.mark_url_audit_failed(url=url, status_code=status_code)
+        sucessos = [(u, sc, ch) for u, sc, ch in audit_results if 200 <= sc < 300]
+        falhas = [(u, sc) for u, sc, _ in audit_results if sc == 0 or sc >= 400]
+        if sucessos:
+            result_storage.mark_urls_audited_batch(sucessos)
+        for url, status_code in falhas:
+            result_storage.mark_url_audit_failed(url=url, status_code=status_code)
         coverage_after = result_storage.audit_coverage()
 
     # SEO-INC-006: o mismatch WP->estatico segue o MESMO conjunto auditado

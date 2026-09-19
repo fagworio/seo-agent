@@ -33,23 +33,44 @@ def _lookup(storage: Any, sql: str, url: str) -> tuple | None:
 
 
 def current_title(storage: Any, url: str) -> str:
-    """Título SEO atual (corpus → captura), como o gerador enxerga."""
+    """Título SEO atual pela fonte MAIS RECENTE (SEO-INC-016).
+
+    Antes o `corpus_documents` era autoridade absoluta. Com o rebuild do corpus
+    limitado a 1.000 itens por ciclo, ele pode ficar temporariamente ATRASADO —
+    e o diagnóstico usaria o título antigo, acusando `query_title_gap` num
+    título que o agente acabou de corrigir (churn por evidência stale).
+
+    Ordem: maior ``built_at``/``captured_at`` vence; sem timestamp, a captura da
+    página (que reflete o site no ar) tem precedência; corpus por último.
+    """
+    candidatos: list[tuple[str, str]] = []
+
     row = _lookup(
         storage,
-        "SELECT seo_title, title, url FROM corpus_documents "
-        "WHERE seo_title IS NOT NULL AND url LIKE ? LIMIT 20",
+        "SELECT seo_title, title, built_at, url FROM corpus_documents "
+        "WHERE url LIKE ? ORDER BY built_at DESC LIMIT 20",
         url,
     )
     if row and (row[0] or row[1]):
-        return str(row[0] or row[1])
+        candidatos.append((str(row[2] or ""), str(row[0] or row[1])))
+
     row = _lookup(
         storage,
-        "SELECT title, url FROM page_snapshots "
+        "SELECT title, captured_at, url FROM page_snapshots "
         "WHERE title IS NOT NULL AND title != '' AND url LIKE ? "
         "ORDER BY captured_at DESC LIMIT 20",
         url,
     )
-    return str(row[0]) if row and row[0] else ""
+    if row and row[0]:
+        candidatos.append((str(row[1] or ""), str(row[0])))
+
+    if not candidatos:
+        return ""
+    com_ts = [c for c in candidatos if c[0]]
+    if com_ts:
+        com_ts.sort(key=lambda c: c[0], reverse=True)
+        return com_ts[0][1]
+    return candidatos[-1][1]  # captura (site no ar) > corpus
 
 
 def top_query(storage: Any, url: str) -> str:
