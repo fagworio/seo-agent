@@ -809,6 +809,78 @@ def test_janela_desalinhada_conta_em_checks_passed_e_failed():
     assert "signal_window_aligned" not in neutro["checks"]["failed"]
 
 
+def test_entity_preserved_usa_o_piso_unico_de_cobertura():
+    from hermes_seo_agent.report.query_families import (ENTITY_OVERLAP_FLOOR,
+                                                        compatible_entity,
+                                                        entity_preserved)
+    assert entity_preserved("Gojo", "Satoru Gojo") is True
+    assert entity_preserved("Dragon Ball", "Dragon Ball Z") is True
+    assert entity_preserved("Dragon Ball", "Dragon Quest") is False
+    assert entity_preserved("Dragon Ball", "Dragon Quest: idade dos personagens") is False
+    # sem entidade detectável não há violação (ausência não é falha)
+    assert entity_preserved("", "qualquer titulo") is True
+    # piso ÚNICO: o merge de família usa o mesmo valor
+    assert ENTITY_OVERLAP_FLOOR == 0.6
+    import inspect
+
+    from hermes_seo_agent.report.query_families import compatible_entity as _ce
+    assert inspect.signature(_ce).parameters["min_overlap"].default == ENTITY_OVERLAP_FLOOR
+    assert compatible_entity("dragon ball", "Dragon Ball Z") is True
+
+
+def test_entity_gate_valida_o_titulo_final_e_nao_a_phrase():
+    """O gate tem de olhar o TEXTO final: o gerador pode reescrever a phrase."""
+    from hermes_seo_agent.report.title_engine import title_gates
+
+    base: dict[str, Any] = dict(
+        page={"impressions": 4200, "clicks": 31, "position": 5.2},
+        baseline_verdict={"verdict": "below_p10"}, ga4=None, confidence_score=0.8)
+    coverage = {"observed_demand_coverage": 0.3}
+
+    errado = title_gates(
+        **base, families=[{"family_id": "dragon ball::idade", "intent": "idade",
+                           "impressions": 900, "entity": "dragon ball", "share": 1.0}],
+        coverage=coverage, entity="Dragon Ball",
+        candidate={"phrase": "Dragon Ball: idade", "title": "Dragon Quest: idade",
+                   "observed_demand_coverage": 1.0})
+    assert errado["entity_preserved"] is False
+
+    certo = title_gates(
+        **base, families=[{"family_id": "dragon ball::idade", "intent": "idade",
+                           "impressions": 900, "entity": "dragon ball", "share": 1.0}],
+        coverage=coverage, entity="Dragon Ball",
+        candidate={"phrase": "Dragon Ball: idade", "title": "Dragon Ball: idade",
+                   "observed_demand_coverage": 1.0})
+    assert certo["entity_preserved"] is True
+
+    # sem título final cai para a phrase (compatível com chamadas antigas)
+    so_phrase = title_gates(
+        **base, families=[{"family_id": "dragon ball::idade", "intent": "idade",
+                           "impressions": 900, "entity": "dragon ball", "share": 1.0}],
+        coverage=coverage, entity="Dragon Ball",
+        candidate={"phrase": "Dragon Ball: idade", "observed_demand_coverage": 1.0})
+    assert so_phrase["entity_preserved"] is True
+
+
+def test_validador_do_gerador_rejeita_entidade_de_outra_franquia():
+    from hermes_seo_agent.report.title_generator import validate_candidate
+
+    ruim = validate_candidate("Dragon Quest: idade dos personagens",
+                              entity="Dragon Ball", evidence_intents=["idade"])
+    assert ruim["ok"] is False
+    assert "entidade_ausente" in ruim["violations"]
+
+    # token compartilhado NÃO basta (era o falso positivo do "any token")
+    parcial = validate_candidate("Dragon Quest: idade", entity="Dragon Ball",
+                                 evidence_intents=["idade"])
+    assert "entidade_ausente" in parcial["violations"]
+
+    bom = validate_candidate("Dragon Ball: idade", entity="Dragon Ball",
+                             evidence_intents=["idade"])
+    assert "entidade_ausente" not in bom["violations"]
+    assert bom["ok"] is True
+
+
 def test_historico_de_sucesso_e_calculado_por_candidato():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
             _row("gojo poderes", 500, 5, 6.0)]

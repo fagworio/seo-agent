@@ -19,8 +19,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Iterable, Sequence
 
-from .query_families import (INTENT_TITLE_PHRASES, expand_variants, fold,
-                             intent_phrases, tokens)
+from .query_families import (INTENT_TITLE_PHRASES, entity_preserved, expand_variants,
+                             fold, intent_phrases, tokens)
 from .title_engine import DEFAULT_MAX_LEN, MAX_SIGNIFICANT_TERMS
 
 MODE_DETERMINISTIC = "deterministic"
@@ -76,10 +76,10 @@ def validate_candidate(
         violations.append(f"acima_do_limite({len(clean)}>{max_len})")
 
     title_variants = expand_variants(tokens(clean))
-    if entity:
-        terms = [t for t in tokens(entity) if len(t) > 2]
-        if terms and not any(expand_variants([t]) & title_variants for t in terms):
-            violations.append("entidade_ausente")
+    if entity and not entity_preserved(entity, clean):
+        # piso único de cobertura de entidade: "dragon" em "Dragon Quest" NÃO
+        # preserva a entidade "Dragon Ball" (antes bastava qualquer token).
+        violations.append("entidade_ausente")
 
     # intenção sem evidência: palavras de intenção no título precisam estar no
     # conjunto de evidência (ou já existirem no título atual — nesse caso não é

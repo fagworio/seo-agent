@@ -363,7 +363,14 @@ def _significant_entity_terms(text: str) -> list[str]:
     return [t for t in tokens(text) if len(t) > 2 and not _is_stop(t)]
 
 
-def compatible_entity(entity: str, hint: str, *, min_overlap: float = 0.6) -> bool:
+# Piso ÚNICO de cobertura de entidade (uma só fonte para todo o motor): abaixo
+# dele a entidade é OUTRO assunto — merge de família, alinhamento semântico e
+# preservação de entidade usam exatamente este valor.
+ENTITY_OVERLAP_FLOOR = 0.6
+
+
+def compatible_entity(entity: str, hint: str,
+                      *, min_overlap: float = ENTITY_OVERLAP_FLOOR) -> bool:
     """A entidade da query pertence à entidade da PÁGINA? (overlap >= 60%)
 
     Sem essa resolução a mesma intenção se fragmenta (numa página sobre
@@ -383,12 +390,6 @@ def compatible_entity(entity: str, hint: str, *, min_overlap: float = 0.6) -> bo
     hint_variants = expand_variants(hint_terms)
     hits = sum(1 for t in terms if _token_hit(t, hint_variants))
     return (hits / min(len(terms), len(hint_terms))) >= float(min_overlap)
-
-
-# Piso único de cobertura de entidade (mesma régua em todo o motor): abaixo dele
-# a entidade é considerada OUTRO assunto — nem merge de família nem alinhamento
-# semântico podem tratar como a mesma coisa.
-ENTITY_OVERLAP_FLOOR = 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +746,26 @@ def entity_covered(entity: str, title: str, title_variants: set[str]) -> bool:
     if not terms:
         return True
     return any(_token_hit(t, title_variants) for t in terms)
+
+
+def entity_preserved(entity: str, text: str) -> bool:
+    """A entidade SOBREVIVEU no texto? (booleano, no piso único de cobertura)
+
+    Ponto único para os três lugares que precisam da mesma resposta — combinação,
+    validador do gerador e gate final do título:
+
+        Gojo        × "Satoru Gojo"      -> 1.0 -> True
+        Dragon Ball × "Dragon Ball Z"    -> 1.0 -> True
+        Dragon Ball × "Dragon Quest"     -> 0.5 -> False  (não é a mesma entidade)
+
+    `entity_covered()` aceita QUALQUER token em comum, o que dava over-merge de
+    franquia ("dragon" bastava). Sem entidade detectável (`score is None`) nada
+    é bloqueado: ausência de medição não é violação.
+    """
+    score = entity_alignment_score(entity, text)
+    if score is None:
+        return True
+    return float(score) >= ENTITY_OVERLAP_FLOOR
 
 
 def title_coverage(title: str, families: Sequence[dict[str, Any]], *,

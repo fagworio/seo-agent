@@ -21,7 +21,8 @@ from typing import Any, Callable, Iterable, Sequence
 
 from .query_families import (GENERIC_INTENT, INTENT_TITLE_PHRASES,
                              SEMANTIC_EQUIVALENTS, TRANSACTIONAL_INTENTS,
-                             INCOMPATIBLE_PAIRS, entity_covered, expand_variants,
+                             INCOMPATIBLE_PAIRS, entity_covered, entity_preserved,
+                             expand_variants,
                              title_coverage, tokens, INTENT_LABELS, intent_phrases)
 from .rankability_v2 import confidence_v2, headroom, query_rankability
 
@@ -163,9 +164,7 @@ def combination_candidates(families: Sequence[dict[str, Any]], *,
                               if t not in term_variants and t not in ("e",)],
             }
             # entidade perdida / comprimento inviável / não natural
-            if not reason and entity and not entity_covered(
-                    entity, candidate["phrase"],
-                    expand_variants(tokens(candidate["phrase"])) | term_variants):
+            if not reason and entity and not entity_preserved(entity, candidate["phrase"]):
                 reason = candidate["discard_reason"] = "entidade_perdida"
             if not reason and len(candidate["phrase"]) > max_len:
                 reason = candidate["discard_reason"] = "comprimento_inviavel"
@@ -545,6 +544,11 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
     verdict = str((baseline_verdict or {}).get("verdict") or "")
     current_coverage = coverage.get("observed_demand_coverage")
     candidate_coverage = (candidate or {}).get("observed_demand_coverage")
+    # O texto AVALIADO pelos gates é o TÍTULO FINAL quando já existe (o gerador
+    # pode reescrevê-lo): validar só a `phrase` abstrata deixava passar um
+    # título que perdeu a entidade ("Dragon Ball: idade" -> "Dragon Quest: idade").
+    candidate_text = str((candidate or {}).get("title")
+                         or (candidate or {}).get("phrase") or "")
     gain = None
     if candidate_coverage is not None and current_coverage is not None:
         gain = round(float(candidate_coverage) - float(current_coverage), 4)
@@ -555,9 +559,7 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
         "baseline_anomaly": verdict in {"below_p10", "below_comparable"},
         "title_coverage_gap": bool(gain is not None and gain >= float(min_coverage_gain)),
         "position_actionable": position is not None and float(position) <= float(max_position),
-        "entity_preserved": bool(candidate) and entity_covered(
-            entity, str((candidate or {}).get("phrase") or ""),
-            expand_variants(tokens(str((candidate or {}).get("phrase") or "")))) if entity else bool(candidate),
+        "entity_preserved": bool(candidate) and entity_preserved(entity, candidate_text),
         "evidence_confidence": float(confidence_score or 0.0) >= float(confidence_floor),
         # None = janela não informada (não é "alinhado" nem "desalinhado")
         "signal_window_aligned": (None if signal_window_aligned is None

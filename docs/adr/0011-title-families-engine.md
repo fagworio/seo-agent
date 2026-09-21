@@ -151,6 +151,14 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 | 2 | `checks.passed` podia ser `true` com `signal_window_aligned: false` (o gate não estava em `critical`) — decisão segura, explicabilidade contraditória | o gate entra em `critical` **quando informado** (`None` mantém o comportamento legado); `failed` passa a listar `signal_window_aligned` |
 | 3 | `query_title_alignment` usava `entity_covered` (booleano "algum token aparece"): uma query de "dragon ball" pontuava ~0.93 num título de "Dragon Quest" | novo `entity_alignment_score(entity, text)` = fração dos tokens significativos da entidade no texto (1/2 = 0.5 em Dragon Ball × Dragon Quest) e, abaixo do piso único `ENTITY_OVERLAP_FLOOR = 0.6` (mesma régua de `compatible_entity`), o alinhamento é limitado a 0.5 — assunto diferente não é "meio alinhado". O `entity_fit` da página usa a mesma régua |
 
+## Sexta rodada de correções (revisão do 199f29b)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | `entity_preserved` validava a `phrase` ABSTRATA, não o título final: um texto gerado que perdeu a entidade ("Dragon Ball: idade" → "Dragon Quest: idade") passava no gate | `title_gates` avalia `candidate["title"] or candidate["phrase"]` — o mesmo princípio já aplicado ao score (o objeto real, não a combinação) |
+| 2 | `entity_covered()` (booleano "QUALQUER token basta") continuava em uso no gate e no validador do gerador: "dragon" em "Dragon Quest" preservava a entidade "Dragon Ball" | novo `entity_preserved(entity, text)` booleano sobre o piso único (`entity_alignment_score >= ENTITY_OVERLAP_FLOOR`); usado nos três pontos: combinação (`entidade_perdida`), validador do gerador (`entidade_ausente`) e gate final. Entidade não detectável → não bloqueia |
+| 3 | `ENTITY_OVERLAP_FLOOR` existia, mas `compatible_entity()` repetia `0.6` literal | o piso é declarado antes de `compatible_entity` e vira o DEFAULT do parâmetro — uma só fonte para merge de família, alinhamento semântico e preservação |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto
