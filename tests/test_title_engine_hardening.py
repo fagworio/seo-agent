@@ -21,7 +21,8 @@ from hermes_seo_agent.report.baseline import (build_baseline,
 from hermes_seo_agent.report.interventions import (_feature_value, outcome_record,
                                                    predictability, title_calibration)
 from hermes_seo_agent.report.query_families import (build_families, demand_share,
-                                                    title_coverage, tokens)
+                                                    entity_preserved, title_coverage,
+                                                    tokens)
 from hermes_seo_agent.report.title_engine import (TITLE_WEIGHTS, combination_candidates,
                                                   decide_title, family_rankability,
                                                   finalize_titles, page_headroom,
@@ -879,6 +880,77 @@ def test_validador_do_gerador_rejeita_entidade_de_outra_franquia():
                              evidence_intents=["idade"])
     assert "entidade_ausente" not in bom["violations"]
     assert bom["ok"] is True
+
+
+def test_resolve_title_entity_prefere_a_canonica_e_mantem_os_fallbacks():
+    """Canônica PLAUSÍVEL > entidade do título > família dominante."""
+    from hermes_seo_agent.report.title_engine import resolve_title_entity
+
+    longa = "Onde encontrar cada tabuleta de pedra em Dredge"
+    familias = [{"entity_label": "Dredge", "entity": "dredge"}]
+    # o corpus resolveu a entidade E ela é compatível com as queries: vence
+    assert resolve_title_entity(longa, "Dredge", familias) == "Dredge"
+    # sem canônica, cai para a entidade da página
+    assert resolve_title_entity("Gojo", "", familias) == "Gojo"
+    # sem página e sem canônica, usa a família dominante
+    assert resolve_title_entity("", "", familias) == "Dredge"
+    assert resolve_title_entity("   ", None, familias) == "Dredge"
+    # nada disponível: string vazia (não inventa entidade)
+    assert resolve_title_entity("", "", []) == ""
+    # sem famílias observadas não há contradição: canônica com conteúdo serve
+    assert resolve_title_entity(longa, "Dredge", []) == "Dredge"
+
+
+def test_canonica_fragmentada_nao_vence_a_entidade_da_pagina():
+    """Casos REAIS: 'melhores', 'fica' e 'hiddleston' não são a entidade."""
+    from hermes_seo_agent.report.title_engine import resolve_title_entity
+
+    # "melhores": stopword -> sem token significativo
+    assert resolve_title_entity("Melhores arqueiros de anime", "melhores",
+                                [{"entity": "anime usam arco flecha"}]) == \
+        "Melhores arqueiros de anime"
+    # "fica" (verbo) e "hiddleston" (o ator) NÃO pertencem ao assunto das queries
+    assert resolve_title_entity("Animes de traicao em que o protagonista fica",
+                                "fica",
+                                [{"entity": "anime traido overpower"}]) == \
+        "Animes de traicao em que o protagonista fica"
+    assert resolve_title_entity("Quantos anos tem o Loki de Tom Hiddleston no MCU",
+                                "hiddleston",
+                                [{"entity": "loki"}, {"entity": "loki marvel"}]) == \
+        "Quantos anos tem o Loki de Tom Hiddleston no MCU"
+    # e a canônica que É o assunto das queries continua vencendo
+    assert resolve_title_entity("Celestiais da Marvel vs Galactus", "celestiais",
+                                [{"entity": "celestiais"}]) == "celestiais"
+
+
+def test_entidade_canonica_evita_candidato_inviavel():
+    """Título sem separador vira "entidade" gigante e mataria o candidato."""
+    from hermes_seo_agent.report.title_engine import resolve_title_entity
+
+    titulo = "Onde encontrar cada tabuleta de pedra em Dredge"
+    rows = [_row("tabuletas dredge", 200), _row("onde encontrar tabuletas dredge", 150)]
+    share, _shares, _coverage, relevant, _candidates = _evidence(rows, titulo)
+    page_entity = titulo  # é o que `entity_of()` devolve sem ":" no título
+
+    inviavel = combination_candidates(relevant, entity=page_entity, max_len=60,
+                                      title_terms=tokens(titulo))
+    assert not any(not c["discarded"] for c in inviavel), \
+        "com a pseudo-entidade nenhum candidato deveria ser viável"
+    assert {c["discard_reason"] for c in inviavel} & {"comprimento_inviavel",
+                                                      "entidade_perdida"}
+
+    entidade = resolve_title_entity(page_entity, "Dredge", relevant)
+    assert entidade == "Dredge"
+    viavel = combination_candidates(relevant, entity=entidade, max_len=60,
+                                    title_terms=tokens(titulo))
+    motivos = {c["discard_reason"] for c in viavel if c["discarded"]}
+    # com a entidade canônica os descartes causados pela pseudo-entidade somem:
+    # sobra no máximo a de-duplicação de termos já presentes no título atual
+    # (`sem_termo_novo`), que é regra independente e legítima.
+    assert not motivos & {"comprimento_inviavel", "entidade_perdida"}
+    assert motivos <= {"sem_termo_novo"}
+    assert all(c["phrase"].startswith("Dredge:") for c in viavel)
+    assert all(entity_preserved(entidade, c["phrase"]) for c in viavel)
 
 
 def test_historico_de_sucesso_e_calculado_por_candidato():

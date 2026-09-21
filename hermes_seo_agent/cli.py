@@ -2211,7 +2211,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     from .report.title_engine import (combination_candidates, decide_title,
                                       family_rankability, family_trends,
                                       finalize_titles, page_headroom,
-                                      relevant_families)
+                                      relevant_families, resolve_title_entity)
     from .report.title_generator import generate_candidates
     from .tools.title_opportunities import empirical_title_case, entity_of, strategic_title
 
@@ -2390,15 +2390,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
 
             # A entidade indexada da página é resolvida ANTES das famílias: ela
             # agrupa variações da mesma intenção que a digitação fragmentaria.
-            # Preferimos a entidade CANÔNICA do corpus quando ela existe.
+            # A entidade CANÔNICA do corpus tem PRECEDÊNCIA (ver resolve_title_entity).
             page_entity = entity_of(current)
-            hint = page_entity
+            canonical_entity = ""
             try:
-                canonical = resolve_cluster_entity(store, page_entity or url)
-                if canonical:
-                    hint = canonical
+                canonical_entity = str(
+                    resolve_cluster_entity(store, page_entity or url) or "")
             except Exception:  # noqa: BLE001 - corpus ausente nunca quebra
-                hint = page_entity
+                canonical_entity = ""
+            hint = canonical_entity or page_entity
             families = build_families(qrows, entity_hint=hint)
             demand = demand_share(families, url=url,
                                   window_start=start.isoformat(),
@@ -2407,7 +2407,13 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             shares = {f["family"]: f["share"] for f in demand["families"]}
             coverage = title_coverage(current, demand["families"], shares=shares)
             relevant = relevant_families(demand, top_n=top_n)
-            entity = page_entity or hint or (relevant[0]["entity_label"] if relevant else "")
+            entity = resolve_title_entity(page_entity, canonical_entity,
+                                          demand["families"])
+            entity_source = (
+                "canonical"
+                if (canonical_entity and entity == canonical_entity.strip())
+                else "page_entity" if (page_entity and entity == page_entity.strip())
+                else "family")
             positions = [float(r["position"]) for r in qrows
                          if r.get("position") is not None]
             dist = _qdist(positions)
@@ -2514,6 +2520,16 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
             contract["topic_authority"] = topic_score
+            # Auditabilidade da escolha de entidade: canônica (corpus) vence a
+            # heurística do título, que devolve o título inteiro sem separador.
+            contract["entity"] = {
+                "used": entity,
+                "page_entity": page_entity,
+                "canonical_entity": canonical_entity or None,
+                "source": entity_source,
+                "canonical_plausible": (canonical_entity if entity_source == "canonical"
+                                        else None),
+            }
             contract["signal_window"] = {
                 **signal_window,
                 "families_with_measured_semantics": semantic_measured}

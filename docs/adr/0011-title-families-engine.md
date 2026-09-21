@@ -159,6 +159,15 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 | 2 | `entity_covered()` (booleano "QUALQUER token basta") continuava em uso no gate e no validador do gerador: "dragon" em "Dragon Quest" preservava a entidade "Dragon Ball" | novo `entity_preserved(entity, text)` booleano sobre o piso único (`entity_alignment_score >= ENTITY_OVERLAP_FLOOR`); usado nos três pontos: combinação (`entidade_perdida`), validador do gerador (`entidade_ausente`) e gate final. Entidade não detectável → não bloqueia |
 | 3 | `ENTITY_OVERLAP_FLOOR` existia, mas `compatible_entity()` repetia `0.6` literal | o piso é declarado antes de `compatible_entity` e vira o DEFAULT do parâmetro — uma só fonte para merge de família, alinhamento semântico e preservação |
 
+## Sétima rodada de correções (revisão do e5d80e3)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | A entidade usada para GERAR e VALIDAR o título era `page_entity` (heurística do título), enquanto as FAMÍLIAS já usavam a canônica — contradizendo o comentário e deixando o gate de preservação validando uma pseudo-entidade | `resolve_title_entity(page_entity, canonical_entity, families)`: ordem canônica -> entidade da página -> família dominante; o contrato registra `entity.source` (canonical/page_entity/family) para auditoria |
+| 2 | **Correção de rumo com dados reais**: preferir a canônica INCONDICIONALMENTE piorou 4 de 5 títulos. `resolve_cluster_entity()` devolve fragmentos: `melhores` (stopword), `fica` (verbo), `hiddleston` (o ator, não o assunto da query `loki idade`) — e os títulos saíram "fica: personagens", "hiddleston: idade" | `_plausible_canonical_entity()`: (a) precisa ter token significativo (mata `melhores`); (b) precisa pertencer ao assunto das queries, compatível (≥ piso de entidade) com a entidade de ALGUMA família observada (mata `fica` e `hiddleston`). Sem famílias não há contradição e a canônica é aceita. `dredge` e `celestiais` seguem vencendo |
+
+Limitação conhecida e registrada para o shadow: quando a canônica aceita é um token único e minúsculo, o título perde descritividade ("celestiais: comparação" no lugar de "Celestiais da Marvel vs Galactus: comparação"). Discriminar isso exige uma heurística de forma da entidade (frase nominal × pergunta), que é justamente o tipo de regra nova que o congelamento pede para adiar.
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

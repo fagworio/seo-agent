@@ -21,8 +21,8 @@ from typing import Any, Callable, Iterable, Sequence
 
 from .query_families import (GENERIC_INTENT, INTENT_TITLE_PHRASES,
                              SEMANTIC_EQUIVALENTS, TRANSACTIONAL_INTENTS,
-                             INCOMPATIBLE_PAIRS, entity_covered, entity_preserved,
-                             expand_variants,
+                             INCOMPATIBLE_PAIRS, compatible_entity, entity_covered,
+                             entity_preserved, expand_variants, significant_tokens,
                              title_coverage, tokens, INTENT_LABELS, intent_phrases)
 from .rankability_v2 import confidence_v2, headroom, query_rankability
 
@@ -69,6 +69,80 @@ def _equivalent(a: str, b: str) -> bool:
 
 def _incompatible(a: str, b: str) -> bool:
     return any({a, b} <= pair for pair in INCOMPATIBLE_PAIRS)
+
+
+def _dominant_family_entity(families: Sequence[dict[str, Any]] | None,
+                            *, prefer_label: bool = False) -> str:
+    """Entidade da família dominante (a lista já vem ordenada por impressões).
+
+    ``prefer_label`` devolve o rótulo legível (o que a query escreveu) para USO
+    EM TÍTULO; sem ele, a entidade normalizada, que é a forma usada nas
+    comparações (`compatible_entity`).
+    """
+    keys = ("entity_label", "entity") if prefer_label else ("entity", "entity_label")
+    for family in families or ():
+        for key in keys:
+            text = str(family.get(key) or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _plausible_canonical_entity(canonical: str,
+                                families: Sequence[dict[str, Any]] | None) -> bool:
+    """A entidade devolvida pelo corpus é utilizável como ENTIDADE do título?
+
+    `resolve_cluster_entity()` é heurístico e no corpus real devolve fragmentos:
+    "melhores" (stopword), "fica" (verbo), "hiddleston" (o ATOR, não o assunto da
+    query "loki idade"). Preferir isso de forma incondicional gerou títulos sem
+    sentido ("fica: personagens", "hiddleston: idade") em 4 de 5 páginas reais.
+
+    Duas checagens, ambas reaproveitando conceitos existentes (sem limiar novo):
+
+    1. precisa ter token significativo (>2 chars, não stopword) — mata "melhores";
+    2. precisa pertencer ao assunto das queries observadas: compatível (>= piso
+       de entidade) com a entidade de ALGUMA família observada — mata "fica" e
+       "hiddleston". Qualquer família, não só a dominante: a evidência de que a
+       canônica pertence ao assunto pode estar numa família menor.
+
+    Sem famílias observadas não há contradição: a canônica é aceita.
+    """
+    text = str(canonical or "").strip()
+    if not text:
+        return False
+    if not significant_tokens(text):
+        return False
+    observed = [str(family.get("entity") or family.get("entity_label") or "").strip()
+                for family in (families or ())]
+    observed = [entity for entity in observed if entity]
+    if observed and not any(compatible_entity(text, entity) for entity in observed):
+        return False
+    return True
+
+
+def resolve_title_entity(page_entity: str = "", canonical_entity: str = "",
+                         families: Sequence[dict[str, Any]] | None = None) -> str:
+    """Entidade usada para GERAR e VALIDAR o título (precedência explícita).
+
+    A entidade CANÔNICA do corpus tem precedência sobre a heurística do título —
+    `entity_of()` devolve o título inteiro quando não há separador (ex.: "Onde
+    encontrar cada tabuleta de pedra em Dredge"), e o gate de preservação
+    exigindo 60% dessa pseudo-entidade descartaria candidatos legítimos
+    (`entidade_perdida` / `comprimento_inviavel`).
+
+    A precedência só vale para uma canônica PLAUSÍVEL (ver
+    `_plausible_canonical_entity`): o resolvedor do corpus devolve fragmentos com
+    frequência, e usá-los cegamente produzia títulos piores que a própria
+    heurística do título.
+
+    Ordem: canônica plausível -> entidade da página -> família dominante.
+    """
+    if _plausible_canonical_entity(canonical_entity, families):
+        return str(canonical_entity).strip()
+    page_text = str(page_entity or "").strip()
+    if page_text:
+        return page_text
+    return _dominant_family_entity(families, prefer_label=True)
 
 
 def relevant_families(share: dict[str, Any], *, top_n: int = TOP_FAMILIES,
