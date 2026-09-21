@@ -526,11 +526,18 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
                 max_position: float = DEFAULT_MAX_POSITION,
                 confidence_floor: float = EVIDENCE_CONFIDENCE_FLOOR,
                 min_coverage_gain: float = MIN_COVERAGE_GAIN,
+                signal_window_aligned: bool | None = None,
                 ) -> dict[str, Any]:
     """Gates independentes do `review_title` (FASE 8).
 
     A ausência de dado NUNCA é lida como zero: gates que dependem de dado
     ausente ficam False com o motivo declarado (`notes`).
+
+    ``signal_window_aligned``: a janela dos sinais persistidos (rankability,
+    cluster) é a MESMA janela das páginas/famílias/baseline? Uma decisão = uma
+    janela; quando não é, a evidência é temporalmente heterogênea e o gate
+    bloqueia o `review_title` (o chamador rebaixa para `investigate_cause`).
+    ``None`` = não informado (sem gate: compatível com chamadas antigas).
     """
     position = page.get("position")
     impressions = float(page.get("impressions") or 0)
@@ -552,6 +559,9 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
             entity, str((candidate or {}).get("phrase") or ""),
             expand_variants(tokens(str((candidate or {}).get("phrase") or "")))) if entity else bool(candidate),
         "evidence_confidence": float(confidence_score or 0.0) >= float(confidence_floor),
+        # None = janela não informada (não é "alinhado" nem "desalinhado")
+        "signal_window_aligned": (None if signal_window_aligned is None
+                                  else bool(signal_window_aligned)),
     }
     ga4_status = ga4_evidence_status(ga4)
     notes: list[str] = []
@@ -567,6 +577,10 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
         notes.append("GA4 ausente: não bloqueia, mas rebaixa a confiança")
     if ga4_status["status"] == GA4_INSUFFICIENT:
         notes.append("GA4 com amostra insuficiente: não bloqueia, confiança não sobe")
+    if signal_window_aligned is False:
+        notes.append("janela dos sinais (rankability/cluster) difere da janela da "
+                     "decisão: evidência temporalmente heterogênea — investigar, "
+                     "não reescrever título")
     gates["_context"] = {
         "coverage_gain": gain,
         "current_coverage": current_coverage,
@@ -623,6 +637,7 @@ def decide_title(
     observed_impressions: float | None = None,
     corpus_available: bool | None = None,
     semantic_evidence: float | None = None,
+    signal_window_aligned: bool | None = None,
     weights: dict[str, float] | None = None,
     model_version: str = MODEL_VERSION,
     weights_version: int = 0,
@@ -715,7 +730,8 @@ def decide_title(
         ga4=ga4, confidence_score=evidence_conf, entity=str(page.get("entity") or ""),
         min_impressions=min_impressions,
         min_family_impressions=min_family_impressions, max_position=max_position,
-        confidence_floor=confidence_floor, min_coverage_gain=min_coverage_gain)
+        confidence_floor=confidence_floor, min_coverage_gain=min_coverage_gain,
+        signal_window_aligned=signal_window_aligned)
 
     # ---- decisão (ordem = gravidade da lacuna) ---------------------------
     if not gates["page_impressions_sufficient"] or not gates["query_family_demand_sufficient"]:
@@ -731,6 +747,11 @@ def decide_title(
     elif not gates["evidence_confidence"]:
         decision = "investigate_cause"
     elif ga4_status["status"] == GA4_AVAILABLE and ga4_status.get("post_click_healthy") is False:
+        decision = "investigate_cause"
+    elif signal_window_aligned is False:
+        # A cadeia passaria para review_title, mas a evidência de rankability
+        # veio de OUTRA janela: os dados existem, só não estão alinhados no tempo
+        # -> investigar, nunca publicar título com essa mistura.
         decision = "investigate_cause"
     elif best is None or float(best["title_score"]["score"]) < float(min_title_score):
         decision = "no_title_change"
@@ -751,6 +772,9 @@ def decide_title(
     # não pode ser `high` (não bloqueia; o share continua sendo o medido).
     if (observation_ratio is not None and float(observation_ratio) < 0.2
             and label == "high"):
+        label = "medium"
+    # Janela desalinhada = evidência temporalmente heterogênea: nunca `high`.
+    if signal_window_aligned is False and label == "high":
         label = "medium"
 
     contract = {
@@ -874,6 +898,11 @@ def explain_decision(contract: dict[str, Any]) -> list[str]:
     if observation.get("query_observation_ratio") is not None:
         lines.append(f"As queries observadas explicam {float(observation['query_observation_ratio'])*100:.0f}% "
                      f"das impressões da página ({observation.get('status')}).")
+    checks = contract.get("checks") or {}
+    if checks.get("signal_window_aligned") is False:
+        lines.append("A janela dos sinais de rankability/cluster difere da janela da "
+                     "decisão (uma decisão = uma janela): evidência temporalmente "
+                     "heterogênea — investigar, não reescrever título.")
     headroom_detail = contract.get("headroom") or {}
     if headroom_detail.get("status") in {"unknown", "degenerate"}:
         lines.append(f"Headroom {headroom_detail.get('status')}: "

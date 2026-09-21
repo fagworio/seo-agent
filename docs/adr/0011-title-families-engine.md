@@ -135,6 +135,14 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 | 3 | `semantic["title_fit"] = 0.9 if best.get("title")` media apenas "o documento tem título" | `query_title_alignment(query, doc_title)` (FASE 4): entidade 40% + intenção 40% + tokens significativos 20%, com componentes não medíveis fora do cálculo; sem título → `None` (desconhecido) |
 | — | `build_family_query_signals` dependia da ordem das queries vindas do chamador | `build_families` expõe `top_queries` (ordenado por impressões) e `query_impressions`, então o top-3 é estável independentemente do chamador |
 
+## Quarta rodada de correções (revisão do 938473d)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | `signal_window.aligned=false` era só informativo: a decisão podia sair `review_title`/`high` com rankability/cluster de OUTRA janela | gate novo `signal_window_aligned` (`None` = não informado): a CLI passa `signal_window["aligned"]`; se `false` a decisão cai para `investigate_cause` (dados existem, só não estão alinhados no tempo) e a confiança nunca é `high`, com nota no motivo |
+| 2 | **Semantic fit podia vir de OUTRA página**: `hybrid_search(...)[0]` escolhia o melhor documento de TODO o corpus | `build_query_semantic_signals(storage, query, target_url=...)`: medição determinística no corpus DA PÁGINA (título, h1, headings, texto); URL fora do corpus → campos `None` (`target_url_unavailable`), sem fallback para outra página; o match tolera host diferente (GSC `www.` × corpus `prod.`) pelo caminho normalizado (`inventory.reconcile.normalize_url`), registrado em `semantic_match`/`semantic_url` |
+| 3 | SQL redundante: `build_family_query_signals` chamava `build_query_signals`, que refazia `expand_query()` + `SELECT` por variante só para descartar a tração | o caminho da família usa apenas `build_query_semantic_signals` (nenhuma consulta a `query_pages`): tração vem do agregado da família; teste com conexão instrumentada garante que só tabelas `corpus_*` são consultadas |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

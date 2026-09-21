@@ -647,6 +647,15 @@ def _intent_covered(label: str, title: str, title_variants: set[str]) -> bool:
     return False
 
 
+def significant_tokens(text: Any) -> list[str]:
+    """Tokens de CONTEÚDO (sem stopwords/intenção genérica).
+
+    Base para medir cobertura de texto: "quantos anos tem gojo" -> ["gojo"]
+    (+ "anos" no vocabulário de intenção), sem as palavras de ligação.
+    """
+    return [t for t in tokens(text) if not _is_stop(t)]
+
+
 def query_title_alignment(query: str, doc_title: str) -> float | None:
     """Alinhamento determinístico ENTRE a query e o título de um documento.
 

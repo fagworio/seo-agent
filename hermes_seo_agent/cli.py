@@ -2433,7 +2433,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 if not args.no_deep_signals:
                     try:
                         real_signals = build_family_query_signals(
-                            store, cluster_signals, family,
+                            store, cluster_signals, family, target_url=url,
                             window_start=signal_ws, window_end=signal_we)
                         if any(v is not None
                                for v in (real_signals.get("semantic") or {}).values()):
@@ -2508,6 +2508,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 corpus_available=bool(cluster_signals),
                 semantic_evidence=min(semantic_measured / max(len(relevant), 1), 1.0)
                 if relevant else 0.0,
+                # gate de janela: rankability/cluster só valem se forem da MESMA
+                # janela das páginas/famílias/baseline da decisão
+                signal_window_aligned=bool(signal_window.get("aligned")),
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
             contract["topic_authority"] = topic_score

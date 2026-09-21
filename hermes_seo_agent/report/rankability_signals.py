@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..inventory.reconcile import normalize_url
 from ..report.semantic import expand_query
 from ..report.topics import cluster_coverage, canonical_entity, normalize_entity
 
@@ -246,9 +247,127 @@ def build_cluster_signals(storage: Any, entity: str, *, window_start: str | None
     }, cov
 
 
+_SEMANTIC_KEYS = ("entity_fit", "title_fit", "h1_fit", "heading_fit", "body_fit",
+                  "question_fit", "related_entity_fit")
+_QUESTION_LEAD = ("quem", "qual", "quais", "como", "quando", "onde", "quantos",
+                  "quantas", "quanto", "porque", "por")
+
+
+def _is_question_query(query: str) -> bool:
+    text = str(query or "").strip().lower()
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    return text.split()[0] in _QUESTION_LEAD
+
+
+def _corpus_rows_for_url(storage: Any, url: str) -> tuple[Any, str, str]:
+    """Documento do corpus para a URL, tolerando host diferente (www × prod).
+
+    O corpus é indexado no host do WordPress/`prod.` enquanto o GSC devolve o
+    host público `www.`; o projeto compara superfícies por PATH
+    (`inventory.reconcile.normalize_url`). Ordem: URL exata primeiro; se não
+    existir, o MESMO caminho em outro host (determinístico: ordena por url).
+    Retorna (doc_row, url_usada, tipo_de_match).
+    """
+    doc = storage.conn.execute(
+        "SELECT url, title, seo_title, h1, body_text FROM corpus_documents "
+        "WHERE url = ?", (url,)).fetchone()
+    used = url
+    kind = "exact"
+    if doc is None:
+        # normalizado termina em "/" (o mesmo critério de `normalize_url`):
+        # casa o sufixo do caminho SEM aceitar slug mais longo ("/x/" não casa
+        # "/x/y/"), com e sem barra final no corpus.
+        path = normalize_url(url)
+        if path and path != "/":
+            escaped = path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            row = storage.conn.execute(
+                "SELECT url, title, seo_title, h1, body_text FROM corpus_documents "
+                "WHERE url LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' "
+                "ORDER BY url LIMIT 1",
+                (f"%{escaped}", f"%{escaped.rstrip('/')}")).fetchone()
+            if row is not None:
+                doc, used, kind = row, str(row[0]), "path_match"
+    return doc, used, kind
+
+
+def build_query_semantic_signals(storage: Any, query: str, *,
+                                 target_url: str | None = None) -> dict[str, Any]:
+    """Sinais semânticos (R4) MEDIDOS NA PÁGINA-ALVO — não em outra página.
+
+    Antes isto vinha de ``hybrid_search(...)[0]``: o melhor documento de TODO o
+    corpus. Para a página A, o fit semântico podia ser medido na página B, o que
+    responde "existe algum documento do site que combina com a intenção?" e não
+    "esta página responde à intenção?". Além disso duplicava autoridade, que já é
+    medida por ``topic_authority``/``related_authority`` (camada de cluster).
+
+    Aqui a medição é determinística sobre o corpus DA URL: título, h1, headings e
+    texto. Se a URL não estiver no corpus, os campos ficam ``None``
+    (DESCONHECIDO) — nunca substituídos por outra página.
+    """
+    from ..report.query_families import (detect_entity, entity_covered,
+                                         expand_variants, query_title_alignment,
+                                         significant_tokens, tokens, _token_hit)
+    semantic: dict[str, Any] = {key: None for key in _SEMANTIC_KEYS}
+    url = str(target_url or "").strip()
+    if not url:
+        return {"semantic": semantic, "semantic_scope": "no_target",
+                "semantic_note": "sem URL alvo: semântica da página não medida"}
+    doc, corpus_url, match_kind = _corpus_rows_for_url(storage, url)
+    sections = storage.conn.execute(
+        "SELECT heading, text FROM corpus_sections WHERE url = ? ORDER BY position",
+        (corpus_url,)).fetchall()
+    if doc is None and not sections:
+        return {"semantic": semantic, "semantic_scope": "target_url_unavailable",
+                "semantic_note": ("URL alvo ausente do corpus: evidência semântica "
+                                  "DESCONHECIDA (sem fallback para outra página)")}
+    title = str((doc[1] or doc[2] or "") if doc else "")
+    h1 = str((doc[3] or "") if doc else "")
+    headings = [str(heading) for (heading, _text) in sections if heading]
+    texts = [str(text) for (_heading, text) in sections if text]
+    body = " ".join([str(doc[4] or "") if doc else "", *texts]).strip()
+    title_variants = expand_variants(tokens(f"{title} {h1}"))
+    body_variants = expand_variants(tokens(body))
+
+    entity = detect_entity(query)
+    if entity:
+        semantic["entity_fit"] = 1.0 if (entity_covered(entity, f"{title} {h1}",
+                                                        title_variants)
+                                         or entity_covered(entity, body,
+                                                           body_variants)) else 0.0
+    semantic["title_fit"] = query_title_alignment(query, title)
+    semantic["h1_fit"] = query_title_alignment(query, h1)
+    if headings:
+        alignments = [query_title_alignment(query, heading) for heading in headings]
+        semantic["heading_fit"] = round(max([a for a in alignments if a is not None]
+                                            or [0.0]), 4)
+    content_tokens = significant_tokens(query)
+    if body and content_tokens:
+        covered = sum(1 for token in content_tokens if _token_hit(token, body_variants))
+        semantic["body_fit"] = round(covered / len(content_tokens), 4)
+    if _is_question_query(query):
+        # a página responde a uma pergunta? heading interrogativo BEM alinhado
+        # (0.6: entidade sozinha não basta — "Quais são os poderes de Gojo?" não
+        # responde "quantos anos tem gojo")
+        semantic["question_fit"] = 1.0 if any(
+            str(heading).strip().endswith("?") and (query_title_alignment(query, heading) or 0) >= 0.6
+            for heading in headings) else 0.0
+    return {
+        "semantic": semantic,
+        "semantic_scope": "target_url",
+        "semantic_url": corpus_url,
+        "semantic_match": match_kind,
+        "semantic_note": (f"medido na página-alvo ({len(headings)} seções, "
+                          f"{len(body)} chars de texto, match={match_kind})"),
+    }
+
+
 def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: str,
                         *, window_start: str | None = None,
-                        window_end: str | None = None) -> dict[str, Any]:
+                        window_end: str | None = None,
+                        target_url: str | None = None) -> dict[str, Any]:
     """Sinais da query (R1/R4): fit semântico, tração, facilidade observada.
 
     * Sinais semânticos NÃO medidos ficam ``None`` (desconhecido) — antes
@@ -261,31 +380,9 @@ def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: st
     ent = canonical_entity(query)
     cluster_signals.setdefault("entity", ent)
 
-    # fit semântico via hybrid_search (M7) -> melhor doc do cluster
-    semantic: dict[str, Any] = {"entity_fit": None, "title_fit": None, "h1_fit": None,
-                                "heading_fit": None, "body_fit": None,
-                                "question_fit": None, "related_entity_fit": None}
-    try:
-        from ..report.semantic import hybrid_search
-        hits = hybrid_search(storage, query, limit=10)
-        best = hits[0] if hits else None
-        if best:
-            hit = best.get("entity_hit")
-            semantic["entity_fit"] = None if hit is None else (1.0 if hit else 0.0)
-            # `or 0.0` transformava "não medido" em "medi e deu zero" — mesma
-            # armadilha da rodada anterior, agora também nos campos do corpus.
-            score = best.get("semantic_score")
-            semantic["body_fit"] = None if score is None else float(score)
-            # title_fit = ALINHAMENTO query <-> título do doc (contrato da FASE 4).
-            # Antes era `0.9 if best.get("title")`, que media apenas "tem título".
-            from ..report.query_families import query_title_alignment
-            semantic["title_fit"] = query_title_alignment(
-                query, str(best.get("title") or ""))
-            section_hits = best.get("section_hits")
-            semantic["heading_fit"] = (None if section_hits is None
-                                       else min(float(section_hits) * 0.3, 0.9))
-    except Exception:
-        pass
+    # fit semântico MEDIDO NA PÁGINA-ALVO (R4) — nunca em outra página do corpus
+    measured = build_query_semantic_signals(storage, query, target_url=target_url)
+    semantic = dict(measured["semantic"])
 
     # tração: query_pages da query (e variantes canônicas) no cluster, na janela
     impressions = clicks = 0.0
@@ -315,6 +412,8 @@ def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: st
         "clicks": clicks,
         "position": position,
         "semantic": semantic,
+        "semantic_scope": measured.get("semantic_scope"),
+        "semantic_note": measured.get("semantic_note"),
         "topic_authority": None,  # preenchido pelo chamador se quiser
         "related_top10_share": top10_share,
     }
@@ -324,6 +423,7 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
                                family: dict[str, Any], *,
                                window_start: str | None = None,
                                window_end: str | None = None,
+                               target_url: str | None = None,
                                max_queries: int = 3) -> dict[str, Any]:
     """Sinais da FAMÍLIA: tração do GSC REAL + semântica ponderada por query.
 
@@ -342,23 +442,42 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
     top = list(family.get("top_queries") or family.get("queries") or [])
     per_query = dict(family.get("query_impressions") or {})
     queries = top[: max(int(max_queries or 1), 1)]
+    # Só a SEMÂNTICA por query: nenhuma consulta GSC por variante aqui — a tração
+    # já está agregada na família (era a fonte de SQL redundante do family engine).
     collected: list[tuple[str, float, dict[str, Any]]] = []
+    scope = "no_target"
+    note = ""
+    corpus_url = ""
+    match_kind = ""
     for query in queries:
-        signals = build_query_signals(storage, dict(cluster_signals), str(query),
-                                      window_start=window_start, window_end=window_end)
+        measured = build_query_semantic_signals(storage, str(query),
+                                                target_url=target_url)
+        if measured.get("semantic_scope"):
+            scope = measured["semantic_scope"]
+        if measured.get("semantic_note"):
+            note = measured["semantic_note"]
+        if measured.get("semantic_url"):
+            corpus_url = measured["semantic_url"]
+        if measured.get("semantic_match"):
+            match_kind = measured["semantic_match"]
         weight = float(per_query.get(str(query)) or 0) or 1.0
-        collected.append((str(query), weight, signals))
+        collected.append((str(query), weight, measured))
     if not collected:
-        return build_query_signals(storage, dict(cluster_signals), "",
-                                   window_start=window_start, window_end=window_end)
+        return {"keyword": family.get("family_id") or family.get("family"),
+                "semantic": {key: None for key in _SEMANTIC_KEYS},
+                "semantic_scope": "no_queries", "semantic_note": "família sem queries",
+                "topic_authority": None, "related_top10_share": 0.0,
+                "traction_source": "family (agregado real, sem expansão)",
+                "impressions": family.get("impressions"),
+                "clicks": family.get("clicks"),
+                "position": family.get("weighted_position")}
 
-    keys = ("entity_fit", "title_fit", "h1_fit", "heading_fit", "body_fit",
-            "question_fit", "related_entity_fit")
+    keys = _SEMANTIC_KEYS
     semantic: dict[str, Any] = {}
     for key in keys:
         total = weight_sum = 0.0
-        for _query, weight, signals in collected:
-            value = (signals.get("semantic") or {}).get(key)
+        for _query, weight, measured in collected:
+            value = (measured.get("semantic") or {}).get(key)
             if value is None:
                 continue
             total += float(value) * weight
@@ -382,6 +501,10 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
                    sum(float(s.get("clicks") or 0) for _q, _w, s in collected)),
         "position": position,
         "semantic": semantic,
+        "semantic_scope": scope,
+        "semantic_url": corpus_url,
+        "semantic_match": match_kind,
+        "semantic_note": note,
         "topic_authority": None,
         "related_top10_share": (collected[0][2] or {}).get("related_top10_share", 0.0),
         "semantic_queries": [query for query, _w, _s in collected],

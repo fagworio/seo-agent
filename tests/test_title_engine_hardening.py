@@ -368,35 +368,32 @@ def test_tracao_da_query_nao_soma_janelas_diferentes(tmp_path):
 def test_sinais_da_familia_ponderam_por_impressoes(monkeypatch):
     import hermes_seo_agent.report.rankability_signals as rs
 
-    def _fake(storage, cluster_signals, query, *, window_start=None, window_end=None):
+    def _fake_semantic(storage, query, *, target_url=None):
         principal = query == "gojo idade"
-        return {"keyword": query,
-                "semantic": {"body_fit": 1.0 if principal else 0.0,
+        return {"semantic": {"body_fit": 1.0 if principal else 0.0,
                              "h1_fit": None, "heading_fit": None,
                              "entity_fit": 1.0 if principal else None,
                              "title_fit": None, "question_fit": None,
                              "related_entity_fit": None},
-                # tração INFLADA pela expansão de variantes (como o LIKE fazia)
-                "impressions": 1300.0, "clicks": 9.0,
-                "position": 4.0 if principal else 9.0,
-                "topic_authority": None, "related_top10_share": 0.5}
+                "semantic_scope": "target_url", "semantic_note": "stub"}
 
-    monkeypatch.setattr(rs, "build_query_signals", _fake)
+    monkeypatch.setattr(rs, "build_query_semantic_signals", _fake_semantic)
     family = {"family_id": "gojo::idade",
               "queries": ["gojo idade", "idade do gojo"],
               "top_queries": ["gojo idade", "idade do gojo"],
               "query_impressions": {"gojo idade": 900.0, "idade do gojo": 100.0},
               "impressions": 1000.0, "clicks": 6.0, "weighted_position": 5.0}
-    out = rs.build_family_query_signals(None, {}, family)
+    out = rs.build_family_query_signals(None, {}, family, target_url="https://x/a")
     # média semântica ponderada pela impressão REAL de cada query
     assert out["semantic"]["body_fit"] == 0.9
     assert out["semantic"]["entity_fit"] == 1.0          # só a principal mediu
     assert out["semantic"]["h1_fit"] is None              # ninguém mediu -> None
-    # TRAÇÃO = GSC real da família (1.000), não a soma das variantes (2.600)
+    # TRAÇÃO = GSC real da família (1.000), sem recontar variantes
     assert out["impressions"] == 1000.0 and out["clicks"] == 6.0
     assert out["position"] == 5.0
     assert out["traction_source"].startswith("family")
     assert out["semantic_queries"] == ["gojo idade", "idade do gojo"]
+    assert out["semantic_scope"] == "target_url"
 
 
 # --- 3ª rodada: janela do RUN, alinhamento real e sem dupla contagem -------
@@ -448,31 +445,27 @@ def test_query_title_alignment_mede_alinhamento_de_verdade():
     assert query_title_alignment("", "Gojo: idade") is None
 
 
-def test_title_fit_usa_alinhamento_e_nao_existencia_de_titulo(monkeypatch):
-    import hermes_seo_agent.report.semantic as sem
-    from hermes_seo_agent.report.rankability_signals import build_query_signals
+def test_title_fit_vem_do_alinhamento_e_nao_da_existencia_de_titulo(tmp_path):
+    """Regressão do bug antigo: `0.9 if best.get("title")` virava 0.9 sempre."""
+    from hermes_seo_agent.report.rankability_signals import build_query_semantic_signals
 
-    def _hits(title):
-        def _fake(storage, query, limit=10):
-            return [{"title": title, "entity_hit": True, "semantic_score": 0.5,
-                     "section_hits": 1}]
-        return _fake
-
-    monkeypatch.setattr(sem, "hybrid_search", _hits("Os poderes mais fortes de Gojo"))
-    ruim = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
-    monkeypatch.setattr(sem, "hybrid_search",
-                        _hits("Quantos anos tem Gojo: idade no anime"))
-    bom = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
-    assert ruim["semantic"]["title_fit"] < 0.6      # entidade bate, intenção não
-    assert bom["semantic"]["title_fit"] > 0.8       # entidade + intenção + tokens
-    assert bom["semantic"]["title_fit"] - ruim["semantic"]["title_fit"] > 0.25
-
-    # documento sem título: desconhecido, nunca 0.9
-    monkeypatch.setattr(sem, "hybrid_search",
-                        lambda storage, query, limit=10: [{"entity_hit": True,
-                                                           "semantic_score": 0.5}])
-    sem_titulo = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
-    assert sem_titulo["semantic"]["title_fit"] is None
+    storage = Storage(str(tmp_path / "tf.db"))
+    storage.conn.execute(
+        "INSERT INTO corpus_documents (url, title, h1, body_text, built_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("https://x/a", "Os poderes mais fortes de Gojo", "Poderes de Gojo",
+         "poderes e tecnicas", "2026-09-21"))
+    storage.conn.commit()
+    medida = build_query_semantic_signals(storage, "quantos anos tem gojo",
+                                         target_url="https://x/a")
+    # tem título, mas NÃO responde à query de idade: nada de 0.9 automático
+    assert medida["semantic"]["title_fit"] is not None
+    assert medida["semantic"]["title_fit"] < 0.6
+    # documento fora do corpus: sem título medível -> None (desconhecido)
+    outro = build_query_semantic_signals(storage, "quantos anos tem gojo",
+                                         target_url="https://x/fora")
+    assert outro["semantic"]["title_fit"] is None
+    storage.close()
 
 
 def test_familia_expoe_top_queries_e_impressoes_por_query():
@@ -592,6 +585,139 @@ def test_confianca_usa_corpus_e_semantica_REAIS():
             > sem_corpus["confidence_detail"]["score"])
     assert sem_corpus["confidence_detail"]["checks"]["corpus_available"] == 0.0
     assert com_corpus["confidence_detail"]["checks"]["corpus_available"] == 1.0
+
+def test_semantica_e_medida_na_pagina_alvo_e_nao_em_outra_pagina(tmp_path):
+    """O fit semântico da página A não pode vir do melhor doc do corpus (B)."""
+    from hermes_seo_agent.report.rankability_signals import build_query_semantic_signals
+
+    storage = Storage(str(tmp_path / "alvo.db"))
+    alvo = "https://x/gojo-poderes"
+    irma = "https://x/gojo-idade"
+    storage.conn.executemany(
+        "INSERT INTO corpus_documents (url, title, h1, body_text, built_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(alvo, "Os poderes mais fortes de Gojo", "Poderes de Gojo",
+          "Lista dos poderes e tecnicas de Gojo em Jujutsu Kaisen.", "2026-09-21"),
+         # página IRMÃ perfeitamente alinhada com a query de idade
+         (irma, "Quantos anos tem Gojo: idade no anime", "Idade do Gojo",
+          "A idade de Gojo e revelada no anime.", "2026-09-21")])
+    storage.conn.executemany(
+        "INSERT INTO corpus_sections (url, heading, heading_level, position, text) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(alvo, "Quais sao os poderes de Gojo?", 2, 1, "poderes e tecnicas"),
+         (irma, "Quantos anos tem Gojo?", 2, 1, "idade de gojo no anime")])
+    storage.conn.commit()
+
+    query = "quantos anos tem gojo"
+    na_alvo = build_query_semantic_signals(storage, query, target_url=alvo)
+    na_irma = build_query_semantic_signals(storage, query, target_url=irma)
+    assert na_alvo["semantic_scope"] == "target_url"
+    # a página-alvo NÃO responde à intenção de idade, mesmo existindo uma irmã que responde
+    assert (na_alvo["semantic"]["title_fit"] or 0) < 0.6
+    assert (na_alvo["semantic"]["question_fit"] or 0) == 0.0
+    assert na_irma["semantic"]["title_fit"] > 0.8
+    assert na_alvo["semantic"]["title_fit"] < na_irma["semantic"]["title_fit"]
+    assert na_irma["semantic"]["question_fit"] == 1.0
+    assert na_alvo["semantic"]["body_fit"] is not None
+
+    # URL fora do corpus: DESCONHECIDO, sem cair para outra página
+    fora = build_query_semantic_signals(storage, query,
+                                        target_url="https://x/nao-existe")
+    assert fora["semantic_scope"] == "target_url_unavailable"
+    assert all(value is None for value in fora["semantic"].values())
+    assert "outra página" in fora["semantic_note"]
+
+    # sem URL alvo não há medição semântica
+    sem_alvo = build_query_semantic_signals(storage, query)
+    assert sem_alvo["semantic_scope"] == "no_target"
+    assert all(value is None for value in sem_alvo["semantic"].values())
+    storage.close()
+
+
+def test_semantica_encontra_a_pagina_com_host_diferente_www_x_prod(tmp_path):
+    """GSC entrega `www.`; o corpus indexa `prod.` — o match é por PATH."""
+    from hermes_seo_agent.report.rankability_signals import build_query_semantic_signals
+
+    storage = Storage(str(tmp_path / "host.db"))
+    storage.conn.execute(
+        "INSERT INTO corpus_documents (url, title, h1, body_text, built_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("https://prod.unicorniohater.com.br/quantos-anos-tem-o-loki/",
+         "Quantos anos tem o Loki no MCU: idade do personagem", "Idade do Loki",
+         "A idade do Loki de Tom Hiddleston e revelada no MCU.", "2026-09-21"))
+    storage.conn.commit()
+
+    medidas = build_query_semantic_signals(
+        storage, "quantos anos tem loki",
+        target_url="https://www.unicorniohater.com.br/quantos-anos-tem-o-loki/")
+    assert medidas["semantic_scope"] == "target_url"
+    assert medidas["semantic_match"] == "path_match"
+    assert medidas["semantic_url"].startswith("https://prod.unicorniohater.com.br/")
+    assert (medidas["semantic"]["title_fit"] or 0) > 0.8
+    assert medidas["semantic"]["body_fit"] is not None
+    storage.close()
+
+
+def test_family_rankability_nao_faz_sql_de_traccao_por_variante(tmp_path):
+    """Tração vem da família: nenhuma consulta a `query_pages` no caminho semântico."""
+    from hermes_seo_agent.report.rankability_signals import build_family_query_signals
+
+    storage = Storage(str(tmp_path / "sql.db"))
+    url = "https://x/a"
+
+    class _CountingConn:
+        def __init__(self, conn):
+            self._conn = conn
+            self.sql: list[str] = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(sql)
+            return self._conn.execute(sql, params)
+
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0), _row("gojo idade", 400, 4, 6.0)]
+    family = build_families(rows)[0]
+    counting = _CountingConn(storage.conn)
+    proxy = type("P", (), {"conn": counting})()
+    signals = build_family_query_signals(proxy, {"urls": [url]}, family, target_url=url)
+    assert signals["impressions"] == 1300.0
+    assert counting.sql, "deveria consultar o corpus"
+    assert not any("query_pages" in sql for sql in counting.sql)
+    assert all("corpus_" in sql for sql in counting.sql)
+    storage.close()
+
+
+def test_janela_desalinhada_derruba_review_title_para_investigate():
+    """`signal_window.aligned=false` nunca permite `review_title` nem `high`."""
+    rows = [_row("quantos anos tem gojo", 1760, 14, 4.8),
+            _row("gojo poderes", 1510, 11, 5.4),
+            _row("altura do gojo", 290, 3, 7.0)]
+    share, _shares, coverage, relevant, candidates = _evidence(
+        rows, "Gojo: poderes em Jujutsu Kaisen")
+    verdict = {"verdict": "below_p10", "context": "5-10|imp2k+", "sample_size": 41,
+               "bucket": {"p10": 0.01, "p50": 0.03}}
+    headroom_detail = page_headroom(5.2, 31 / 4200, verdict)
+    base: dict[str, Any] = dict(
+        url="https://x/g", title="Gojo: poderes em Jujutsu Kaisen",
+        page={"impressions": 4200, "clicks": 31, "position": 5.2, "entity": "Gojo"},
+        baseline_verdict=verdict, families=share["families"], coverage=coverage,
+        candidates=candidates,
+        rankability={f["family"]: 0.8 for f in relevant},
+        headroom_value=headroom_detail, ga4={"sessions": 340, "engagement_rate": 0.71})
+    alinhado = decide_title(**base, signal_window_aligned=True)
+    assert alinhado["decision"] == "review_title"
+    assert alinhado["checks"]["signal_window_aligned"] is True
+
+    desalinhado = decide_title(**base, signal_window_aligned=False)
+    assert desalinhado["decision"] == "investigate_cause"
+    assert desalinhado["confidence"] != "high"
+    assert desalinhado["checks"]["signal_window_aligned"] is False
+    assert any("janela dos sinais" in line for line in desalinhado["reason"])
+
+    # não informado: compatível (nenhum gate novo aplicado)
+    neutro = decide_title(**base, signal_window_aligned=None)
+    assert neutro["decision"] == "review_title"
+    assert neutro["checks"]["signal_window_aligned"] is None
+
 
 def test_historico_de_sucesso_e_calculado_por_candidato():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
