@@ -94,6 +94,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("title-opportunities", "Research top queries -> title candidates (GSC)"),
         ("title-engine", "F1-F24: decisão de título por FAMÍLIAS de query (determinística)"),
         ("title-weights", "F13: calibra/persiste os pesos do motor de título (ciclo fechado)"),
+        ("report-guard", "Valida o relatório: prosa pt-BR + evidência literal (sem LLM)"),
         ("impact", "Measure before/after SEO impact (GSC)"),
         ("set-title", "Set a post's SEO title directly (rank_math_title)"),
         ("reindex-status", "Google position + last crawl (reindexation) per page"),
@@ -202,6 +203,15 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--persist", action="store_true",
                            help="persiste os pesos calibrados (signal:title_weights)")
             p.add_argument("--dry-run", action="store_true", help="não persiste nada")
+        if name == "report-guard":
+            p.add_argument("--draft", required=True,
+                           help="JSON do rascunho {narrative, evidence}")
+            p.add_argument("--expected", default="",
+                           help="JSON com os valores de ferramenta esperados "
+                                "(campo -> valor) que devem vir LITERAIS")
+            p.add_argument("--expect", action="append", default=[],
+                           help="valor literal obrigatório (repetível)")
+            # --json já é global em todos os subcomandos: não redeclarar
         if name == "impact":
             p.add_argument("--days", type=int, default=28,
                            help="janela antes/depois em dias")
@@ -405,6 +415,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_title_engine)
         elif name == "title-weights":
             p.set_defaults(func=_cmd_title_weights)
+        elif name == "report-guard":
+            p.set_defaults(func=_cmd_report_guard)
         elif name == "impact":
             p.set_defaults(func=_cmd_impact)
         elif name == "set-title":
@@ -2660,7 +2672,47 @@ def _cmd_title_weights(args: argparse.Namespace, config: Any) -> int:
         "historical_questions": questions,
     }
     _emit(result, force_json=True)
-    return 0
+
+
+def _cmd_report_guard(args: argparse.Namespace, config: Any) -> int:
+    """Guard determinístico do relatório: prosa pt-BR + evidência LITERAL.
+
+    Zero LLM: valida um rascunho ``{narrative, evidence}`` contra os valores de
+    ferramenta esperados. Serve para o job (ou um humano) recusar um relatório
+    que traduziu/resumiu/reescreveu um valor real antes de mandá-lo ao Telegram.
+    """
+    import json as _json
+    from pathlib import Path
+
+    from .report.language_guard import validate_report
+
+    try:
+        draft = _json.loads(Path(args.draft).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        _emit({"status": "error", "error": f"rascunho inválido: {exc}"}, force_json=True)
+        return 2
+    expected: dict[str, Any] = {}
+    if args.expected:
+        try:
+            expected = _json.loads(Path(args.expected).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            _emit({"status": "error", "error": f"esperado inválido: {exc}"},
+                  force_json=True)
+            return 2
+    values = [str(v) for v in (args.expect or []) if str(v).strip()]
+    verdict = validate_report(draft, expected=expected, values=values)
+    verdict["status"] = "ok" if verdict["ok"] else "violation"
+    verdict["summary"] = {
+        "command": "report-guard",
+        "draft": args.draft,
+        "expected_fields": sorted(expected),
+        "expected_values": len(values),
+        "violations": len(verdict["violations"]),
+        "cjk_in_narrative": verdict["cjk_in_narrative"],
+        "cjk_in_evidence": verdict["checks"]["evidence_fields_with_cjk"],
+    }
+    _emit(verdict, force_json=True)
+    return 0 if verdict["ok"] else 1
 
 
 def _cmd_impact(args: argparse.Namespace, config: Any) -> int:
