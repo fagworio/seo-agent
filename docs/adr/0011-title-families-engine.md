@@ -126,6 +126,15 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 | 9 | `observation.observed_impressions` recebia `observed_share_universe` (um SHARE, ~0.85) | `decide_title(observed_impressions=...)` — impressões reais (fallback: soma das famílias) |
 | 12 | O re-score do título (`finalize_titles`) não recebia `historical_success` e voltava ao neutro 0.5 — e era esse valor que ia para a calibração | a CLI repassa o histórico da combinação que selecionou o candidato |
 
+## Terceira rodada de correções (revisão do 5d94daa)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | `latest_window_pair()` escolhia a janela mais recente por `ORDER BY window_end DESC, window_start DESC` — com duas coletas terminando no MESMO dia (28d e 1d), preferia a MAIS CURTA (o mesmo desalinhamento temporal da primeira rodada) | `resolve_signal_window(storage, start, end)`: usa a janela DO PRÓPRIO RUN quando ela está persistida (`aligned=true`, `source=run_window`) e cai para o par mais recente só com `aligned=false` + motivo explícito — nunca degrada para tração zero em silêncio. CLI passa `start`/`end` da coleta |
+| 2 | **Dupla contagem da tração**: `build_query_signals` somava `impressions` por VARIANTE de `expand_query()` e `build_family_query_signals` somava isso entre as queries da família — a expansão de "quantos anos tem gojo" já alcança "gojo idade", então 1.300 impressões viravam 1.700+ e inflavam `query_traction` | separação explícita: TRAÇÃO vem de `family["impressions"]`/`clicks`/`weighted_position` (GSC real, agregado em `build_families`); as top queries servem SÓ para a média semântica, ponderada por `family["query_impressions"]` (impressão da própria query, não soma de variantes). Campo `traction_source` registra a origem |
+| 3 | `semantic["title_fit"] = 0.9 if best.get("title")` media apenas "o documento tem título" | `query_title_alignment(query, doc_title)` (FASE 4): entidade 40% + intenção 40% + tokens significativos 20%, com componentes não medíveis fora do cálculo; sem título → `None` (desconhecido) |
+| — | `build_family_query_signals` dependia da ordem das queries vindas do chamador | `build_families` expõe `top_queries` (ordenado por impressões) e `query_impressions`, então o top-3 é estável independentemente do chamador |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

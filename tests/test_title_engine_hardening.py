@@ -376,24 +376,146 @@ def test_sinais_da_familia_ponderam_por_impressoes(monkeypatch):
                              "entity_fit": 1.0 if principal else None,
                              "title_fit": None, "question_fit": None,
                              "related_entity_fit": None},
-                "impressions": 900.0 if principal else 100.0,
-                "clicks": 9.0 if principal else 0.0,
+                # tração INFLADA pela expansão de variantes (como o LIKE fazia)
+                "impressions": 1300.0, "clicks": 9.0,
                 "position": 4.0 if principal else 9.0,
                 "topic_authority": None, "related_top10_share": 0.5}
 
     monkeypatch.setattr(rs, "build_query_signals", _fake)
-    family = {"family_id": "gojo::idade", "queries": ["gojo idade", "idade do gojo"],
-              "weighted_position": 5.0}
+    family = {"family_id": "gojo::idade",
+              "queries": ["gojo idade", "idade do gojo"],
+              "top_queries": ["gojo idade", "idade do gojo"],
+              "query_impressions": {"gojo idade": 900.0, "idade do gojo": 100.0},
+              "impressions": 1000.0, "clicks": 6.0, "weighted_position": 5.0}
     out = rs.build_family_query_signals(None, {}, family)
-    # média ponderada por impressões (900 x 1.0 + 100 x 0.0) / 1000
+    # média semântica ponderada pela impressão REAL de cada query
     assert out["semantic"]["body_fit"] == 0.9
     assert out["semantic"]["entity_fit"] == 1.0          # só a principal mediu
     assert out["semantic"]["h1_fit"] is None              # ninguém mediu -> None
-    assert out["impressions"] == 1000.0 and out["position"] == 4.0
-    assert out["queries_measured"] == 2
+    # TRAÇÃO = GSC real da família (1.000), não a soma das variantes (2.600)
+    assert out["impressions"] == 1000.0 and out["clicks"] == 6.0
+    assert out["position"] == 5.0
+    assert out["traction_source"].startswith("family")
+    assert out["semantic_queries"] == ["gojo idade", "idade do gojo"]
 
 
-# --- 12) o re-score do título preserva o histórico do candidato ------------
+# --- 3ª rodada: janela do RUN, alinhamento real e sem dupla contagem -------
+
+def test_signal_window_prefere_a_janela_do_proprio_run(tmp_path):
+    """Várias coletas terminando no MESMO dia: usar o par do run, não o mais curto."""
+    from hermes_seo_agent.report.rankability_signals import resolve_signal_window
+
+    storage = Storage(str(tmp_path / "w.db"))
+    rows = [
+        # 28 dias (a janela da decisão) e 1 dia, ambos terminando em 2026-09-21
+        ("gojo idade", "https://x/a", "2026-08-24", "2026-09-21", 5000.0),
+        ("gojo idade", "https://x/b", "2026-09-21", "2026-09-21", 120.0),
+    ]
+    storage.conn.executemany(
+        "INSERT INTO query_pages (query, url, window_start, window_end, impressions) "
+        "VALUES (?, ?, ?, ?, ?)", rows)
+    storage.conn.commit()
+
+    window = resolve_signal_window(storage, "2026-08-24", "2026-09-21")
+    assert window["aligned"] is True and window["source"] == "run_window"
+    assert (window["window_start"], window["window_end"]) == ("2026-08-24", "2026-09-21")
+
+    # o par "mais recente" escolheria a janela de 1 dia (bug estrutural) — o
+    # resolver NÃO usa esse critério quando a janela do run existe
+    from hermes_seo_agent.report.rankability_signals import latest_window_pair
+    assert latest_window_pair(storage) == ("2026-09-21", "2026-09-21")
+
+    # run cuja janela ainda não foi persistida: fallback EXPLÍCITO
+    fallback = resolve_signal_window(storage, "2026-09-22", "2026-10-20")
+    assert fallback["aligned"] is False
+    assert fallback["source"] == "latest_persisted"
+    assert (fallback["window_start"], fallback["window_end"]) == ("2026-09-21", "2026-09-21")
+    assert "não está persistida" in fallback["note"]
+    storage.close()
+
+
+def test_query_title_alignment_mede_alinhamento_de_verdade():
+    from hermes_seo_agent.report.query_families import query_title_alignment
+
+    desalinhado = query_title_alignment("quantos anos tem gojo",
+                                        "Os poderes mais fortes de Gojo")
+    alinhado = query_title_alignment("quantos anos tem gojo",
+                                     "Quantos anos tem Gojo? A idade do personagem")
+    assert desalinhado is not None and alinhado is not None
+    assert alinhado > 0.7 > desalinhado
+    # sem título não há medição -> None (antes dava 0.9 só por ter título)
+    assert query_title_alignment("quantos anos tem gojo", "") is None
+    assert query_title_alignment("", "Gojo: idade") is None
+
+
+def test_title_fit_usa_alinhamento_e_nao_existencia_de_titulo(monkeypatch):
+    import hermes_seo_agent.report.semantic as sem
+    from hermes_seo_agent.report.rankability_signals import build_query_signals
+
+    def _hits(title):
+        def _fake(storage, query, limit=10):
+            return [{"title": title, "entity_hit": True, "semantic_score": 0.5,
+                     "section_hits": 1}]
+        return _fake
+
+    monkeypatch.setattr(sem, "hybrid_search", _hits("Os poderes mais fortes de Gojo"))
+    ruim = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
+    monkeypatch.setattr(sem, "hybrid_search",
+                        _hits("Quantos anos tem Gojo: idade no anime"))
+    bom = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
+    assert ruim["semantic"]["title_fit"] < 0.6      # entidade bate, intenção não
+    assert bom["semantic"]["title_fit"] > 0.8       # entidade + intenção + tokens
+    assert bom["semantic"]["title_fit"] - ruim["semantic"]["title_fit"] > 0.25
+
+    # documento sem título: desconhecido, nunca 0.9
+    monkeypatch.setattr(sem, "hybrid_search",
+                        lambda storage, query, limit=10: [{"entity_hit": True,
+                                                           "semantic_score": 0.5}])
+    sem_titulo = build_query_signals(None, {"urls": []}, "quantos anos tem gojo")
+    assert sem_titulo["semantic"]["title_fit"] is None
+
+
+def test_familia_expoe_top_queries_e_impressoes_por_query():
+    rows = [_row("quantos anos tem gojo", 900), _row("gojo idade", 400),
+            _row("idade do gojo", 100)]
+    families = build_families(rows)
+    family = families[0]
+    assert family["top_queries"] == ["quantos anos tem gojo", "gojo idade",
+                                     "idade do gojo"]
+    assert family["query_impressions"]["quantos anos tem gojo"] == 900.0
+    assert sum(family["query_impressions"].values()) == family["impressions"] == 1400.0
+
+
+def test_tracao_da_familia_nao_duplica_queries_expandidas(tmp_path):
+    """`expand_query` faz uma query casar as variantes da irmã: a tração da
+    família continua sendo o GSC REAL, sem a soma duplicada."""
+    from hermes_seo_agent.report.rankability_signals import build_family_query_signals
+    from hermes_seo_agent.report.semantic import expand_query
+
+    storage = Storage(str(tmp_path / "dup.db"))
+    url = "https://x/a"
+    # a MESMA linha real, duas queries distintas na mesma família
+    storage.conn.executemany(
+        "INSERT INTO query_pages (query, url, window_start, window_end, impressions, "
+        "clicks, position) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [("quantos anos tem gojo", url, "2026-08-24", "2026-09-21", 900.0, 9.0, 4.0),
+         ("gojo idade", url, "2026-08-24", "2026-09-21", 400.0, 4.0, 6.0)])
+    storage.conn.commit()
+
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0), _row("gojo idade", 400, 4, 6.0)]
+    family = build_families(rows)[0]
+    # a expansão de "quantos anos tem gojo" já alcança "gojo idade" (colisão real)
+    assert any("gojo idade" in v for v in expand_query("quantos anos tem gojo"))
+
+    signals = build_family_query_signals(storage, {"urls": [url]}, family,
+                                         window_start="2026-08-24",
+                                         window_end="2026-09-21")
+    assert signals["impressions"] == 1300.0     # 900 + 400, e não 900+900+400
+    assert signals["clicks"] == 13.0
+    assert signals["traction_source"].startswith("family")
+    storage.close()
+
+
 
 def test_historico_do_candidato_sobrevive_ao_rescore_do_titulo():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),

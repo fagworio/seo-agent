@@ -43,6 +43,35 @@ def _window_clause(window_start: str | None,
     return clause, args
 
 
+def resolve_signal_window(storage: Any, window_start: str | None,
+                          window_end: str | None) -> dict[str, Any]:
+    """Janela dos sinais = a janela DO PRÓPRIO RUN, quando ela existe no dado.
+
+    A escolha não pode depender de "qual janela o banco considera mais recente":
+    com várias coletas terminando no mesmo dia (28d e 1d, por exemplo), o
+    ``ORDER BY window_end DESC, window_start DESC`` preferia a MAIS CURTA — o
+    mesmo tipo de desalinhamento temporal que originou esta revisão.
+
+    Se a janela do run ainda não foi persistida (coleta isolada antes do
+    ``demand``), cai para o par mais recente com ``aligned=False`` e o motivo
+    explícito: degradar para tração zero em silêncio seria pior.
+    """
+    if window_start and window_end:
+        row = storage.conn.execute(
+            "SELECT COUNT(*) FROM query_pages WHERE window_start = ? "
+            "AND window_end = ?", (window_start, window_end)).fetchone()
+        rows = int(row[0] or 0) if row else 0
+        if rows:
+            return {"window_start": window_start, "window_end": window_end,
+                    "aligned": True, "source": "run_window", "rows": rows,
+                    "note": "mesma janela das páginas/famílias/baseline da decisão"}
+    latest_start, latest_end = latest_window_pair(storage)
+    return {"window_start": latest_start, "window_end": latest_end,
+            "aligned": False, "source": "latest_persisted", "rows": None,
+            "note": ("a janela do run não está persistida em query_pages: usando o "
+                     "par mais recente (uma decisão continua com UMA janela)")}
+
+
 def _window_impressions(storage: Any, urls: list[str], entity: str,
                         window: str, window_end: str | None = None) -> float:
     if not urls or not window:
@@ -241,11 +270,20 @@ def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: st
         hits = hybrid_search(storage, query, limit=10)
         best = hits[0] if hits else None
         if best:
-            semantic["entity_fit"] = 1.0 if best.get("entity_hit") else 0.0
-            semantic["body_fit"] = (best.get("semantic_score") or 0.0)
-            semantic["title_fit"] = 0.9 if best.get("title") else 0.0
-            semantic["heading_fit"] = min(
-                best.get("section_hits", 0) * 0.3, 0.9)
+            hit = best.get("entity_hit")
+            semantic["entity_fit"] = None if hit is None else (1.0 if hit else 0.0)
+            # `or 0.0` transformava "não medido" em "medi e deu zero" — mesma
+            # armadilha da rodada anterior, agora também nos campos do corpus.
+            score = best.get("semantic_score")
+            semantic["body_fit"] = None if score is None else float(score)
+            # title_fit = ALINHAMENTO query <-> título do doc (contrato da FASE 4).
+            # Antes era `0.9 if best.get("title")`, que media apenas "tem título".
+            from ..report.query_families import query_title_alignment
+            semantic["title_fit"] = query_title_alignment(
+                query, str(best.get("title") or ""))
+            section_hits = best.get("section_hits")
+            semantic["heading_fit"] = (None if section_hits is None
+                                       else min(float(section_hits) * 0.3, 0.9))
     except Exception:
         pass
 
@@ -287,51 +325,68 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
                                window_start: str | None = None,
                                window_end: str | None = None,
                                max_queries: int = 3) -> dict[str, Any]:
-    """Sinais da FAMÍLIA: semântica ponderada por impressões das suas queries.
+    """Sinais da FAMÍLIA: tração do GSC REAL + semântica ponderada por query.
 
-    O motor agregava a demanda por família, mas construía a semântica a partir
-    de UMA query representante (``family["queries"][0]``). Aqui cada query da
-    família (até ``max_queries``, por impressões) contribui com o seu fit e a
-    média é ponderada pela tração — os campos continuam ``None`` quando nada foi
-    medido. Tração e posição são somadas/melhoradas entre as queries.
+    DISTINÇÃO OBRIGATÓRIA (evita a dupla contagem):
+
+    * TRAÇÃO (``impressions``/``clicks``/``position``) vem das métricas já
+      agregadas das queries REAIS da família (``family["impressions"]`` etc.).
+      Nunca do ``LIKE '%variante%'`` somado entre queries — ``expand_query()``
+      faz a expansão de uma query incluir as outras da mesma família, e somar
+      isso por query inflava ``query_traction`` (ex.: 900 + 400 = 1.300 virava
+      1.700).
+    * SEMÂNTICA usa as top queries (por impressões, ``family["top_queries"]``)
+      para reconhecer variações de linguagem; o peso de cada uma é a impressão
+      DELA no GSC (``family["query_impressions"]``), não a soma de variantes.
     """
-    queries = list(family.get("queries") or [])[: max(int(max_queries or 1), 1)]
-    collected: list[tuple[float, dict[str, Any]]] = []
+    top = list(family.get("top_queries") or family.get("queries") or [])
+    per_query = dict(family.get("query_impressions") or {})
+    queries = top[: max(int(max_queries or 1), 1)]
+    collected: list[tuple[str, float, dict[str, Any]]] = []
     for query in queries:
         signals = build_query_signals(storage, dict(cluster_signals), str(query),
                                       window_start=window_start, window_end=window_end)
-        weight = float(signals.get("impressions") or 0) or 1.0
-        collected.append((weight, signals))
+        weight = float(per_query.get(str(query)) or 0) or 1.0
+        collected.append((str(query), weight, signals))
     if not collected:
-        return build_query_signals(storage, dict(cluster_signals), "", window_start=window_start,
-                                   window_end=window_end)
+        return build_query_signals(storage, dict(cluster_signals), "",
+                                   window_start=window_start, window_end=window_end)
 
     keys = ("entity_fit", "title_fit", "h1_fit", "heading_fit", "body_fit",
             "question_fit", "related_entity_fit")
     semantic: dict[str, Any] = {}
     for key in keys:
         total = weight_sum = 0.0
-        for weight, signals in collected:
+        for _query, weight, signals in collected:
             value = (signals.get("semantic") or {}).get(key)
             if value is None:
                 continue
             total += float(value) * weight
             weight_sum += weight
         semantic[key] = round(total / weight_sum, 4) if weight_sum else None
-    impressions = sum(float(s.get("impressions") or 0) for _w, s in collected)
-    clicks = sum(float(s.get("clicks") or 0) for _w, s in collected)
-    positions = [float(s["position"]) for _w, s in collected
+
+    impressions = family.get("impressions")
+    clicks = family.get("clicks")
+    positions = [float(s["position"]) for _q, _w, s in collected
                  if s.get("position") is not None]
+    position = (family.get("weighted_position")
+                if family.get("weighted_position") is not None
+                else (min(positions) if positions else None))
     return {
         "keyword": family.get("family_id") or family.get("family"),
-        "impressions": impressions,
-        "clicks": clicks,
-        "position": min(positions) if positions else family.get("weighted_position"),
+        # tração = GSC REAL da família (sem recálculo por variantes)
+        "impressions": (float(impressions) if impressions is not None
+                        else sum(float(s.get("impressions") or 0)
+                                 for _q, _w, s in collected)),
+        "clicks": (float(clicks) if clicks is not None else
+                   sum(float(s.get("clicks") or 0) for _q, _w, s in collected)),
+        "position": position,
         "semantic": semantic,
         "topic_authority": None,
-        "related_top10_share": (collected[0][1] or {}).get("related_top10_share", 0.0),
-        "queries_measured": len(collected),
-        "weighting": "impressões das queries da família",
+        "related_top10_share": (collected[0][2] or {}).get("related_top10_share", 0.0),
+        "semantic_queries": [query for query, _w, _s in collected],
+        "weighting": "impressões GSC por query (apenas para a média semântica)",
+        "traction_source": "family (agregado real, sem expansão)",
     }
 
 

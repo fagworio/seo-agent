@@ -2200,8 +2200,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                                         tokens as _tokens)
     from .report.rankability_signals import (build_cluster_signals,
                                              build_family_query_signals,
-                                             latest_window_pair,
-                                             resolve_cluster_entity)
+                                             resolve_cluster_entity,
+                                             resolve_signal_window)
     from .report.rankability_v2 import confidence_v2 as _confidence_v2
     from .report.rankability_v2 import query_distribution as _qdist
     from .report.rankability_v2 import topic_authority as _topic_authority
@@ -2260,9 +2260,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             window_end=end.isoformat(), min_impressions=min_impressions)
         cases = load_cases(store, limit=2000)
         saved_weights = (store.get_signals() or {}).get("title_weights") or {}
-        # JANELA ÚNICA para os sinais persistidos (rankability/cluster): o par
-        # mais recente de query_pages. Uma decisão = uma janela temporal.
-        signal_window = latest_window_pair(store)
+        # JANELA ÚNICA para os sinais persistidos (rankability/cluster): o par DO
+        # PRÓPRIO RUN quando ele já está persistido; senão o mais recente, com
+        # `aligned=false` explícito. Uma decisão = uma janela temporal.
+        signal_window = resolve_signal_window(store, start.isoformat(), end.isoformat())
+        signal_ws = signal_window["window_start"] or None
+        signal_we = signal_window["window_end"] or None
 
     weights = saved_weights.get("weights") if isinstance(saved_weights.get("weights"), dict) else None
     weights_version = int(saved_weights.get("weights_version") or 0)
@@ -2409,17 +2412,17 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                          if r.get("position") is not None]
             dist = _qdist(positions)
             # SINAIS REAIS de rankability (FASE 6): cluster do assunto no corpus
-            # (Topic Authority) + sinais por FAMÍLIA (semântica ponderada por
-            # impressões das queries da família). UMA JANELA por decisão: o par
-            # (window_start, window_end) vem do dado persistido mais recente.
+            # (Topic Authority) + sinais por FAMÍLIA (tração do GSC real +
+            # semântica ponderada por impressão das queries). UMA JANELA por
+            # decisão: o par do próprio run quando persistido (signal_window).
             cluster_signals: dict[str, Any] = {}
             topic_score: float | None = None
             semantic_measured = 0
             if not args.no_deep_signals:
                 try:
                     cluster_signals, _cover = build_cluster_signals(
-                        store, hint or entity, window_start=signal_window[0] or None,
-                        window_end=signal_window[1] or None)
+                        store, hint or entity, window_start=signal_ws,
+                        window_end=signal_we)
                     topic = _topic_authority(cluster_signals)
                     topic_score = float(topic.get("score") or 0.0)
                 except Exception:  # noqa: BLE001
@@ -2431,8 +2434,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     try:
                         real_signals = build_family_query_signals(
                             store, cluster_signals, family,
-                            window_start=signal_window[0] or None,
-                            window_end=signal_window[1] or None)
+                            window_start=signal_ws, window_end=signal_we)
                         if any(v is not None
                                for v in (real_signals.get("semantic") or {}).values()):
                             semantic_measured += 1
@@ -2509,9 +2511,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
             contract["topic_authority"] = topic_score
-            contract["signal_window"] = {"window_start": signal_window[0],
-                                         "window_end": signal_window[1],
-                                         "families_with_measured_semantics": semantic_measured}
+            contract["signal_window"] = {
+                **signal_window,
+                "families_with_measured_semantics": semantic_measured}
             contract["baseline"]["source"] = baseline.get("source")
             contract["baseline"]["window_start"] = baseline.get("window_start")
             contract["baseline"]["baseline_pages"] = baseline.get("pages")

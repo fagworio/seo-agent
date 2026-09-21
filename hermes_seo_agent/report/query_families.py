@@ -471,6 +471,17 @@ def build_families(rows: Iterable[dict[str, Any]], *,
         label = bucket["entity_label"] or bucket["entity"]
         if hint and bucket["entity"] == hint and hint_label:
             label = hint_label
+        # Impressões POR QUERY (fonte real do GSC): evita que o consumidor tenha
+        # de reconsultar/somar variantes (dupla contagem) ou depender da ordem
+        # em que as queries chegaram.
+        per_query: dict[str, float] = {}
+        for bucket_row in bucket["rows"]:
+            query_text = str((bucket_row.get("keys") or [""])[0])
+            if not query_text:
+                continue
+            per_query[query_text] = per_query.get(query_text, 0.0) + float(
+                bucket_row.get("impressions", 0) or 0)
+        ordered = sorted(per_query.items(), key=lambda item: (-item[1], item[0]))
         families.append({
             "family_id": bucket["family_id"],
             "entity": bucket["entity"],
@@ -478,6 +489,9 @@ def build_families(rows: Iterable[dict[str, Any]], *,
             "intent": bucket["intent"],
             "intents": sorted(bucket["intents"]),
             "queries": list(dict.fromkeys(bucket["queries"])),
+            # ordem estável por impressões: top_queries[k] = k-ésima query da família
+            "top_queries": [query_text for query_text, _imp in ordered],
+            "query_impressions": {query_text: round(imp, 2) for query_text, imp in ordered},
             "impressions": round(impressions, 2),
             "clicks": round(clicks, 2),
             "weighted_position": _weighted_position(bucket["rows"]),
@@ -631,6 +645,48 @@ def _intent_covered(label: str, title: str, title_variants: set[str]) -> bool:
         if f" {fold(alias)} " in f" {fold(title)} ":
             return True
     return False
+
+
+def query_title_alignment(query: str, doc_title: str) -> float | None:
+    """Alinhamento determinístico ENTRE a query e o título de um documento.
+
+    Substitui o antigo ``0.9 if best.get("title") else 0.0`` — que media apenas
+    "o documento tem título", algo praticamente sempre verdadeiro e sem relação
+    com a query. Reaproveita o mesmo contrato da FASE 4 (entidade + intenção +
+    tokens), para não criar uma terceira definição de alinhamento:
+
+        entidade 40%  ·  intenção 40%  ·  tokens significativos 20%
+
+    Componente não medível sai do cálculo (renormalizado). Sem query ou sem
+    título o resultado é ``None`` = DESCONHECIDO (nunca 0).
+    """
+    query_text = str(query or "").strip()
+    title_text = str(doc_title or "").strip()
+    if not query_text or not title_text:
+        return None
+    title_variants = expand_variants(tokens(title_text))
+    entity = detect_entity(query_text)
+    entity_ok: float | None = (1.0 if entity_covered(entity, title_text, title_variants)
+                               else 0.0) if entity else None
+    intents = intent_matches(query_text)
+    if intents:
+        hits = sum(1 for label in intents
+                   if _intent_covered(label, title_text, title_variants))
+        intent_ok: float | None = hits / len(intents)
+    else:
+        intent_ok = None
+    tokens_present = [t for t in tokens(query_text) if not _is_stop(t)]
+    if tokens_present:
+        hits = sum(1 for t in tokens_present if _token_hit(t, title_variants))
+        token_ok: float | None = hits / len(tokens_present)
+    else:
+        token_ok = None
+    parts = [(0.4, entity_ok), (0.4, intent_ok), (0.2, token_ok)]
+    known = [(weight, value) for weight, value in parts if value is not None]
+    if not known:
+        return None
+    total = sum(weight for weight, _value in known)
+    return round(sum(weight * float(value) for weight, value in known) / total, 4)
 
 
 def entity_covered(entity: str, title: str, title_variants: set[str]) -> bool:
