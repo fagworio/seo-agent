@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from hermes_seo_agent.report.query_families import (
-    FAMILY_INTENTS, GENERIC_INTENT, INTENT_LABELS, build_families, demand_share,
-    detect_entity, entity_covered, family_key, intent_matches, primary_intent,
-    term_support, title_coverage, tokens,
+    FAMILY_INTENTS, GENERIC_INTENT, INTENT_LABELS, build_families, compatible_entity,
+    demand_share, detect_entity, entity_covered, family_key, intent_matches,
+    primary_intent, term_support, title_coverage, tokens,
 )
 from hermes_seo_agent.tools.title_opportunities import INTENT_GROUPS
 
@@ -89,17 +89,35 @@ def test_entidade_da_pagina_agrupa_variacoes_de_ordem_e_digitacao():
         _row("dredge stone tablets location", 40),
     ]
     fragmentado = build_families(rows)
-    assert len(fragmentado) > 2, "ordem das palavras não deveria fragmentar"
+    assert len(fragmentado) == 4, "ordem das palavras não deveria fragmentar"
     hint = "Onde encontrar cada tabuleta de pedra em Dredge"
     agrupado = build_families(rows, entity_hint=hint)
-    # agrupa por ENTIDADE + INTENÇÃO: 3 queries sem intenção (geral) + 1 de
-    # localização viram 2 famílias da MESMA entidade da página — não 4.
+    # as 3 variações em português (ordem/plural diferente) viram UMA família da
+    # entidade da página; a query em INGLÊS fica separada porque o overlap de
+    # entidade < 60% (regra anti over-merge: 'Dragon Ball' × 'Dragon Quest').
     assert len(agrupado) == 2
-    assert {f["entity"] for f in agrupado} == {"onde encontrar cada tabuleta de pedra em dredge"}
-    assert {f["entity_label"] for f in agrupado} == {hint}
+    merged = max(agrupado, key=lambda f: f["impressions"])
+    assert merged["entity_label"] == hint
+    assert merged["query_count"] == 3 and merged["impressions"] == 390
     assert {f["intent"] for f in agrupado} == {"geral", "localizacao"}
-    assert sum(f["query_count"] for f in agrupado) == 4
-    assert sum(f["impressions"] for f in agrupado) == 430
+
+
+def test_franquias_com_nome_compartilhado_nao_se_fundem():
+    """"Dragon Quest" não pertence a uma página de "Dragon Ball" (over-merge)."""
+    families = build_families([_row("dragon quest idade", 200),
+                              _row("dragon ball idade", 300)],
+                              entity_hint="Dragon Ball")
+    assert {f["entity"] for f in families} == {"dragon ball", "dragon quest"}
+    assert compatible_entity("dragon quest", "Dragon Ball") is False
+    assert compatible_entity("dragon ball z", "Dragon Ball") is True
+
+
+def test_metroid_nao_tem_sinal_de_altura():
+    """'metro' (altura) × 'Metroid' NÃO podem casar por prefixo (regressão)."""
+    assert primary_intent("metroid prime remastered") != "altura"
+    assert primary_intent("metroid dread") != "altura"
+    assert intent_matches("metroid prime boss guide") == {}
+    assert intent_matches("altura do metroid") == {"altura": "altura"}
 
 
 def test_entidade_de_outro_assunto_nao_e_absorvida_pela_dica():

@@ -92,6 +92,28 @@ Persistência usa os stores existentes: `opportunity_outcomes` (cases, com o
 case inteiro em `evidence`), `app_settings/signal:*` (telemetria, shadow,
 pesos). Sem schema paralelo.
 
+## Endurecimento pós-revisão (revisão do commit c860757)
+
+Inconsistências apontadas na revisão e o que mudou:
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | **Baseline temporalmente inconsistente**: `build_baseline` filtrava só `window_end` (última janela, podendo ser 1 dia) contra páginas GSC de 28 dias, e agregava janelas diferentes com o mesmo fim | janela é o PAR `(window_start, window_end)`; `build_baseline_from_pages()` calcula o contexto de CTR das MESMAS linhas de página recém-coletadas (`title-engine` usa essa forma) |
+| 2 | **Título podia não representar o candidato pontuado** (combinação de 3 intenções, título com 2; sem template de terceira intenção) | `finalize_titles()` REMEDE a cobertura de cada título gerado (`title_coverage`), rejeita o que não atinge o candidato (tolerância 2 p.p.) e re-pontua SOBRE O TEXTO; template de trio adicionado; sem título válido → `no_title_change` com `candidate_failed_reason` |
+| 3 | **Calibração não aprendia os sete fatores**: faltavam valores numéricos e `historical_success` usava `title_score` como proxy (circular); `confidence` era string | `candidate_features["score_factors"]` persiste os SETE fatores exatos + `confidence_score` numérico (rótulo legado é convertido); proxy circular removido |
+| 4 | Motor novo não estava no `schedule` | passo `title-engine-shadow` no ciclo diário (observe + shadow + persist; NUNCA publica), controlado por `TITLE_ENGINE_IN_SCHEDULE` |
+| 5 | **Rankability parcialmente empírica**: `h1/heading/body/related` eram constantes fixas e `topic_authority` não era passado | CLI usa `build_cluster_signals` + `topic_authority` + `build_query_signals` (corpus real) por família; sem corpus o campo fica `None` = desconhecido (e `semantic_fit` renormaliza sobre o que foi medido, em vez de tratar ausência como zero) |
+| 6 | **Bug preexistente**: `observed_difficulty` (0 = fácil) somado positivamente ao rankability — mais difícil ⇒ score maior | invertido para `observed_ease` (facilidade), com teste monotônico (mais autoridade nunca reduz) |
+| 7 | Share de família sem métrica de observação | `query_observation_ratio = Σ impressões das queries / impressões da página` (+ `observation_status`), entra no contrato e rebaixa `high` quando `< 20%` |
+| 8 | **Matching lexical agressivo** (prefixo genérico de 5 chars: `metro` de altura casava `Metroid`) | casamento por variantes + radical ≥ 6 chars com sobra de FLEXÃO conhecida (`_DERIVED_SUFFIXES`); regressões de `Metroid` e `Dragon Ball/Quest` |
+| 9 | `compatible_entity` aceitava UM token em comum (over-merge de franquias) | overlap ≥ 60% sobre o lado menor; entidade canônica do corpus quando disponível |
+| 10 | Fallback de headroom `p50 or 0.06` (inventava 6% e ignorava `p50 = 0` real) | `page_headroom()`: sem P50 utilizável → neutro 0.5 com status `unknown`/`degenerate`; nunca um CTR inventado |
+| 11 | `historical_success` igual para todas as combinações da página | calculado POR CANDIDATO (faixa de posição × nº de intenções × intenção primária) via `historical_success_fn` |
+| 12 | Linhas `title_regression` injetadas com `impressions=0`/`position=None` perdiam o GSC real e caíam em `gather_more_data` | `pages_by_url` reaproveita a linha real da coleta; zeros só quando a URL não tem dado no período |
+
+Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração estendida em
+`tests/test_title_engine_integration.py`).
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

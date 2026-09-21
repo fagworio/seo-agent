@@ -129,12 +129,21 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_opportunities", lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_ga4", lambda *a, **k: None)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_corpus", lambda *a, **k: None)
+    # F21/F22: o shadow do motor de título entra no ciclo diário (observe+persist)
+    title_engine_calls = []
+    monkeypatch.setattr(
+        "hermes_seo_agent.cli._cmd_title_engine",
+        lambda args, config: title_engine_calls.append(
+            (args.mode, args.shadow, args.persist, args.write)))
 
     assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
     result = json.loads(capsys.readouterr().out)
     assert ("demand", True, 0) in calls
     assert ("outcomes", "revalidate-due") in calls
     assert "gsc-demand" in result["summary"]["steps"]
+    # shadow automático: observa, compara e persiste — NUNCA publica título
+    assert title_engine_calls == [("observe", True, True, False)]
+    assert "title-engine-shadow" in result["summary"]["steps"]
     with Storage(str(db)) as storage:
         run = storage.conn.execute(
             "SELECT status, intent, summary_json FROM agent_runs ORDER BY id DESC LIMIT 1"

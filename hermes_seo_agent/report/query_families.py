@@ -217,28 +217,33 @@ def _is_stop(token: str) -> bool:
     return bool(variants(token) & _STOP_VARIANTS)
 
 
-def _token_hit(term: str, target_variants: set[str], *, min_prefix: int = 5) -> bool:
-    """Termo presente no alvo? (variantes plurais OU radical comum >= 5 chars).
+# Terminações de FLEXÃO/DERIVAÇÃO aceitas no casamento por radical. Substitui o
+# "prefixo de 5 caracteres" genérico, que casava palavras de assuntos
+# diferentes em um site de games ('metro' de altura × 'Metroid').
+_DERIVED_SUFFIXES = frozenset({
+    "a", "as", "o", "os", "e", "es", "s", "ca", "co", "cas", "cos", "ia", "ias",
+    "al", "ais", "ico", "ica", "icos", "icas", "oso", "osa", "osos", "osas",
+    "mente",
+})
+_STEM_MIN = 6  # radical mínimo: 'metro' (5) NUNCA casa 'metroid'
 
-    O radical ajuda em variações derivadas que a flexão não cobre
-    ('cronologia'/'cronológica', 'poderes'/'poderosa') sem casar palavras
-    curtas por acidente (o piso de 5 evita 'anos' ~ 'anotações').
+
+def _token_hit(term: str, target_variants: set[str], *, min_stem: int = _STEM_MIN) -> bool:
+    """Termo presente no alvo? (variantes plurais OU radical + flexão conhecida).
+
+    O radical só vale com >= 6 caracteres comuns E a sobra sendo flexão
+    ('cronologia'/'cronológica' casa; 'metro'/'Metroid' NÃO).
     """
     mine = variants(term)
     if mine & target_variants:
         return True
     for a in mine:
-        if len(a) < min_prefix:
-            continue
         for b in target_variants:
-            if len(b) < min_prefix:
+            short, longer = (a, b) if len(a) <= len(b) else (b, a)
+            if len(short) < min_stem or not longer.startswith(short):
                 continue
-            common = 0
-            for ca, cb in zip(a, b):
-                if ca != cb:
-                    break
-                common += 1
-            if common >= min_prefix:
+            remainder = longer[len(short):]
+            if len(remainder) <= 4 and remainder in _DERIVED_SUFFIXES:
                 return True
     return False
 
@@ -358,13 +363,16 @@ def _significant_entity_terms(text: str) -> list[str]:
     return [t for t in tokens(text) if len(t) > 2 and not _is_stop(t)]
 
 
-def compatible_entity(entity: str, hint: str) -> bool:
-    """A entidade da query pertence à entidade da PÁGINA?
+def compatible_entity(entity: str, hint: str, *, min_overlap: float = 0.6) -> bool:
+    """A entidade da query pertence à entidade da PÁGINA? (overlap >= 60%)
 
-    Sem essa resolução a mesma intenção se fragmenta: numa página sobre
+    Sem essa resolução a mesma intenção se fragmenta (numa página sobre
     "Melhores arqueiros de anime", as queries "arqueiros de anime" e "melhores
-    arqueiros anime" geravam famílias DIFERENTES (entidades distintas por
-    variação de digitação) — exatamente o que o motor deveria eliminar.
+    arqueiros anime" geravam famílias diferentes). Mas exigir APENAS UM token em
+    comum criava over-merge: "Dragon Ball" absorvia "Dragon Quest" pelo token
+    'dragon'. O piso de 60% (sobre o lado menor) protege franquias com nome
+    compartilhado, e quando o corpus tem a entidade canônica o chamador deve
+    usá-la (ver CLI: resolve_cluster_entity).
     """
     hint_terms = _significant_entity_terms(hint)
     if not hint_terms:
@@ -373,7 +381,8 @@ def compatible_entity(entity: str, hint: str) -> bool:
     if not terms:
         return True  # query sem entidade chegou NESTA página: pertence a ela
     hint_variants = expand_variants(hint_terms)
-    return any(_token_hit(t, hint_variants) for t in terms)
+    hits = sum(1 for t in terms if _token_hit(t, hint_variants))
+    return (hits / min(len(terms), len(hint_terms))) >= float(min_overlap)
 
 
 # ---------------------------------------------------------------------------
@@ -484,13 +493,23 @@ def build_families(rows: Iterable[dict[str, Any]], *,
 # ---------------------------------------------------------------------------
 
 def demand_share(families: Sequence[dict[str, Any]], *, url: str = "",
-                 window_start: str = "", window_end: str = "") -> dict[str, Any]:
+                 window_start: str = "", window_end: str = "",
+                 page_impressions: float | None = None) -> dict[str, Any]:
     """Quanto da demanda OBSERVADA da página pertence a cada família.
 
     ``observed_query_share`` = family_impressions / Σ impressões observadas.
     NUNCA chamar isso de cobertura total das buscas: o GSC devolve as queries
     principais, não o universo inteiro. Sem universo (Σ = 0) os shares são
     ``None`` — ausência de dado não é zero.
+
+    ``page_impressions`` (impressões totais da página, forma ``page`` do GSC)
+    permite a segunda métrica, que o share sozinho não dá:
+
+        query_observation_ratio = Σ impressões das queries / impressões da página
+
+    Ex.: "idade = 40% das queries observáveis" pode ser só 8% da página se as
+    queries conhecidas explicam 20% das impressões dela. A decisão precisa das
+    duas leituras — e a razão entra na confiança.
     """
     total = sum(float(f.get("impressions", 0) or 0) for f in families)
     out: list[dict[str, Any]] = []
@@ -507,15 +526,35 @@ def demand_share(families: Sequence[dict[str, Any]], *, url: str = "",
             "query_count": family.get("query_count"),
             "queries": list(family.get("queries") or []),
         })
+    ratio: float | None = None
+    try:
+        page_imp = float(page_impressions) if page_impressions is not None else 0.0
+    except (TypeError, ValueError):
+        page_imp = 0.0
+    if page_imp > 0:
+        ratio = round(min(total / page_imp, 1.0), 4)
+    if ratio is None:
+        status = "unknown"
+    elif ratio >= 0.5:
+        status = "well_observed"
+    elif ratio >= 0.2:
+        status = "partial"
+    else:
+        status = "thin"
     return {
         "url": url,
         "window_start": window_start,
         "window_end": window_end,
         "observed_impressions": round(total, 2),
+        "page_impressions": round(page_imp, 2) if page_imp else None,
+        "query_observation_ratio": ratio,
+        "observation_status": status,
         "families": out,
         "metric": "observed_query_share",
         "caveat": ("share do universo OBSERVADO no GSC (queries principais); "
-                   "não é a cobertura total das buscas"),
+                   "não é a cobertura total das buscas — ver "
+                   "query_observation_ratio para a fração das impressões da "
+                   "página que as queries conhecidas explicam"),
         "has_data": bool(total),
     }
 

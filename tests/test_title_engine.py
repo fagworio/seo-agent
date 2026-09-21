@@ -7,8 +7,9 @@ from hermes_seo_agent.report.query_families import (build_families, demand_share
 from hermes_seo_agent.report.rankability_v2 import query_rankability
 from hermes_seo_agent.report.title_engine import (
     GA4_AVAILABLE, GA4_MISSING, TITLE_WEIGHTS, MAX_TITLE_INTENTS,
-    combination_candidates, decide_title, family_rankability, family_trends,
-    ga4_evidence_status, relevant_families, trend_factor, weighted_title_score,
+    combination_candidates, decide_title, family_rankability, family_semantic_signals,
+    family_trends, finalize_titles, ga4_evidence_status, page_headroom,
+    relevant_families, trend_factor, weighted_title_score,
 )
 
 
@@ -117,20 +118,39 @@ def test_combinatorio_descarta_entidade_perdida_e_comprimento():
 # --- FASE 6: rankability reaproveitada ------------------------------------
 
 def test_rankability_da_familia_usa_a_formula_existente():
+    """family_rankability é a MESMA fórmula de rankability_v2 (nenhuma paralela)."""
     _f, share, _c, relevant, _cand, rankability = _evidence()
     family = relevant[0]
-    direct = query_rankability(
-        {"keyword": family["family"], "impressions": family["impressions"],
-         "clicks": family["clicks"], "position": family["weighted_position"],
-         "semantic": {"entity_fit": 1.0, "title_fit": 1.0, "h1_fit": 0.6,
-                      "heading_fit": 0.5, "body_fit": 0.5, "question_fit": 0.4,
-                      "related_entity_fit": 0.5}},
-        {"related_queries": 0, "related_top10_queries": 0},
-        {"total": 1, "counts": {"top3": 0, "top10": 0, "top20": 0, "top50": 0},
-         "shares": {"top3": 0.0, "top10": 0.0, "top20": 0.0, "top50": 0.0},
-         "median_position": family["weighted_position"],
-         "avg_position": family["weighted_position"]})
+    dist = {"total": 1, "counts": {"top3": 0, "top10": 0, "top20": 0, "top50": 0},
+            "shares": {"top3": 0.0, "top10": 0.0, "top20": 0.0, "top50": 0.0},
+            "median_position": family["weighted_position"],
+            "avg_position": family["weighted_position"]}
+    signals = {"keyword": family["family"], "impressions": family["impressions"],
+               "clicks": family["clicks"], "position": family["weighted_position"],
+               # mesmos sinais que o fallback do motor monta (medidos, não fake)
+               "semantic": family_semantic_signals(family, title=TITLE)}
+    direct = query_rankability(signals,
+                               {"related_queries": 0, "related_top10_queries": 0},
+                               dist)
     assert rankability[family["family"]] == direct["score"]
+    # o fator é FACILIDADE observada (mais autoridade nunca reduz o rankability)
+    assert "observed_ease" in direct["factors"]
+    assert "observed_difficulty" not in direct["factors"]
+
+
+def test_rankability_cresce_com_autoridade_historica():
+    """Teste monotônico: mais autoridade do assunto nunca diminui o rankability."""
+    dist = {"total": 4, "counts": {"top3": 0, "top10": 2, "top20": 3, "top50": 4},
+            "shares": {"top3": 0.0, "top10": 0.5, "top20": 0.75, "top50": 1.0},
+            "median_position": 8.0, "avg_position": 9.0}
+    cluster = {"related_queries": 40, "related_top10_queries": 20}
+    base = {"keyword": "gojo idade", "impressions": 900, "clicks": 9,
+            "position": 5.0,
+            "semantic": {"entity_fit": 1.0, "title_fit": 1.0, "body_fit": 0.6}}
+    fraco = query_rankability({**base, "topic_authority": 0.1}, cluster, dist)
+    forte = query_rankability({**base, "topic_authority": 0.9}, cluster, dist)
+    assert forte["score"] > fraco["score"]
+    assert forte["factors"]["observed_ease"]["score"] > fraco["factors"]["observed_ease"]["score"]
 
 
 # --- FASE 7: score ---------------------------------------------------------

@@ -96,42 +96,87 @@ CANDIDATE_FEATURES: tuple[str, ...] = (
     "demand_coverage_before", "demand_coverage_after", "primary_intent",
     "secondary_intent", "query_rankability", "baseline_percentile",
     "position_before", "ctr_before", "family_share", "title_score", "confidence",
+    # os SETE fatores que produziram o score (fonte da calibração) + confiança
+    # numérica: sem eles a calibração não aprenderia os eixos que o score declara
+    "score_factors", "confidence_score",
 )
 
-# Eixo do SCORE -> features que o representam no outcome registrado. Sem este
-# mapa a calibração olharia nomes que não existem no case (e não ajustaria
-# nada, silenciosamente).
+# Eixo do SCORE -> features que o representam no outcome registrado. O caminho
+# canônico é `candidate_features["score_factors"]` (os SETE valores que
+# produziram o score). Sem este mapa a calibração olharia nomes que não existem
+# no case (e não ajustaria nada, silenciosamente).
+# `historical_success` NÃO usa `title_score` como proxy: o score final depende
+# dele (referência circular) — a calibração mediria a si mesma.
 FACTOR_FEATURES: dict[str, tuple[str, ...]] = {
     "demand_coverage": ("demand_coverage", "demand_coverage_after"),
     "intent_fit": ("intent_fit",),
     "rankability": ("rankability", "query_rankability"),
     "headroom": ("headroom",),
-    "historical_success": ("historical_success", "title_score"),
+    "historical_success": ("historical_success",),
     "trend": ("trend",),
-    "confidence": ("confidence",),
+    "confidence": ("confidence", "confidence_score"),
 }
+
+# Rótulos legados de confiança -> valor numérico (linhas antigas do store).
+CONFIDENCE_LABEL_SCORES: dict[str, float] = {"high": 0.85, "medium": 0.6, "low": 0.35}
+
+
+def score_factors_from_features(features: dict[str, Any] | None) -> dict[str, float]:
+    """Os SETE fatores do score, como persistidos para a calibração."""
+    source = features or {}
+    out: dict[str, float] = {}
+    for key in TITLE_WEIGHTS:
+        value = source.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            out[key] = round(float(value), 4)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def outcome_record(*, url: str = "", intervention: dict[str, Any] | None = None,
                    before: dict[str, Any] | None = None,
                    candidate_features: dict[str, Any] | None = None,
+                   factors: dict[str, Any] | None = None,
+                   confidence_score: float | None = None,
                    after: dict[str, Any] | None = None,
                    extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Estrutura canônica de outcome de uma alteração de título.
 
     ``after``: {"7d": {...}, "28d": {...}, "56d": {...}, "90d": {...}} (parcial é
     normal — a medição chega em ondas). Janela ausente fica ``None``: nunca zero.
+
+    ``factors``/``candidate_features["score_factors"]``: os SETE valores que
+    produziram o score. É deles que a calibração aprende — sem eles, o eixo
+    declarado no score não tem como ser validado empiricamente.
     """
     kind = intervention or classify_intervention(source="title_engine")
     after = after or {}
+    given = dict(candidate_features or {})
+    stored = {key: given.get(key) for key in CANDIDATE_FEATURES}
+    score_factors = score_factors_from_features(
+        factors or given.get("score_factors") or given)
+    if score_factors:
+        stored["score_factors"] = score_factors
+    numeric_confidence = confidence_score
+    if numeric_confidence is None:
+        value = given.get("confidence_score")
+        if value is not None and not isinstance(value, bool):
+            try:
+                numeric_confidence = float(value)
+            except (TypeError, ValueError):
+                numeric_confidence = None
+    if numeric_confidence is not None:
+        stored["confidence_score"] = round(float(numeric_confidence), 4)
     record: dict[str, Any] = {
         "url": url,
         "intervention_type": kind.get("intervention_type"),
         "optimization_driven": bool(kind.get("optimization_driven")),
         "eligible_for_title_calibration": bool(kind.get("eligible_for_title_calibration")),
         "before": dict(before or {}),
-        "candidate_features": {
-            key: (candidate_features or {}).get(key) for key in CANDIDATE_FEATURES},
+        "candidate_features": stored,
         "model_version": kind.get("model_version", MODEL_VERSION),
     }
     for window in ("7d", "28d", "56d", "90d"):
@@ -208,16 +253,31 @@ MAX_RELATIVE_SHIFT = 0.10      # ±10% relativo por ciclo (teto absoluto)
 
 
 def _feature_value(outcome: dict[str, Any], key: str) -> float | None:
-    """Valor medido do eixo do score (aceita o nome do fator ou o da feature)."""
+    """Valor medido do eixo do score (aceita o nome do fator ou o da feature).
+
+    Ordem: (1) ``candidate_features["score_factors"]`` — os sete valores EXATOS
+    que produziram o score; (2) nomes legados; (3) rótulo de confiança antigo,
+    convertido para número.
+    """
     features = outcome.get("candidate_features") or {}
+    factors = features.get("score_factors") if isinstance(features, dict) else None
+    if isinstance(factors, dict):
+        value = factors.get(key)
+        if value is not None and not isinstance(value, bool):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
     for name in FACTOR_FEATURES.get(key, (key,)):
-        value = features.get(name)
+        value = features.get(name) if isinstance(features, dict) else None
         if value is None:
             value = outcome.get(name)
         if value is None or isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
             return float(value)
+        if isinstance(value, str) and value.strip().lower() in CONFIDENCE_LABEL_SCORES:
+            return CONFIDENCE_LABEL_SCORES[value.strip().lower()]
         try:
             return float(value)
         except (TypeError, ValueError):

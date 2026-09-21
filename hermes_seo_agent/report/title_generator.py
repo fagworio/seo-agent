@@ -30,6 +30,9 @@ GENERATION_MODES = (MODE_DETERMINISTIC, MODE_HYBRID)
 TEMPLATES: tuple[str, ...] = (
     "{entity}: {primary}",
     "{entity}: {primary} e {secondary}",
+    # TRIO: sem um template de terceira intenção o motor podia pontuar uma
+    # combinação de 3 e não ter como representá-la no título (FASE 7/15).
+    "{entity}: {primary}, {secondary} e {tertiary}",
     "{primary} de {entity}",
     "{entity}: {primary} em {context}",
 )
@@ -179,10 +182,12 @@ def generate_candidates(
     if candidate:
         primary = phrase_for(intents[0]) if intents else ""
         secondary = phrase_for(intents[1]) if len(intents) > 1 else ""
+        tertiary = phrase_for(intents[2]) if len(intents) > 2 else ""
         values = {
             "entity": entity,
             "primary": primary,
             "secondary": secondary,
+            "tertiary": tertiary,
             "context": context,
         }
         for template in TEMPLATES:

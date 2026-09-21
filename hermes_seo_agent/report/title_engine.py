@@ -17,12 +17,12 @@ reportado como "Title Opportunity Score: 78/100".
 from __future__ import annotations
 
 import itertools
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from .query_families import (GENERIC_INTENT, INTENT_TITLE_PHRASES,
                              SEMANTIC_EQUIVALENTS, TRANSACTIONAL_INTENTS,
                              INCOMPATIBLE_PAIRS, entity_covered, expand_variants,
-                             tokens, INTENT_LABELS, intent_phrases)
+                             title_coverage, tokens, INTENT_LABELS, intent_phrases)
 from .rankability_v2 import confidence_v2, headroom, query_rankability
 
 MODEL_VERSION = "title-engine/1"
@@ -184,25 +184,34 @@ def combination_candidates(families: Sequence[dict[str, Any]], *,
 # FASE 6 — Query Rankability por FAMÍLIA (reaproveita rankability_v2)
 # ---------------------------------------------------------------------------
 
-def family_semantic_signals(family: dict[str, Any], *, title: str = "") -> dict[str, float]:
+def family_semantic_signals(family: dict[str, Any], *, title: str = "") -> dict[str, Any]:
     """Sinais semânticos MEDIDOS para a família (entradas do rankability).
 
-    A página É sobre a entidade (as queries da família chegam nela) e o título
-    diz ou não diz a intenção/entidade — fatos observáveis, não heurística nova.
+    Só o que é medível com o dado em mãos: a página É sobre a entidade (as
+    queries chegam nela), o título diz ou não diz a intenção/entidade, e a query
+    tem forma interrogativa. ``h1``/``heading``/``body``/``related`` ficam
+    ``None`` = DESCONHECIDO — o chamador que tem corpus deve passá-los via
+    ``build_query_signals`` (rankability_signals). Nunca inventamos 0.5.
     """
     title_variants = expand_variants(tokens(title))
     entity = str(family.get("entity") or "")
-    intents = [str(family.get("intent")) for f in [family] if family.get("intent")]
+    intent = str(family.get("intent") or "")
     intent_ok = any(all(expand_variants(tokens(alias)) & title_variants)
-                    for intent in intents for alias in intent_phrases(intent))
+                    for alias in intent_phrases(intent)) if intent else False
+    query = str((family.get("queries") or [""])[0]) if family.get("queries") else ""
+    interrogative = bool(query) and (
+        query.strip().endswith("?") or tokens(query)[:1] and
+        str(tokens(query)[0]) in {"como", "qual", "quais", "quantos", "quantas",
+                                  "quanto", "quando", "onde", "quem", "porque"})
     return {
         "entity_fit": 1.0 if entity_covered(entity, title, title_variants) else 0.4,
         "title_fit": 1.0 if intent_ok else (0.5 if entity else 0.0),
-        "h1_fit": 0.6,
-        "heading_fit": 0.5,
-        "body_fit": 0.5,
-        "question_fit": 0.4,
-        "related_entity_fit": 0.5,
+        "question_fit": 0.6 if interrogative else 0.0,
+        "h1_fit": None,
+        "heading_fit": None,
+        "body_fit": None,
+        "related_entity_fit": None,
+        "measured": ["entity_fit", "title_fit", "question_fit"],
     }
 
 
@@ -302,6 +311,41 @@ def trend_factor(trend: dict[str, Any] | None) -> float:
     return round(min(max(base, 0.0), 1.0), 3)
 
 
+def page_headroom(position: Any, ctr: Any, baseline_verdict: dict[str, Any] | None) -> dict[str, Any]:
+    """Headroom contra a referência do PRÓPRIO segmento (nunca um CTR inventado).
+
+    Antes: ``p50 or 0.06`` — (a) transformava um P50 = 0 real em 6%; (b)
+    reintroduzia um benchmark externo arbitrário, justamente o que o baseline
+    próprio existe para eliminar. Sem P50 utilizável, o headroom é NEUTRO (0.5)
+    com status explícito, e isso não vira evidência de oportunidade.
+    """
+    bucket = (baseline_verdict or {}).get("bucket") or {}
+    p50 = bucket.get("p50")
+    expected: float | None
+    try:
+        expected = float(p50) if p50 is not None else None
+    except (TypeError, ValueError):
+        expected = None
+    if expected is None:
+        return {"score": 0.5, "status": "unknown", "expected_ctr": None,
+                "explanation": ("sem P50 do próprio segmento: headroom neutro "
+                                "(nunca um CTR de referência inventado)")}
+    if expected <= 0:
+        return {"score": 0.5, "status": "degenerate", "expected_ctr": expected,
+                "explanation": ("P50 do segmento é 0: não há referência de CTR "
+                                "utilizável — headroom neutro")}
+    score, why = headroom(position, ctr, expected)
+    return {"score": score, "status": "measured", "expected_ctr": expected,
+            "explanation": why}
+
+
+def _headroom_value(value: Any) -> tuple[float, dict[str, Any]]:
+    """Aceita tanto o dict de `page_headroom` quanto um escalar (compat)."""
+    if isinstance(value, dict):
+        return float(value.get("score") or 0.0), value
+    return float(value or 0.0), {"score": float(value or 0.0), "status": "given"}
+
+
 # ---------------------------------------------------------------------------
 # FASE 10 — GA4 como sinal PÓS-CLIQUE no nível da página
 # ---------------------------------------------------------------------------
@@ -343,6 +387,70 @@ def ga4_evidence_status(ga4: dict[str, Any] | None) -> dict[str, Any]:
         "post_click_healthy": healthy,
         "question": "a página satisfaz quem chega do Google? (não: qual keyword)",
         "blocks_decision": False,
+    }
+
+
+def finalize_titles(*, generated: Sequence[dict[str, Any]], candidate: dict[str, Any],
+                    families: Sequence[dict[str, Any]],
+                    shares: dict[str, float] | None = None,
+                    rankability: dict[str, float] | None = None,
+                    headroom_value: Any = 0.0,
+                    trends: dict[str, dict[str, Any]] | None = None,
+                    confidence_score: float = 0.0,
+                    historical_success: float | None = None,
+                    weights: dict[str, float] | None = None,
+                    tolerance: float = 0.02) -> dict[str, Any]:
+    """Mede e pontua o TÍTULO final — não a combinação abstrata (FASE 7/15).
+
+    A combinação `idade + poderes` pode cobrir 78%, mas o gerador aceitava
+    "Gojo: idade" (só 42%) porque o validador só proibia intenção SEM evidência.
+    Aqui cada título gerado é remedido com `title_coverage` (mesmas famílias e
+    shares) e só é aceito se cobrir o candidato pontuado (tolerância de 2 p.p.).
+    O score devolvido usa a cobertura MEDIDA do texto — a cadeia
+    evidência → score → título passa a fechar.
+    """
+    target = float(candidate.get("observed_demand_coverage") or 0.0)
+    hr_score, hr_detail = _headroom_value(headroom_value)
+    scored: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for item in generated or []:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        measured = title_coverage(title, families, shares=shares)
+        coverage = measured.get("observed_demand_coverage")
+        coverage_value = float(coverage) if coverage is not None else 0.0
+        if coverage_value + float(tolerance) < target:
+            rejected.append({
+                "title": title, "measured_coverage": round(coverage_value, 4),
+                "reason": (f"cobertura medida {coverage_value:.0%} < candidato "
+                           f"{target:.0%}"),
+                "covered_families": measured.get("covered_families"),
+            })
+            continue
+        features = candidate_features(
+            candidate=candidate, families=families, rankability=rankability or {},
+            headroom_value=hr_score, trends=trends or {},
+            confidence_score=confidence_score, historical_success=historical_success)
+        features["demand_coverage"] = round(coverage_value, 4)
+        scored.append({
+            "title": title,
+            "template": item.get("template"),
+            "source": item.get("source"),
+            "intents": item.get("intents"),
+            "measured_coverage": round(coverage_value, 4),
+            "candidate_coverage": round(target, 4),
+            "covered_families": measured.get("covered_families"),
+            "uncovered_families": measured.get("uncovered_families"),
+            "title_score": weighted_title_score(features, weights),
+        })
+    scored.sort(key=lambda item: (-float(item["title_score"]["score"]), len(item["title"])))
+    return {
+        "titles": scored,
+        "best": scored[0] if scored else None,
+        "rejected": rejected,
+        "headroom": hr_detail,
+        "measured": "cobertura e score recalculados SOBRE O TÍTULO (não sobre a combinação)",
     }
 
 
@@ -501,11 +609,14 @@ def decide_title(
     coverage: dict[str, Any],
     candidates: Sequence[dict[str, Any]],
     rankability: dict[str, float] | None = None,
-    headroom_value: float = 0.0,
+    headroom_value: Any = 0.0,
     trends: dict[str, dict[str, Any]] | None = None,
     ga4: dict[str, Any] | None = None,
     confidence_score: float | None = None,
     historical_success: float | None = None,
+    historical_success_fn: Callable[[int, str | None], dict[str, Any]] | None = None,
+    title_evaluator: Callable[..., dict[str, Any]] | None = None,
+    observation_ratio: float | None = None,
     weights: dict[str, float] | None = None,
     model_version: str = MODEL_VERSION,
     weights_version: int = 0,
@@ -538,19 +649,49 @@ def decide_title(
 
     ranked: list[dict[str, Any]] = []
     evaluated: list[dict[str, Any]] = []
+    hr_score, hr_detail = _headroom_value(headroom_value)
     for candidate in candidates:
+        # histórico EMPÍRICO por candidato (posição × nº de intenções × intenção):
+        # um par e um trio não têm o mesmo histórico de sucesso (FASE 14).
+        intents = [str(i) for i in (candidate.get("intents") or [])]
+        history: dict[str, Any] | None = None
+        hs_value = historical_success
+        if callable(historical_success_fn):
+            history = historical_success_fn(len(intents), intents[0] if intents else None) or {}
+            hs_value = history.get("value")
         features = candidate_features(
             candidate=candidate, families=families,
-            rankability=rankability or {}, headroom_value=headroom_value,
+            rankability=rankability or {}, headroom_value=hr_score,
             trends=trends or {}, confidence_score=evidence_conf,
-            historical_success=historical_success)
+            historical_success=hs_value)
         scored = weighted_title_score(features, weights)
-        item = {**candidate, "features": features, "title_score": scored}
+        item = {**candidate, "features": features, "title_score": scored,
+                "history": history}
         evaluated.append(item)
         if not candidate.get("discarded"):
             ranked.append(item)
     ranked.sort(key=lambda c: -float(c["title_score"]["score"]))
     best = ranked[0] if ranked else None
+
+    # FASE 7/15: o objeto PONTUADO final é o título — mede a cobertura do texto
+    # gerado e rejeita o candidato que nenhum título consegue representar.
+    title_options: dict[str, Any] | None = None
+    candidate_failed_reason: str | None = None
+    if best is not None and callable(title_evaluator):
+        eval_context = {"confidence_score": evidence_conf, "headroom": hr_detail,
+                        "observation_ratio": observation_ratio}
+        title_options = title_evaluator(best, eval_context) or {}
+        chosen = title_options.get("best")
+        best = dict(best)
+        if chosen:
+            best["title"] = chosen.get("title")
+            best["observed_demand_coverage"] = chosen.get("measured_coverage")
+            best["combination_coverage"] = chosen.get("candidate_coverage")
+            best["title_score"] = chosen.get("title_score")
+        else:
+            candidate_failed_reason = (
+                "nenhum título validado atinge a cobertura do candidato pontuado")
+            best = None
 
     gates = title_gates(
         page=page, families=families,
@@ -589,6 +730,12 @@ def decide_title(
         label = "medium" if (families and observed_universe > 0) else "low"
     elif decision in {"no_title_change", "investigate_cause"} and label == "high":
         label = "medium"
+    # FASE 7/observação: se as queries conhecidas explicam POUCO das impressões
+    # da página, os percentuais de família são uma fatia estreita — a confiança
+    # não pode ser `high` (não bloqueia; o share continua sendo o medido).
+    if (observation_ratio is not None and float(observation_ratio) < 0.2
+            and label == "high"):
+        label = "medium"
 
     contract = {
         "decision": decision,
@@ -605,7 +752,21 @@ def decide_title(
             "p25": ((baseline_verdict or {}).get("bucket") or {}).get("p25"),
             "p50": ((baseline_verdict or {}).get("bucket") or {}).get("p50"),
             "verdict": (baseline_verdict or {}).get("verdict", ""),
+            "window_start": (baseline_verdict or {}).get("baseline_window_start", ""),
+            "window_end": (baseline_verdict or {}).get("baseline_window", ""),
+            "source": (baseline_verdict or {}).get("baseline_source", ""),
         },
+        "observation": {
+            "observed_impressions": coverage.get("observed_share_universe"),
+            "page_impressions": page.get("impressions"),
+            "query_observation_ratio": observation_ratio,
+            "status": ("unknown" if observation_ratio is None else
+                       "well_observed" if float(observation_ratio) >= 0.5 else
+                       "partial" if float(observation_ratio) >= 0.2 else "thin"),
+            "note": ("fração das impressões da página explicada pelas queries "
+                     "observadas; o share das famílias é do universo observado"),
+        },
+        "headroom": hr_detail,
         "query_families": [
             {"family": f.get("family"), "intent": f.get("intent"),
              "entity": f.get("entity"), "impressions": f.get("impressions"),
@@ -620,15 +781,24 @@ def decide_title(
             "intents": best["intents"],
             "families": best["families"],
             "phrase": best["phrase"],
+            "title": best.get("title"),
             "observed_demand_coverage": best["observed_demand_coverage"],
+            "combination_coverage": best.get("combination_coverage",
+                                             best["observed_demand_coverage"]),
             "score": best["title_score"]["score"],
             "score_label": best["title_score"]["label"],
             "factors": best["title_score"]["factors"],
             "weights": best["title_score"]["weights"],
+            "history": best.get("history"),
+            "title_options": (title_options or {}).get("titles"),
+            "titles_rejected": (title_options or {}).get("rejected"),
+            "scored_object": "título (cobertura medida no texto gerado)",
         } if best else None),
+        "candidate_failed_reason": candidate_failed_reason,
         "candidates_evaluated": [
             {"intents": c["intents"], "coverage": c["observed_demand_coverage"],
              "score": c["title_score"]["score"], "discarded": bool(c.get("discarded")),
+             "history": (c.get("history") or {}).get("value"),
              "discard_reason": c.get("discard_reason")} for c in
             sorted(evaluated, key=lambda x: -float(x["title_score"]["score"]))[:10]],
         "rankability": {k: round(float(v), 3) for k, v in (rankability or {}).items()},
@@ -671,10 +841,27 @@ def explain_decision(contract: dict[str, Any]) -> list[str]:
     if candidate:
         intents = " + ".join(candidate.get("intents") or [])
         cov = candidate.get("observed_demand_coverage")
-        if cov is not None:
+        combination = candidate.get("combination_coverage")
+        if combination is not None and cov is not None and abs(float(combination) - float(cov)) > 0.005:
+            lines.append(f"A combinação {intents} cobria {float(combination)*100:.0f}% e o "
+                         f"título proposto cobre {float(cov)*100:.0f}% (cobertura MEDIDA "
+                         f"no texto).")
+        elif cov is not None:
             lines.append(f"A combinação {intents} cobre aproximadamente "
                          f"{float(cov)*100:.0f}% da demanda observada.")
+        if candidate.get("title"):
+            lines.append(f"Título proposto: \"{candidate['title']}\".")
         lines.append(str(candidate.get("score_label") or ""))
+    if contract.get("candidate_failed_reason"):
+        lines.append(contract["candidate_failed_reason"])
+    observation = contract.get("observation") or {}
+    if observation.get("query_observation_ratio") is not None:
+        lines.append(f"As queries observadas explicam {float(observation['query_observation_ratio'])*100:.0f}% "
+                     f"das impressões da página ({observation.get('status')}).")
+    headroom_detail = contract.get("headroom") or {}
+    if headroom_detail.get("status") in {"unknown", "degenerate"}:
+        lines.append(f"Headroom {headroom_detail.get('status')}: "
+                     f"{headroom_detail.get('explanation')}.")
     baseline = contract.get("baseline") or {}
     if baseline.get("verdict") in {"below_p10", "below_comparable"}:
         lines.append(f"CTR atual está abaixo do P10 de "

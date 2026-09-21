@@ -21,11 +21,17 @@ from hermes_seo_agent.report.rankability_v2 import headroom, query_distribution
 from hermes_seo_agent.report.shadow_mode import (engine_telemetry, measurement_summary,
                                                 rollout_policy, shadow_compare,
                                                 shadow_report, shadow_outcome_case)
-from hermes_seo_agent.report.title_engine import (combination_candidates, decide_title,
-                                                 family_rankability, family_trends,
-                                                 relevant_families)
+from hermes_seo_agent.report.title_engine import (TITLE_WEIGHTS, combination_candidates,
+                                                 decide_title, family_rankability,
+                                                 family_trends, finalize_titles,
+                                                 page_headroom, relevant_families)
 from hermes_seo_agent.report.title_generator import generate_candidates
 from hermes_seo_agent.storage.db import Storage
+
+
+def _row(query, impressions, clicks=0, position=5.0):
+    return {"keys": [query], "impressions": impressions, "clicks": clicks,
+            "position": position, "ctr": (clicks / impressions) if impressions else 0.0}
 
 URL = "https://www.unicorniohater.com.br/gojo"
 TITLE = "Gojo: poderes em Jujutsu Kaisen"
@@ -207,3 +213,91 @@ def _persist_history(storage, *, count: int) -> None:
         storage.set_outcome_verdict(
             outcome_id, verdict=case["verdict"], days=28,
             result={"gsc_deltas": {"ctr": 0.02 if improved else -0.01}})
+
+
+def test_integracao_titulo_medido_fatores_persistidos_e_calibracao(tmp_path):
+    """Fluxo endurecido: baseline das mesmas páginas GSC → famílias → candidato →
+    TÍTULO medido → outcome com os SETE fatores → calibração versionada."""
+    from hermes_seo_agent.report.baseline import build_baseline_from_pages
+
+    pages = [{"keys": [f"https://x/c{i}"], "impressions": 3000.0, "clicks": 105.0,
+              "position": 7.0, "ctr": 0.035} for i in range(40)]
+    pages.append({"keys": [URL], "impressions": 4300.0, "clicks": 31.0,
+                  "position": 5.2, "ctr": 31 / 4300})
+    baseline = build_baseline_from_pages(pages, window_start="2026-08-01",
+                                         window_end="2026-08-28",
+                                         min_impressions=100)
+    verdict = ctr_verdict(None, position=5.2, impressions=4300, ctr=31 / 4300,
+                          baseline=baseline)
+    assert verdict["verdict"] == "below_p10"
+
+    ROWS = [
+        _row("quantos anos tem gojo", 900, 9, 4.0),
+        _row("gojo poderes", 500, 5, 6.0),
+        _row("qual a altura do gojo", 400, 3, 8.0),
+    ]
+    families = build_families(ROWS, entity_hint="Gojo")
+    demand = demand_share(families, url=URL, window_start="2026-08-01",
+                          window_end="2026-08-28", page_impressions=4300.0)
+    shares = {f["family"]: f["share"] for f in demand["families"]}
+    assert demand["query_observation_ratio"] == round(1800 / 4300, 4)
+    coverage = title_coverage("Gojo: historia", demand["families"], shares=shares)
+    relevant = relevant_families(demand)
+    candidates = combination_candidates(relevant, entity="Gojo",
+                                        title_terms=tokens("Gojo: historia"))
+    rankability = {f["family"]: 0.7 for f in relevant}
+    headroom_detail = page_headroom(5.2, 31 / 4300, verdict)
+    trends = family_trends({"quantos anos tem gojo": {"interest": 70, "momentum": 1}},
+                           relevant)
+
+    def _evaluate(cand, ctx, /, **_kw):
+        generated = generate_candidates(entity="Gojo", candidate=cand,
+                                        current_title="Gojo: historia",
+                                        evidence_intents=cand["intents"], max_len=60)
+        return finalize_titles(generated=generated["candidates"], candidate=cand,
+                               families=demand["families"], shares=shares,
+                               rankability=rankability,
+                               headroom_value=ctx.get("headroom", headroom_detail),
+                               trends=trends,
+                               confidence_score=float(ctx.get("confidence_score") or 0))
+
+    contract = decide_title(
+        url=URL, title="Gojo: historia",
+        page={"impressions": 4300, "clicks": 31, "ctr": 31 / 4300, "position": 5.2,
+              "entity": "Gojo"},
+        baseline_verdict=verdict, families=demand["families"], coverage=coverage,
+        candidates=candidates, rankability=rankability,
+        headroom_value=headroom_detail, trends=trends,
+        ga4={"sessions": 300, "engagement_rate": 0.8},
+        historical_success_fn=lambda count, primary: {
+            "value": 0.8 if count == 1 else 0.4, "sample": 12, "scope": "segmento",
+            "sufficient": True, "note": "histórico", "segment": {}},
+        title_evaluator=_evaluate,
+        observation_ratio=demand["query_observation_ratio"])
+    # o candidato pontuado É um título com as três intenções, com cobertura MEDIDA
+    assert contract["candidate"]["title"] == "Gojo: idade, poderes e altura"
+    assert contract["candidate"]["observed_demand_coverage"] == 1.0
+    assert contract["candidate"]["factors"]["demand_coverage"] == 1.0
+    assert set(contract["candidate"]["factors"]) == set(TITLE_WEIGHTS)
+    assert contract["candidate"]["history"]["value"] == 0.4     # trio
+    assert contract["observation"]["status"] == "partial"
+    assert contract["observation"]["query_observation_ratio"] == round(1800 / 4300, 4)
+
+    # outcome → store → calibração com os sete fatores versionados
+    storage = Storage(str(tmp_path / "hard.db"))
+    case = shadow_outcome_case(contract, source="title_engine")
+    assert case["candidate_features"]["score_factors"] == contract["candidate"]["factors"]
+    for index in range(33):
+        extra = outcome_record(
+            url=f"https://x/h{index}",
+            candidate_features={"score_factors": {
+                **{k: 0.5 for k in TITLE_WEIGHTS},
+                "demand_coverage": 0.9 if index % 2 == 0 else 0.1}},
+            extra={"verdict": "improved" if index % 2 == 0 else "worsened"})
+        persist_case(storage, extra)
+    persist_case(storage, case)
+    cases = load_cases(storage)
+    report = title_calibration(cases, calibrated_at="2026-09-21")
+    assert report["stage"] == "limited" and report["weights_version"] == 1
+    assert report["weights"]["demand_coverage"] > TITLE_WEIGHTS["demand_coverage"]
+    storage.close()

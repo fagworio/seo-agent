@@ -107,19 +107,34 @@ def _bucket_summary(ctrs: list[float]) -> dict[str, Any]:
             "p75": _percentile(ctrs, 0.75)}
 
 
-def build_baseline(storage: Any, *, window_end: str | None = None,
+def build_baseline(storage: Any, *, window_start: str | None = None,
+                   window_end: str | None = None,
                    min_impressions: int = 100,
                    with_segments: bool = True) -> dict[str, Any]:
     """Percentis de CTR por contexto (+ segmentos), das janelas já coletadas.
 
-    Somente páginas com volume mínimo entram (ruído não vira baseline).
+    A janela é um PAR ``(window_start, window_end)`` — não só o fim. Filtrar
+    apenas por ``window_end`` (como antes) podia: (a) comparar uma página de 28
+    dias do GSC contra um baseline de 1 dia coletado no mesmo dia; (b)
+    AGREGAR duas janelas diferentes que terminavam na mesma data (o GROUP BY era
+    só por URL). Sem par informado, usa o par mais recente.
     """
+    if window_start is None or window_end is None:
+        try:
+            pair = storage.conn.execute(
+                "SELECT window_start, window_end FROM query_pages "
+                "ORDER BY window_end DESC, window_start DESC LIMIT 1"
+            ).fetchone()
+        except Exception:  # noqa: BLE001 - storage mínimo (testes) sem fetchone
+            pair = None
+        if pair:
+            window_start = window_start or str(pair[0])
+            window_end = window_end or str(pair[1])
     rows = storage.conn.execute(
         "SELECT url, SUM(impressions) AS i, SUM(clicks) AS c, AVG(position) AS p "
-        "FROM query_pages WHERE window_end = COALESCE(?, "
-        "(SELECT MAX(window_end) FROM query_pages)) "
+        "FROM query_pages WHERE window_start = ? AND window_end = ? "
         "GROUP BY url HAVING i >= ?",
-        (window_end, min_impressions),
+        (window_start, window_end, min_impressions),
     ).fetchall()
 
     from .align import current_title  # import tardio: evita ciclo de módulos
@@ -148,9 +163,57 @@ def build_baseline(storage: Any, *, window_end: str | None = None,
             segments[segment_key(content_type(title), entity)].append(ctr)
 
     return {
+        "window_start": window_start or "",
         "window_end": window_end or "",
         "min_impressions": min_impressions,
+        "source": "query_pages",
         "pages": len(rows),
+        "contexts": {k: _bucket_summary(v) for k, v in sorted(contexts.items())},
+        "segments": {k: _bucket_summary(v) for k, v in sorted(segments.items())},
+    }
+
+
+def build_baseline_from_pages(pages: list[dict[str, Any]], *, storage: Any = None,
+                              window_start: str = "", window_end: str = "",
+                              with_segments: bool = False,
+                              min_impressions: float = 100) -> dict[str, Any]:
+    """Baseline a partir das MESMAS linhas de página recém-coletadas do GSC.
+
+    É a forma temporalmente CONSISTENTE: o baseline (contexto de CTR) e a página
+    avaliada passam a representar exatamente o mesmo período — a comparação
+    "página de 28 dias × baseline de 1 dia" deixa de existir por construção.
+    """
+    contexts: dict[str, list[float]] = defaultdict(list)
+    segments: dict[str, list[float]] = defaultdict(list)
+    titles = _titles_by_path(storage) if (with_segments and storage is not None) else {}
+    entities = _entity_class_by_path(storage) if (with_segments and storage is not None) else {}
+    from ..inventory.reconcile import normalize_url
+
+    count = 0
+    for row in pages or []:
+        keys = row.get("keys") or []
+        url = str((keys[0] if keys else "") or "")
+        try:
+            imp = float(row.get("impressions", 0) or 0)
+            clk = float(row.get("clicks", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if imp < float(min_impressions or 0) or imp <= 0:
+            continue
+        ctr = clk / imp
+        contexts[context_key(row.get("position"), imp)].append(ctr)
+        count += 1
+        if with_segments and storage is not None:
+            path = normalize_url(url)
+            title = titles.get(path) or ""
+            segments[segment_key(content_type(title), entities.get(path, "unknown"))].append(ctr)
+
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "min_impressions": min_impressions,
+        "source": "gsc_live_pages",
+        "pages": count,
         "contexts": {k: _bucket_summary(v) for k, v in sorted(contexts.items())},
         "segments": {k: _bucket_summary(v) for k, v in sorted(segments.items())},
     }
@@ -306,4 +369,7 @@ def ctr_verdict(storage: Any, *, position: Any, impressions: Any, ctr: Any,
             "verdict": classify_ctr(ctr, bucket,
                                     min_sample=MIN_SEGMENT_SAMPLE if level == "segment"
                                     else MIN_CTX_SAMPLE),
-            "baseline_window": base.get("window_end") or ""}
+            "baseline_window": base.get("window_end") or "",
+            "baseline_window_start": base.get("window_start") or "",
+            "baseline_source": base.get("source") or "query_pages",
+            "baseline_pages": base.get("pages")}

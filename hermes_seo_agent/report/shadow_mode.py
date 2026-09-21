@@ -245,8 +245,10 @@ def shadow_outcome_case(contract: dict[str, Any], *, source: str = "title_engine
     intervention = classify_intervention(source=source,
                                          intervention_type="seo_title_optimization")
     candidate = contract.get("candidate") or {}
+    factors = candidate.get("factors") or {}
     features = {
         "demand_coverage_before": (contract.get("current_title") or {}).get("coverage"),
+        # cobertura MEDIDA no título proposto (não a da combinação abstrata)
         "demand_coverage_after": candidate.get("observed_demand_coverage"),
         "primary_intent": (candidate.get("intents") or [None])[0],
         "secondary_intent": (candidate.get("intents") or [None, None])[1]
@@ -260,13 +262,20 @@ def shadow_outcome_case(contract: dict[str, Any], *, source: str = "title_engine
                              (contract.get("query_families") or [])] or [None]),
         "title_score": candidate.get("score"),
         "confidence": contract.get("confidence"),
+        # OBRIGATÓRIO p/ calibração real: os sete fatores que produziram o score
+        # (sem proxy, sem rótulo textual) + a confiança numérica.
+        "score_factors": factors,
+        "confidence_score": (contract.get("confidence_detail") or {}).get("score"),
     }
     return outcome_record(
         url=contract.get("url", ""), intervention=intervention,
         before={"title": (contract.get("current_title") or {}).get("title"),
+                "candidate_title": candidate.get("title"),
+                "combination_coverage": candidate.get("combination_coverage"),
                 "position": features["position_before"],
                 "ctr": features["ctr_before"]},
-        candidate_features=features, after=after or {},
+        candidate_features=features, factors=factors,
+        confidence_score=features.get("confidence_score"), after=after or {},
         extra={"decision": contract.get("decision"),
                "model_version": contract.get("model_version"),
                "weights_version": contract.get("weights_version"),

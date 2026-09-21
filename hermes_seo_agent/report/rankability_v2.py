@@ -39,7 +39,7 @@ QUERY_WEIGHTS = {
     "semantic_fit": 0.35,
     "query_traction": 0.30,
     "related_authority": 0.25,
-    "observed_difficulty": 0.10,
+    "observed_ease": 0.10,
 }
 
 # R5 — pesos do Opportunity Engine V2 (soma = 1.0)
@@ -214,20 +214,35 @@ def semantic_fit(signals: dict[str, Any]) -> tuple[float, str]:
     """R4 — fit semântico da query na página/cluster.
 
     Componentes (0..1): entity, title, h1, heading, body, question, related.
+    Componente DESCONHECIDO (None) é AUSÊNCIA de medição, não zero: ele sai do
+    cálculo e os pesos são renormalizados sobre o que foi medido. Sem isso, uma
+    família sem sinais profundos do corpus seria penalizada em relação a outra
+    que os tem — comparando medição com ausência de medição.
     """
     parts = {
-        "entity": _sat(signals.get("entity_fit")),
-        "title": _sat(signals.get("title_fit")),
-        "h1": _sat(signals.get("h1_fit")),
-        "heading": _sat(signals.get("heading_fit")),
-        "body": _sat(signals.get("body_fit")),
-        "question": _sat(signals.get("question_fit")),
-        "related": _sat(signals.get("related_entity_fit")),
+        "entity": ("entity_fit", 0.25),
+        "title": ("title_fit", 0.15),
+        "h1": ("h1_fit", 0.15),
+        "heading": ("heading_fit", 0.15),
+        "body": ("body_fit", 0.15),
+        "question": ("question_fit", 0.05),
+        "related": ("related_entity_fit", 0.10),
     }
-    weights = {"entity": 0.25, "title": 0.15, "h1": 0.15, "heading": 0.15,
-               "body": 0.15, "question": 0.05, "related": 0.10}
-    score = sum((parts[k] or 0.0) * weights[k] for k in weights)
-    why = " · ".join(f"{k}={v:.0%}" for k, v in parts.items() if v is not None)
+    measured: dict[str, float] = {}
+    unknown: list[str] = []
+    for name, (key, _w) in parts.items():
+        value = _sat(signals.get(key))
+        if value is None:
+            unknown.append(name)
+        else:
+            measured[name] = value
+    total_weight = sum(parts[name][1] for name in measured)
+    if total_weight <= 0:
+        return 0.0, "sem sinais semânticos medidos"
+    score = sum(measured[name] * parts[name][1] for name in measured) / total_weight
+    why = " · ".join(f"{k}={v:.0%}" for k, v in measured.items())
+    if unknown:
+        why += f" · desconhecido: {', '.join(unknown)}"
     return round(score, 3), why or "sem sinais semânticos"
 
 
@@ -255,15 +270,21 @@ def related_authority(cluster: dict[str, Any], dist: dict[str, Any]) -> tuple[fl
     return round(score, 3), why
 
 
-def observed_difficulty(query_signals: dict[str, Any]) -> tuple[float, str]:
-    """R1 — dificuldade observada PARA O NOSSO SITE (não KD de mercado)."""
-    # quanto mais sinais de autoridade/tração, MENOR a dificuldade relativa.
-    score = 1.0 - min(
+def observed_ease(query_signals: dict[str, Any]) -> tuple[float, str]:
+    """R1 — FACILIDADE observada PARA O NOSSO SITE (1 = fácil, 0 = difícil).
+
+    Antes chamava-se `observed_difficulty` e devolvia 0=fácil/1=difícil, mas era
+    somada POSITIVAMENTE ao rankability — ou seja, quanto MAIS difícil para nós,
+    MAIOR o score. Invertido: entram a autoridade do assunto e o histórico em
+    queries semelhantes, e mais autoridade nunca reduz o rankability.
+    """
+    ease = min(
         (float(query_signals.get("topic_authority", 0) or 0)) * 0.6
         + (float(query_signals.get("related_top10_share", 0) or 0)) * 0.4,
         1.0,
     )
-    return round(score, 3), "dificuldade relativa ao nosso histórico (0 = fácil p/ nós)"
+    return round(ease, 3), ("facilidade relativa ao nosso histórico "
+                            "(1 = fácil para nós, 0 = difícil)")
 
 
 def query_rankability(query: dict[str, Any], cluster: dict[str, Any],
@@ -275,8 +296,8 @@ def query_rankability(query: dict[str, Any], cluster: dict[str, Any],
         "query_traction": _factor(query_traction(query), QUERY_WEIGHTS["query_traction"]),
         "related_authority": _factor(
             related_authority(cluster, dist), QUERY_WEIGHTS["related_authority"]),
-        "observed_difficulty": _factor(
-            observed_difficulty(query), QUERY_WEIGHTS["observed_difficulty"]),
+        "observed_ease": _factor(
+            observed_ease(query), QUERY_WEIGHTS["observed_ease"]),
     }
     score = round(sum(f["score"] * f["weight"] for f in factors.values()), 3)
     # gate: sem fit semântico relevante -> rankability zerada
