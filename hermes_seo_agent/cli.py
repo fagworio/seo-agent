@@ -92,6 +92,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ("history", "Per-page before/after history"),
         ("trends", "Site-wide trends across cycles"),
         ("title-opportunities", "Research top queries -> title candidates (GSC)"),
+        ("title-engine", "F1-F24: decisão de título por FAMÍLIAS de query (determinística)"),
+        ("title-weights", "F13: calibra/persiste os pesos do motor de título (ciclo fechado)"),
         ("impact", "Measure before/after SEO impact (GSC)"),
         ("set-title", "Set a post's SEO title directly (rank_math_title)"),
         ("reindex-status", "Google position + last crawl (reindexation) per page"),
@@ -167,6 +169,36 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="grava title-opportunities-fixes.json")
             p.add_argument("--persist", action="store_true",
                            help="persiste candidatos como ações safe_fix (pending) + checklist")
+        if name == "title-engine":
+            p.add_argument("--min-impressions", type=int, default=100,
+                           help="impressões mínimas da página para entrar na análise")
+            p.add_argument("--query-min-impressions", type=float, default=10.0,
+                           help="impressões mínimas de uma FAMÍLIA para sustentar demanda")
+            p.add_argument("--top-families", type=int, default=0,
+                           help="famílias relevantes por página (0 = config TITLE_TOP_FAMILIES)")
+            p.add_argument("--mode", choices=["observe", "approval", "auto"], default="",
+                           help="etapa do rollout (0/vazio = config TITLE_ENGINE_MODE)")
+            p.add_argument("--generation-mode", choices=["deterministic", "hybrid"],
+                           default="", help="redação do título (vazio = config)")
+            p.add_argument("--shadow", action="store_true",
+                           help="roda em paralelo ao motor atual e registra divergências")
+            p.add_argument("--explain", action="store_true",
+                           help="imprime a explicação (por que esta proposta?) no stderr")
+            p.add_argument("--sample-per-decision", type=int, default=0,
+                           help="amostra estratificada por (decisão, confiança) p/ "
+                                "inspeção humana (0 = desligado)")
+            p.add_argument("--include-non-anomalous", action="store_true",
+                           help="analisa também páginas SEM anomalia de baseline "
+                                "(diagnóstico/validação com dados reais; o gate "
+                                "baseline_anomaly continua valendo na decisão)")
+            p.add_argument("--persist", action="store_true",
+                           help="persiste telemetria e relatório do shadow (sem escrever títulos)")
+            p.add_argument("--write", action="store_true",
+                           help="grava title-engine-candidates.json (revisão humana; NÃO aplica)")
+        if name == "title-weights":
+            p.add_argument("--persist", action="store_true",
+                           help="persiste os pesos calibrados (signal:title_weights)")
+            p.add_argument("--dry-run", action="store_true", help="não persiste nada")
         if name == "impact":
             p.add_argument("--days", type=int, default=28,
                            help="janela antes/depois em dias")
@@ -366,6 +398,10 @@ def _build_parser() -> argparse.ArgumentParser:
             p.set_defaults(func=_cmd_trends)
         elif name == "title-opportunities":
             p.set_defaults(func=_cmd_title_opportunities)
+        elif name == "title-engine":
+            p.set_defaults(func=_cmd_title_engine)
+        elif name == "title-weights":
+            p.set_defaults(func=_cmd_title_weights)
         elif name == "impact":
             p.set_defaults(func=_cmd_impact)
         elif name == "set-title":
@@ -2125,6 +2161,358 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
         )
         result["summary"]["fixes_written"] = len(fixes)
 
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
+    """FASES 1–24: decisão de título por FAMÍLIAS de query (determinística).
+
+    Substitui "a melhor query individual" por: famílias -> share de demanda ->
+    cobertura do título atual -> combinações -> rankability -> score -> gates ->
+    Evidence Contract. Nenhuma chamada a modelo: a análise inteira é código.
+    Etapa A/B/C do rollout não escrevem título por padrão (observação).
+    """
+    from .report.baseline import build_baseline
+    from .report.baseline import ctr_verdict as _ctr_verdict
+    from .report.interventions import (historical_success_factor, load_cases,
+                                       persist_case)
+    from .report.query_families import (build_families, demand_share, title_coverage,
+                                        tokens as _tokens)
+    from .report.rankability_v2 import headroom as _headroom
+    from .report.rankability_v2 import query_distribution as _qdist
+    from .report.shadow_mode import (engine_telemetry, persist_report, rollout_policy,
+                                     shadow_compare, shadow_report, shadow_outcome_case,
+                                     stratified_sample)
+    from .report.title_engine import (combination_candidates, decide_title,
+                                      family_rankability, family_trends,
+                                      relevant_families)
+    from .report.title_generator import generate_candidates
+    from .tools.title_opportunities import empirical_title_case, entity_of, strategic_title
+
+    import re as _re
+
+    warnings: list[str] = []
+    if not config.google_credentials:
+        print(json.dumps({"status": "error",
+                          "error": "GSC não configurado (GOOGLE_APPLICATION_CREDENTIALS)"},
+                         ensure_ascii=False))
+        return 2
+
+    run_mode = (args.mode or config.title_engine_mode or "observe").lower()
+    gen_mode = (args.generation_mode or config.title_generation_mode or "deterministic").lower()
+    top_n = int(args.top_families or config.title_top_families or 5)
+    max_len = int(config.title_max_len or 60)
+    min_impressions = float(args.min_impressions or 100)
+    min_query_impressions = float(args.query_min_impressions or 10.0)
+
+    shared = getattr(args, "_run_context", None)
+    gsc = shared.search_console() if shared is not None else SearchConsoleClient(config)
+    end = date.today()
+    start = end - timedelta(days=config.search_analytics_days)
+
+    try:
+        if shared is not None and shared.search_console() is not None:
+            pages = shared.gsc_by_page(start.isoformat(), end.isoformat())
+            gqp = shared.gsc_query_pages(start.isoformat(), end.isoformat())
+        else:
+            pages = gsc.search_analytics_by_page(start_date=start.isoformat(),
+                                                end_date=end.isoformat())
+            gqp = gsc.search_analytics_query_page(start_date=start.isoformat(),
+                                                  end_date=end.isoformat(),
+                                                  row_limit=25_000)
+    except ConnectorError as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+        return 2
+
+    with Storage(config.sqlite_path) as store:
+        baseline = build_baseline(store, min_impressions=100)
+        cases = load_cases(store, limit=2000)
+        saved_weights = (store.get_signals() or {}).get("title_weights") or {}
+
+    weights = saved_weights.get("weights") if isinstance(saved_weights.get("weights"), dict) else None
+    weights_version = int(saved_weights.get("weights_version") or 0)
+
+    # — mesma seleção de base do motor atual: quem é anômalo no PRÓPRIO baseline
+    anomalous: list[dict[str, Any]] = []
+    for row in pages:
+        imp = float(row.get("impressions", 0) or 0)
+        if imp < min_impressions:
+            continue
+        verdict = _ctr_verdict(None, position=row.get("position"), impressions=imp,
+                               ctr=float(row.get("ctr", 0) or 0), baseline=baseline)
+        row["_baseline"] = verdict
+        if (verdict.get("verdict") in {"below_p10", "low", "below_comparable"}
+                or args.include_non_anomalous):
+            anomalous.append(row)
+    anomalous.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
+
+    query_map: dict[str, list[dict[str, Any]]] = {}
+    for item in gqp:
+        keys = item.get("keys") or []
+        if len(keys) >= 2:
+            query_map.setdefault(keys[1], []).append({"keys": [keys[0]], **item})
+
+    cap = max((args.limit or 30) * 5, 150)
+    targets: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    with Storage(config.sqlite_path) as store:
+        for row in anomalous:
+            if len(targets) >= cap:
+                break
+            url = (row.get("keys") or [""])[0]
+            skip, reason = store.title_review_skippable(
+                url, measurement_days=config.editorial_measurement_min_days)
+            if skip:
+                skipped.append({"url": url, "reason": reason})
+            else:
+                targets.append(row)
+        seen = {(r.get("keys") or [""])[0] for r in targets}
+        try:
+            reg_rows = store.conn.execute(
+                "SELECT url FROM improvement_checklist WHERE item = 'title_regression' "
+                "AND status = 'pending' AND url IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (max(int(args.limit or 30), 30),)).fetchall()
+        except Exception:  # noqa: BLE001
+            reg_rows = []
+        for (url,) in reg_rows:
+            if url in seen or len(targets) >= cap:
+                continue
+            seen.add(url)
+            targets.append({"keys": [url], "impressions": 0.0, "clicks": 0.0,
+                            "ctr": 0.0, "position": None, "regression": True})
+    targets = targets[: max(int(args.limit or 30), 1)]
+
+    import contextlib as _contextlib
+    stack = _contextlib.ExitStack()
+    if shared is not None:
+        static, wp = shared.static(), shared.wordpress()
+    else:
+        static = stack.enter_context(StaticSiteClient(config))
+        wp = stack.enter_context(WordPressClient(config))
+
+    contracts: list[dict[str, Any]] = []
+    shadow_pairs: list[dict[str, Any]] = []
+    persisted: list[dict[str, Any]] = []
+    with Storage(config.sqlite_path) as store, stack:
+        # Trends: por FAMÍLIA (uma vez por termo, cache persistente do provider).
+        trends: dict[str, dict[str, Any]] = {}
+        try:
+            from .services.market_intelligence import batch_trends
+
+            terms: list[str] = []
+            for row in targets:
+                url = (row.get("keys") or [""])[0]
+                top = sorted(query_map.get(url, []),
+                             key=lambda q: -float(q.get("impressions", 0) or 0))[:5]
+                for item in top:
+                    term = (item.get("keys") or [""])[0]
+                    if term and term not in terms:
+                        terms.append(term)
+            if terms:
+                trends = batch_trends(config, terms,
+                                     budget=(shared.budget if shared is not None else None))
+        except Exception:  # noqa: BLE001 - Trends é enriquecimento, nunca fatal
+            trends = {}
+
+        for row in targets:
+            url = (row.get("keys") or [""])[0]
+            page = static.fetch_page(url)
+            post = wp.get_post_by_slug(url.rstrip("/").split("/")[-1])
+            current = (page.title if page else "") or ""
+            ga4 = None
+            try:
+                ga4 = store.ga4_metrics_for_url(url)
+            except Exception:  # noqa: BLE001
+                ga4 = None
+            qrows = sorted(query_map.get(url, []),
+                           key=lambda q: -float(q.get("impressions", 0) or 0))[:50]
+
+            # A entidade indexada da página é resolvida ANTES das famílias: ela
+            # agrupa variações da mesma intenção que a digitação fragmentaria.
+            page_entity = entity_of(current)
+            families = build_families(qrows, entity_hint=page_entity)
+            demand = demand_share(families, url=url,
+                                  window_start=start.isoformat(),
+                                  window_end=end.isoformat())
+            shares = {f["family"]: f["share"] for f in demand["families"]}
+            coverage = title_coverage(current, demand["families"], shares=shares)
+            relevant = relevant_families(demand, top_n=top_n)
+            entity = page_entity or (relevant[0]["entity_label"] if relevant else "")
+            positions = [float(r["position"]) for r in qrows
+                         if r.get("position") is not None]
+            dist = _qdist(positions)
+            rankability = {
+                f["family"]: family_rankability(
+                    f, query_signals={"impressions": f.get("impressions"),
+                                      "clicks": f.get("clicks"),
+                                      "position": f.get("weighted_position")},
+                    cluster_signals={"related_queries": len(qrows),
+                                     "related_top10_queries": sum(1 for p in positions
+                                                                  if p <= 10)},
+                    distribution=dist, title=current)["score"]
+                for f in relevant}
+            ctr = float(row.get("ctr", 0) or 0)
+            verdict = row.get("_baseline") or {}
+            expected_ctr = (verdict.get("bucket") or {}).get("p50") or 0.06
+            headroom_value, _why = _headroom(row.get("position"), ctr or None, expected_ctr)
+            family_trend_map = family_trends(trends, relevant)
+            history = historical_success_factor(cases, position=row.get("position"))
+            candidates = combination_candidates(
+                relevant, entity=entity, max_len=max_len,
+                title_terms=_tokens(current))
+
+            contract = decide_title(
+                url=url, title=current,
+                page={"impressions": float(row.get("impressions", 0) or 0),
+                      "clicks": float(row.get("clicks", 0) or 0), "ctr": ctr,
+                      "position": row.get("position"), "entity": entity,
+                      "post_id": post["id"] if post else None},
+                baseline_verdict=verdict, families=demand["families"],
+                coverage=coverage, candidates=candidates, rankability=rankability,
+                headroom_value=headroom_value, trends=family_trend_map, ga4=ga4,
+                historical_success=history.get("value"), weights=weights,
+                weights_version=weights_version,
+                min_family_impressions=min_query_impressions)
+            contract["history"] = history
+            contract["rollout"] = rollout_policy(
+                contract, mode=run_mode, historical_success=history)
+            contract["generation"] = {"mode": gen_mode, "llm_used": False,
+                                      "note": ("nenhum writer de LLM injetado nesta CLI: "
+                                               "redação 100% determinística")}
+            contract["suggested_titles"] = []
+            if contract["decision"] == "review_title" and contract.get("candidate"):
+                generated = generate_candidates(
+                    entity=entity, candidate=contract["candidate"],
+                    current_title=current,
+                    evidence_intents=contract["candidate"].get("intents") or [],
+                    evidence_numbers={n for f in demand["families"]
+                                      for q in (f.get("queries") or [])
+                                      for n in _re.findall(r"\d+", q)},
+                    max_len=max_len, mode=gen_mode)
+                contract["suggested_titles"] = [c["title"] for c in generated["candidates"]]
+                contract["generation"]["validated"] = len(generated["candidates"])
+                contract["generation"]["discarded"] = len(generated["discarded"])
+            contracts.append(contract)
+
+            if args.shadow:
+                old: dict[str, Any] | None = None
+                decision = strategic_title(current, qrows[:15], trends, ga4=ga4)
+                if decision is None:
+                    old = {"decision": "no_title_change",
+                           "reason": ["título atual já ótimo para as queries observadas"]}
+                else:
+                    case = empirical_title_case(
+                        impressions=float(row.get("impressions", 0) or 0), ctr=ctr,
+                        position=row.get("position"), baseline_verdict=verdict,
+                        query=str(decision["keyword"] or ""),
+                        query_impressions=float((decision.get("gsc") or {}).get("impressions", 0) or 0),
+                        title=current, ga4=ga4, trends=decision.get("trends"),
+                        min_impressions=min_impressions)
+                    old = {"decision": case["action"], "confidence": case["confidence"],
+                           "primary_query": decision["keyword"],
+                           "reason": case["reason"], "score": decision.get("score")}
+                shadow_pairs.append(shadow_compare(old=old, new=contract, url=url))
+
+            if args.persist and contract["decision"] == "review_title" and not any(
+                    c.get("url") == url for c in cases):
+                case = shadow_outcome_case(contract, source="title_engine")
+                persisted.append({"url": url, "outcome_id": persist_case(
+                    store, case, keyword=entity)})
+
+    telemetry = engine_telemetry(contracts)
+    shadow = shadow_report(shadow_pairs, mode="shadow") if args.shadow else None
+    sample = None
+    if int(args.sample_per_decision or 0) > 0:
+        # FASE 22: amostra estratificada para validação HUMANA com dados reais.
+        sample = stratified_sample(contracts, per_stratum=args.sample_per_decision)
+
+    if args.persist:
+        with Storage(config.sqlite_path) as store:
+            store.save_signal("title_engine_telemetry", telemetry)
+            if shadow:
+                persist_report(store, shadow)
+
+    if args.explain:
+        for contract in contracts:
+            if contract["decision"] == "review_title":
+                print(f"\n=== {contract['url']}\n{contract['explanation']}", file=sys.stderr)
+
+    if args.write:
+        fixes = [{"url": c["url"], "current_title": (c.get("current_title") or {}).get("title"),
+                  "suggested_titles": c["suggested_titles"],
+                  "decision": c["decision"], "confidence": c["confidence"],
+                  "score": ((c.get("candidate") or {}).get("score")),
+                  "reason": c["reason"]}
+                 for c in contracts if c["decision"] == "review_title"]
+        from pathlib import Path
+        Path("title-engine-candidates.json").write_text(
+            json.dumps(fixes, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "title-engine", "mode": run_mode,
+                    "generation_mode": gen_mode,
+                    "pages_analyzed": len(contracts),
+                    "review_title": telemetry["review_title"],
+                    "no_title_change": telemetry["no_title_change"],
+                    "investigate_cause": telemetry["investigate_cause"],
+                    "gather_more_data": telemetry["gather_more_data"],
+                    "shadow": bool(args.shadow),
+                    "published_titles": 0,
+                    "llm_calls": 0,
+                    "weights_version": weights_version,
+                    "skipped": len(skipped)},
+        "findings": [],
+        "safe_actions": [],
+        "approval_required": [],
+        "decisions": contracts,
+        "telemetry": telemetry,
+        "shadow": shadow,
+        "stratified_sample": sample,
+        "persisted_cases": persisted,
+        "skipped": skipped,
+        "warnings": warnings,
+    }
+    _emit(result, force_json=True)
+    return 0
+
+
+def _cmd_title_weights(args: argparse.Namespace, config: Any) -> int:
+    """FASE 13/14: ciclo fechado de calibração dos pesos do motor de título.
+
+    Lê os outcomes ELEGÍVEIS (só ``seo_title_optimization``), calibra, versiona e
+    persiste — o próximo ciclo do ``title-engine`` já usa esses pesos.
+    """
+    from .report.interventions import (historical_questions, load_cases,
+                                       title_calibration)
+
+    with Storage(config.sqlite_path) as storage:
+        cases = load_cases(storage, limit=2000)
+        signals = storage.get_signals() or {}
+        previous = signals.get("title_weights") or {}
+        report = title_calibration(cases, previous=previous,
+                                   calibrated_at=datetime.datetime.now().isoformat())
+        questions = historical_questions(cases)
+        eligible = sum(1 for c in cases if c.get("eligible_for_title_calibration"))
+        if args.persist and not args.dry_run and report["stage"] != "insufficient_sample":
+            storage.save_signal("title_weights", {**report, "source": "title-weights"})
+
+    result = {
+        "status": "ok",
+        "summary": {"command": "title-weights", "cases": len(cases),
+                    "eligible_cases": eligible,
+                    "sample_count": report["sample_count"],
+                    "stage": report["stage"],
+                    "weights_version": report["weights_version"],
+                    "persisted": bool(args.persist and not args.dry_run
+                                      and report["stage"] != "insufficient_sample")},
+        "findings": [],
+        "safe_actions": [],
+        "approval_required": [],
+        "calibration": report,
+        "historical_questions": questions,
+    }
     _emit(result, force_json=True)
     return 0
 

@@ -47,6 +47,18 @@ class Config:
     search_analytics_days: int = 28
     editorial_measurement_min_days: int = 28
 
+    # Motor de título por famílias de query (FASES 1–24 do roadmap).
+    # TITLE_GENERATION_MODE: deterministic (padrão, zero tokens) | hybrid
+    #   (LLM só REDIGE opções; a decisão continua determinística).
+    # TITLE_ENGINE_MODE: observe (Etapa A, nenhuma escrita) | approval (Etapa B,
+    #   caixa humana) | auto (Etapa C, só high + histórico + risco baixo).
+    # TITLE_TOP_FAMILIES: famílias relevantes por página no combinatório.
+    # TITLE_MAX_LEN: teto de comprimento do título gerado.
+    title_generation_mode: str = "deterministic"
+    title_engine_mode: str = "observe"
+    title_top_families: int = 5
+    title_max_len: int = 60
+
     # M0 — limites operacionais (URLs, queries, chunks, quota e custo por execução)
     max_queries_per_source: int = 500        # queries por fonte por execução
     max_chunks_per_doc: int = 200            # chunks/seções por documento no corpus
@@ -242,6 +254,11 @@ def load_config() -> Config:
         ),
         search_analytics_days=_int("SEARCH_ANALYTICS_DAYS", 28, 7, 90),
         editorial_measurement_min_days=_int("EDITORIAL_MEASUREMENT_MIN_DAYS", 28, 1, 365),
+        title_generation_mode=_env("TITLE_GENERATION_MODE", "deterministic").strip().lower()
+        or "deterministic",
+        title_engine_mode=_env("TITLE_ENGINE_MODE", "observe").strip().lower() or "observe",
+        title_top_families=_int("TITLE_TOP_FAMILIES", 5, 1, 20),
+        title_max_len=_int("TITLE_MAX_LEN", 60, 20, 200),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),
         max_chunks_per_doc=_int("MAX_CHUNKS_PER_DOC", 200, 1, 10_000),
         max_external_calls=_int("MAX_EXTERNAL_CALLS", 0, 0, 100_000),
