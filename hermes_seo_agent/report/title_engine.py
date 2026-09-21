@@ -120,6 +120,39 @@ def _plausible_canonical_entity(canonical: str,
     return True
 
 
+def resolve_title_entity_detail(page_entity: str = "", canonical_entity: str = "",
+                                families: Sequence[dict[str, Any]] | None = None,
+                                ) -> dict[str, Any]:
+    """Igual a `resolve_title_entity`, mas devolve a ORIGEM junto do valor.
+
+    A CLI inferia a origem comparando strings depois do fato, o que registrava
+    `source="canonical"` quando a canônica tinha sido REJEITADA mas o texto
+    coincidia com o da página (ex.: ambos "Hiddleston" com famílias de "loki").
+    Aqui a origem é a decisão real, não uma reconstrução.
+
+    Contrato: ``value`` (str), ``source`` ∈ {canonical, page_entity, family},
+    ``canonical_entity`` (o que o corpus devolveu, ou ""), ``canonical_plausible``
+    (bool — o nome diz booleano, então é booleano).
+    """
+    canonical_text = str(canonical_entity or "").strip()
+    plausible = _plausible_canonical_entity(canonical_text, families)
+    if plausible:
+        value, source = canonical_text, "canonical"
+    else:
+        page_text = str(page_entity or "").strip()
+        if page_text:
+            value, source = page_text, "page_entity"
+        else:
+            value, source = _dominant_family_entity(families, prefer_label=True), "family"
+    return {
+        "value": value,
+        "source": source,
+        "page_entity": str(page_entity or "").strip(),
+        "canonical_entity": canonical_text,
+        "canonical_plausible": bool(plausible),
+    }
+
+
 def resolve_title_entity(page_entity: str = "", canonical_entity: str = "",
                          families: Sequence[dict[str, Any]] | None = None) -> str:
     """Entidade usada para GERAR e VALIDAR o título (precedência explícita).
@@ -136,13 +169,10 @@ def resolve_title_entity(page_entity: str = "", canonical_entity: str = "",
     heurística do título.
 
     Ordem: canônica plausível -> entidade da página -> família dominante.
+    Quem precisa da origem use `resolve_title_entity_detail`.
     """
-    if _plausible_canonical_entity(canonical_entity, families):
-        return str(canonical_entity).strip()
-    page_text = str(page_entity or "").strip()
-    if page_text:
-        return page_text
-    return _dominant_family_entity(families, prefer_label=True)
+    return str(resolve_title_entity_detail(page_entity, canonical_entity,
+                                           families)["value"])
 
 
 def relevant_families(share: dict[str, Any], *, top_n: int = TOP_FAMILIES,

@@ -2211,7 +2211,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     from .report.title_engine import (combination_candidates, decide_title,
                                       family_rankability, family_trends,
                                       finalize_titles, page_headroom,
-                                      relevant_families, resolve_title_entity)
+                                      relevant_families,
+                                      resolve_title_entity_detail)
     from .report.title_generator import generate_candidates
     from .tools.title_opportunities import empirical_title_case, entity_of, strategic_title
 
@@ -2407,13 +2408,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             shares = {f["family"]: f["share"] for f in demand["families"]}
             coverage = title_coverage(current, demand["families"], shares=shares)
             relevant = relevant_families(demand, top_n=top_n)
-            entity = resolve_title_entity(page_entity, canonical_entity,
-                                          demand["families"])
-            entity_source = (
-                "canonical"
-                if (canonical_entity and entity == canonical_entity.strip())
-                else "page_entity" if (page_entity and entity == page_entity.strip())
-                else "family")
+            entity_meta = resolve_title_entity_detail(page_entity, canonical_entity,
+                                                      demand["families"])
+            entity = str(entity_meta["value"])
             positions = [float(r["position"]) for r in qrows
                          if r.get("position") is not None]
             dist = _qdist(positions)
@@ -2520,16 +2517,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
             contract["topic_authority"] = topic_score
-            # Auditabilidade da escolha de entidade: canônica (corpus) vence a
-            # heurística do título, que devolve o título inteiro sem separador.
-            contract["entity"] = {
-                "used": entity,
-                "page_entity": page_entity,
-                "canonical_entity": canonical_entity or None,
-                "source": entity_source,
-                "canonical_plausible": (canonical_entity if entity_source == "canonical"
-                                        else None),
-            }
+            # Auditabilidade da escolha de entidade: origem vem do PRÓPRIO
+            # resolver (canônica plausível > entidade do título > família), sem
+            # inferência por comparação de strings.
+            contract["entity"] = {**entity_meta, "used": entity}
             contract["signal_window"] = {
                 **signal_window,
                 "families_with_measured_semantics": semantic_measured}

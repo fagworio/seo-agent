@@ -175,3 +175,41 @@ def test_case_do_shadow_ja_vem_classificado_para_calibracao():
     assert case["candidate_features"]["primary_intent"] == "idade"
     assert case["candidate_features"]["demand_coverage_before"] == 0.36
     assert case["candidate_features"]["demand_coverage_after"] == 0.78
+
+
+def test_telemetria_traz_os_agregados_da_fase_de_shadow():
+    """`observability` responde a lista de métricas do congelamento."""
+    primeira = _new_contract()
+    primeira["entity"] = {"value": "dredge", "source": "canonical",
+                          "canonical_entity": "dredge", "canonical_plausible": True}
+    primeira["signal_window"] = {"aligned": True, "families_with_measured_semantics": 2}
+    primeira["observation"] = {"status": "partial", "query_observation_ratio": 0.3}
+    primeira["rankability"] = {"gojo::idade": 0.4, "gojo::poderes": 0.2}
+
+    segunda = _new_contract(decision="no_title_change", confidence="medium")
+    segunda["entity"] = {"value": "Loki", "source": "page_entity",
+                         "canonical_entity": "hiddleston", "canonical_plausible": False}
+    segunda["signal_window"] = {"aligned": True, "families_with_measured_semantics": 0}
+    segunda["observation"] = {"status": "thin", "query_observation_ratio": 0.1}
+    segunda["candidate_failed_reason"] = "nenhum título validado atinge a cobertura do candidato pontuado"
+
+    telemetry = engine_telemetry([primeira, segunda])
+    observability = telemetry["observability"]
+    assert observability["entity_source"] == {"canonical": 1, "page_entity": 1}
+    assert observability["canonical_evaluated"] == 2
+    assert observability["canonical_rejected"] == 1
+    assert observability["canonical_rejection_rate"] == 0.5
+    assert observability["pages_with_measured_semantics"] == 1
+    assert observability["pages_with_measured_semantics_rate"] == 0.5
+    assert list(observability["candidate_failed_reason"].values()) == [1]
+    assert observability["query_observation_ratio"]["by_status"]["partial"] == 1
+    assert observability["query_observation_ratio"]["by_status"]["thin"] == 1
+    assert observability["query_observation_ratio"]["min"] == 0.1
+    assert observability["query_observation_ratio"]["max"] == 0.3
+    # 2 famílias na primeira + 1 no contrato padrão da segunda
+    assert observability["rankability"]["count"] == 3
+    assert observability["rankability"]["min"] == 0.2
+    assert observability["rankability"]["max"] == 0.74
+    # nada de decisão mudou: os campos antigos continuam iguais
+    assert telemetry["pages_analyzed"] == 2
+    assert telemetry["review_title"] == 1 and telemetry["no_title_change"] == 1

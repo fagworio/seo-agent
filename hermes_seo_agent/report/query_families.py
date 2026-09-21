@@ -540,6 +540,9 @@ def demand_share(families: Sequence[dict[str, Any]], *, url: str = "",
             "family": family.get("family_id"),
             "intent": family.get("intent"),
             "entity": family.get("entity"),
+            # rótulo legível (forma escrita pela query) preservado para quem
+            # redige título — o fallback por família usaria só a forma normalizada
+            "entity_label": family.get("entity_label"),
             "impressions": impressions,
             "clicks": family.get("clicks"),
             "share": round(impressions / total, 4) if total else None,

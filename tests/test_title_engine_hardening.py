@@ -953,6 +953,44 @@ def test_entidade_canonica_evita_candidato_inviavel():
     assert all(entity_preserved(entidade, c["phrase"]) for c in viavel)
 
 
+def test_resolve_title_entity_detail_registra_a_origem_real():
+    """Origem vem do resolver, não de comparar strings (caso ambíguo)."""
+    from hermes_seo_agent.report.title_engine import resolve_title_entity_detail
+
+    # canônica REJEITADA que coincide textualmente com a página: a origem é a
+    # página (antes a CLI inferia "canonical" só porque os textos batiam)
+    ambiguo = resolve_title_entity_detail("Hiddleston", "Hiddleston",
+                                          [{"entity": "loki"}])
+    assert ambiguo["value"] == "Hiddleston"
+    assert ambiguo["source"] == "page_entity"
+    assert ambiguo["canonical_plausible"] is False
+    assert isinstance(ambiguo["canonical_plausible"], bool)
+
+    aceito = resolve_title_entity_detail("Celestiais da Marvel vs Galactus",
+                                         "celestiais", [{"entity": "celestiais"}])
+    assert aceito["source"] == "canonical"
+    assert aceito["canonical_plausible"] is True
+
+    # sem página e sem canônica: origem família
+    por_familia = resolve_title_entity_detail("", "", [{"entity": "loki",
+                                                        "entity_label": "Loki"}])
+    assert por_familia["value"] == "Loki"
+    assert por_familia["source"] == "family"
+    assert por_familia["canonical_plausible"] is False
+
+    vazio = resolve_title_entity_detail("", "", [])
+    assert vazio["value"] == "" and vazio["source"] == "family"
+
+
+def test_demand_share_preserva_o_entity_label_da_familia():
+    """O rótulo legível (forma da query) sobrevive ao demand share."""
+    rows = [_row("Gojo Satoru idade", 900)]
+    familia = demand_share(build_families(rows))["families"][0]
+    assert familia["entity"] == "gojo satoru"          # normalizada (comparação)
+    assert familia["entity_label"] == "Gojo Satoru"     # legível (título)
+    assert familia["entity_label"] != familia["entity"]
+
+
 def test_historico_de_sucesso_e_calculado_por_candidato():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
             _row("gojo poderes", 500, 5, 6.0)]

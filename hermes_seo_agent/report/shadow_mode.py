@@ -166,13 +166,28 @@ def load_report(storage: Any, *, source: str = "title_engine_shadow") -> dict[st
 
 def engine_telemetry(contracts: Sequence[dict[str, Any]],
                      outcomes: Sequence[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Métricas do PRÓPRIO motor (páginas, famílias, decisões, confiança)."""
+    """Métricas do PRÓPRIO motor (páginas, famílias, decisões, confiança).
+
+    Inclui `observability`: os agregados que a fase de shadow precisa olhar
+    (origem/taxa de rejeição da entidade canônica, motivos de ausência de
+    candidato, distribuição de rankability, cobertura semântica medida e razão de
+    observação das queries). Nada aqui influencia decisão — é leitura do que o
+    motor já decidiu.
+    """
     pages = list(contracts or [])
     families_total = 0
     with_data = 0
     candidates_total = 0
     decisions: dict[str, int] = {}
     confidence: dict[str, int] = {}
+    entity_source: dict[str, int] = {}
+    canonical_rejected = 0
+    canonical_total = 0
+    failed_reason: dict[str, int] = {}
+    observed_ratio: list[float] = []
+    rankabilities: list[float] = []
+    with_measured_semantics = 0
+    ratios: dict[str, int] = {"thin": 0, "partial": 0, "well_observed": 0, "unknown": 0}
     for contract in pages:
         families = contract.get("query_families") or []
         families_total += len(families)
@@ -183,6 +198,27 @@ def engine_telemetry(contracts: Sequence[dict[str, Any]],
         decisions[decision] = decisions.get(decision, 0) + 1
         label = str(contract.get("confidence") or "unknown")
         confidence[label] = confidence.get(label, 0) + 1
+        entity = contract.get("entity") or {}
+        source = str(entity.get("source") or "unknown")
+        entity_source[source] = entity_source.get(source, 0) + 1
+        if entity.get("canonical_entity"):
+            canonical_total += 1
+            if not entity.get("canonical_plausible"):
+                canonical_rejected += 1
+        if contract.get("candidate_failed_reason"):
+            reason = str(contract["candidate_failed_reason"])
+            failed_reason[reason] = failed_reason.get(reason, 0) + 1
+        window = contract.get("signal_window") or {}
+        if int(window.get("families_with_measured_semantics") or 0) > 0:
+            with_measured_semantics += 1
+        observation = contract.get("observation") or {}
+        status = str(observation.get("status") or "unknown")
+        ratios[status] = ratios.get(status, 0) + 1
+        ratio = observation.get("query_observation_ratio")
+        if ratio is not None:
+            observed_ratio.append(float(ratio))
+        for value in (contract.get("rankability") or {}).values():
+            rankabilities.append(float(value))
     telemetry = {
         "pages_analyzed": len(pages),
         "pages_with_query_data": with_data,
@@ -197,6 +233,31 @@ def engine_telemetry(contracts: Sequence[dict[str, Any]],
         "medium_confidence": confidence.get("medium", 0),
         "low_confidence": confidence.get("low", 0),
         "by_decision": dict(sorted(decisions.items())),
+        "observability": {
+            "entity_source": dict(sorted(entity_source.items())),
+            "canonical_evaluated": canonical_total,
+            "canonical_rejected": canonical_rejected,
+            "canonical_rejection_rate": (round(canonical_rejected / canonical_total, 3)
+                                         if canonical_total else None),
+            "pages_with_measured_semantics": with_measured_semantics,
+            "pages_with_measured_semantics_rate": (round(with_measured_semantics / len(pages), 3)
+                                                   if pages else None),
+            "candidate_failed_reason": dict(sorted(failed_reason.items())),
+            "query_observation_ratio": {
+                "by_status": ratios,
+                "min": min(observed_ratio) if observed_ratio else None,
+                "max": max(observed_ratio) if observed_ratio else None,
+                "avg": (round(sum(observed_ratio) / len(observed_ratio), 4)
+                        if observed_ratio else None),
+            },
+            "rankability": {
+                "count": len(rankabilities),
+                "min": round(min(rankabilities), 3) if rankabilities else None,
+                "max": round(max(rankabilities), 3) if rankabilities else None,
+                "avg": (round(sum(rankabilities) / len(rankabilities), 3)
+                        if rankabilities else None),
+            },
+        },
     }
     if outcomes is not None:
         telemetry["results"] = measurement_summary(outcomes)

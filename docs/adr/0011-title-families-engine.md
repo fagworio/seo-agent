@@ -168,6 +168,15 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 
 Limitação conhecida e registrada para o shadow: quando a canônica aceita é um token único e minúsculo, o título perde descritividade ("celestiais: comparação" no lugar de "Celestiais da Marvel vs Galactus: comparação"). Discriminar isso exige uma heurística de forma da entidade (frase nominal × pergunta), que é justamente o tipo de regra nova que o congelamento pede para adiar.
 
+## Oitava rodada — auditabilidade (revisão do ab8e3db) e telemetria do shadow
+
+| # | Ajuste | Detalhe |
+| - | ------ | ------- |
+| 1 | `entity.source` vem do RESOLVER | `resolve_title_entity_detail()` devolve `{value, source, page_entity, canonical_entity, canonical_plausible}`; `resolve_title_entity()` passa a delegar (compatível). Antes a CLI inferia a origem comparando strings e registrava `source="canonical"` quando a canônica tinha sido REJEITADA mas coincidia com o texto da página |
+| 2 | `canonical_plausible` é BOOLEANO | o campo valia a própria string da canônica (`"dredge"`); um frontend que tipasse `boolean` receberia `string \| null`. Agora é `bool`, e `canonical_entity` guarda o valor |
+| 3 | `demand_share()` preserva `entity_label` | o fallback por família usava só a forma normalizada (`jujutsu kaisen` em vez de `Jujutsu Kaisen`) |
+| 4 | `engine_telemetry()` ganha `observability` | agregados da fase de shadow sem tocar em decisão: `entity_source`, `canonical_evaluated/rejected/rejection_rate`, `pages_with_measured_semantics(+rate)`, `candidate_failed_reason`, `query_observation_ratio` (by_status/min/max/avg) e `rankability` (count/min/max/avg) |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto
