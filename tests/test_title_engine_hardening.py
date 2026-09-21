@@ -23,8 +23,9 @@ from hermes_seo_agent.report.interventions import (_feature_value, outcome_recor
 from hermes_seo_agent.report.query_families import (build_families, demand_share,
                                                     title_coverage, tokens)
 from hermes_seo_agent.report.title_engine import (TITLE_WEIGHTS, combination_candidates,
-                                                  decide_title, finalize_titles,
-                                                  page_headroom, relevant_families)
+                                                  decide_title, family_rankability,
+                                                  finalize_titles, page_headroom,
+                                                  relevant_families)
 from hermes_seo_agent.report.title_generator import generate_candidates
 from hermes_seo_agent.storage.db import Storage
 
@@ -286,7 +287,189 @@ def test_ratio_de_observacao_estreito_rebaixa_a_confianca():
     assert amplo["observation"]["status"] == "well_observed"
 
 
-# --- 8) historical success por COMBINAÇÃO ---------------------------------
+# --- 5) Topic Authority calculado tem de ENTRAR no observed_ease ------------
+
+def test_topic_authority_none_nos_sinais_nao_bloqueia_a_injecao():
+    """`setdefault` não substitui None: o TA calculado precisa vencer o None."""
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0)]
+    share, _shares, _coverage, relevant, _candidates = _evidence(
+        rows, "Gojo: historia")
+    family = relevant[0]
+    base_signals = {"topic_authority": None, "impressions": family["impressions"],
+                    "clicks": family["clicks"],
+                    "position": family["weighted_position"],
+                    "related_top10_share": 0.5}
+    fraco = family_rankability(family, query_signals=dict(base_signals),
+                               cluster_signals={"related_queries": 10,
+                                                "related_top10_queries": 5},
+                               title="Gojo: historia", topic_authority=0.1)
+    forte = family_rankability(family, query_signals=dict(base_signals),
+                               cluster_signals={"related_queries": 10,
+                                                "related_top10_queries": 5},
+                               title="Gojo: historia", topic_authority=0.9)
+    assert forte["score"] > fraco["score"]
+    assert forte["factors"]["observed_ease"]["score"] == round(0.9 * 0.6 + 0.5 * 0.4, 3)
+
+    # e um valor JÁ medido nos sinais não é sobrescrito pelo fallback
+    medido = family_rankability(
+        family, query_signals={**base_signals, "topic_authority": 1.0},
+        cluster_signals={}, title="Gojo: historia", topic_authority=0.1)
+    assert medido["factors"]["observed_ease"]["score"] == round(1.0 * 0.6 + 0.5 * 0.4, 3)
+
+
+# --- 6) ausência de medição semântica é None, nunca 0.0 --------------------
+
+def test_build_query_signals_marca_ausencia_como_none(tmp_path):
+    from hermes_seo_agent.report.rankability_signals import build_query_signals
+
+    storage = Storage(str(tmp_path / "sig.db"))
+    signals = build_query_signals(storage, {"urls": ["https://x/a"]}, "gojo idade")
+    semantic = signals["semantic"]
+    assert set(semantic) == {"entity_fit", "title_fit", "h1_fit", "heading_fit",
+                             "body_fit", "question_fit", "related_entity_fit"}
+    # corpus vazio: NADA foi medido -> None (antes tudo era 0.0, como se medido)
+    assert all(value is None for value in semantic.values())
+    # e o semantic_fit devolve 0.0 com o motivo explícito, não uma média falsa
+    from hermes_seo_agent.report.rankability_v2 import semantic_fit
+    score, why = semantic_fit(semantic)
+    assert score == 0.0 and "sem sinais" in why
+    storage.close()
+
+
+# --- 7) uma decisão = uma janela (tração não soma coletas) ----------------
+
+def test_tracao_da_query_nao_soma_janelas_diferentes(tmp_path):
+    from hermes_seo_agent.report.rankability_signals import (build_query_signals,
+                                                             latest_window_pair)
+
+    storage = Storage(str(tmp_path / "win.db"))
+    url = "https://x/a"
+    rows = [
+        ("gojo idade", url, "2026-08-01", "2026-08-28", 0, 1000.0, 0.0, 5.0),
+        ("gojo idade", url, "2026-08-28", "2026-08-28", 0, 900.0, 0.0, 6.0),
+        ("gojo idade", url, "2026-08-27", "2026-08-27", 0, 1100.0, 0.0, 7.0),
+    ]
+    storage.conn.executemany(
+        "INSERT INTO query_pages (query, url, window_start, window_end, clicks, "
+        "impressions, ctr, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    storage.conn.commit()
+
+    pair = latest_window_pair(storage)
+    assert pair == ("2026-08-28", "2026-08-28")
+    only_pair = build_query_signals(storage, {"urls": [url]}, "gojo idade",
+                                    window_start=pair[0], window_end=pair[1])
+    assert only_pair["impressions"] == 900.0        # não 3.000
+
+    sem_janela = build_query_signals(storage, {"urls": [url]}, "gojo idade")
+    assert sem_janela["impressions"] == 3000.0      # comportamento legado explícito
+    storage.close()
+
+
+def test_sinais_da_familia_ponderam_por_impressoes(monkeypatch):
+    import hermes_seo_agent.report.rankability_signals as rs
+
+    def _fake(storage, cluster_signals, query, *, window_start=None, window_end=None):
+        principal = query == "gojo idade"
+        return {"keyword": query,
+                "semantic": {"body_fit": 1.0 if principal else 0.0,
+                             "h1_fit": None, "heading_fit": None,
+                             "entity_fit": 1.0 if principal else None,
+                             "title_fit": None, "question_fit": None,
+                             "related_entity_fit": None},
+                "impressions": 900.0 if principal else 100.0,
+                "clicks": 9.0 if principal else 0.0,
+                "position": 4.0 if principal else 9.0,
+                "topic_authority": None, "related_top10_share": 0.5}
+
+    monkeypatch.setattr(rs, "build_query_signals", _fake)
+    family = {"family_id": "gojo::idade", "queries": ["gojo idade", "idade do gojo"],
+              "weighted_position": 5.0}
+    out = rs.build_family_query_signals(None, {}, family)
+    # média ponderada por impressões (900 x 1.0 + 100 x 0.0) / 1000
+    assert out["semantic"]["body_fit"] == 0.9
+    assert out["semantic"]["entity_fit"] == 1.0          # só a principal mediu
+    assert out["semantic"]["h1_fit"] is None              # ninguém mediu -> None
+    assert out["impressions"] == 1000.0 and out["position"] == 4.0
+    assert out["queries_measured"] == 2
+
+
+# --- 12) o re-score do título preserva o histórico do candidato ------------
+
+def test_historico_do_candidato_sobrevive_ao_rescore_do_titulo():
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
+            _row("gojo poderes", 500, 5, 6.0)]
+    share, shares, coverage, relevant, candidates = _evidence(
+        rows, "Gojo: poderes e historia")
+    history = {"value": 0.2, "sample": 15, "scope": "segmento", "sufficient": True,
+               "note": "histórico", "segment": {}}
+
+    def _evaluate(cand, ctx, /, **_kw):
+        # mesma cadeia que a CLI usa: gera títulos e re-mede, PRESERVANDO o
+        # histórico que selecionou a combinação
+        generated = generate_candidates(entity="Gojo", candidate=cand,
+                                        current_title="Gojo: poderes e historia",
+                                        evidence_intents=cand["intents"], max_len=60)
+        return finalize_titles(generated=generated["candidates"], candidate=cand,
+                               families=share["families"], shares=shares,
+                               historical_success=(cand.get("history") or {}).get("value"))
+
+    contract = decide_title(
+        url="u", title="Gojo: poderes e historia",
+        page={"impressions": 4300, "clicks": 31, "position": 5.2, "entity": "Gojo"},
+        baseline_verdict={"verdict": "below_p10", "context": "5-10|imp2k+",
+                          "sample_size": 41, "bucket": {"p10": 0.01, "p50": 0.03}},
+        families=share["families"], coverage=coverage, candidates=candidates,
+        rankability={f["family"]: 0.7 for f in relevant}, headroom_value=0.6,
+        ga4={"sessions": 300, "engagement_rate": 0.8},
+        historical_success_fn=lambda count, primary: history,
+        title_evaluator=_evaluate)
+    assert contract["candidate"]["history"]["value"] == 0.2
+    assert contract["candidate"]["factors"]["historical_success"] == 0.2
+    assert contract["candidate"]["factors"]["historical_success"] != 0.5
+
+
+# --- 9) Evidence Contract: observed_impressions são IMPRESSÕES -------------
+
+def test_contrato_expoe_impressoes_observadas_e_nao_um_share():
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
+            _row("gojo poderes", 500, 5, 6.0)]
+    share, _shares, coverage, relevant, candidates = _evidence(
+        rows, "Gojo: poderes e historia")
+    contract = decide_title(
+        url="u", title="Gojo: poderes e historia",
+        page={"impressions": 4300, "clicks": 31, "position": 5.2, "entity": "Gojo"},
+        baseline_verdict={"verdict": "below_p10", "context": "5-10|imp2k+",
+                          "sample_size": 41, "bucket": {"p10": 0.01, "p50": 0.03}},
+        families=share["families"], coverage=coverage, candidates=candidates,
+        rankability={f["family"]: 0.7 for f in relevant}, headroom_value=0.6,
+        ga4={"sessions": 300, "engagement_rate": 0.8},
+        observed_impressions=share["observed_impressions"], observation_ratio=0.33)
+    assert contract["observation"]["observed_impressions"] == 1400.0
+    assert contract["observation"]["observed_impressions"] > 1.0
+    assert contract["observation"]["query_observation_ratio"] == 0.33
+
+
+# --- 5b) confiança não pode confundir "tem famílias" com "tem corpus" -----
+
+def test_confianca_usa_corpus_e_semantica_REAIS():
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
+            _row("gojo poderes", 500, 5, 6.0)]
+    share, _shares, coverage, relevant, candidates = _evidence(
+        rows, "Gojo: poderes e historia")
+    kwargs: dict[str, Any] = dict(
+        url="u", title="Gojo: poderes e historia",
+        page={"impressions": 4300, "clicks": 31, "position": 5.2, "entity": "Gojo"},
+        baseline_verdict={"verdict": "below_p10", "context": "5-10|imp2k+",
+                          "sample_size": 41, "bucket": {"p10": 0.01, "p50": 0.03}},
+        families=share["families"], coverage=coverage, candidates=candidates,
+        rankability={f["family"]: 0.7 for f in relevant}, headroom_value=0.6,
+        ga4=None)
+    sem_corpus = decide_title(**kwargs, corpus_available=False, semantic_evidence=0.0)
+    com_corpus = decide_title(**kwargs, corpus_available=True, semantic_evidence=1.0)
+    assert (com_corpus["confidence_detail"]["score"]
+            > sem_corpus["confidence_detail"]["score"])
+    assert sem_corpus["confidence_detail"]["checks"]["corpus_available"] == 0.0
+    assert com_corpus["confidence_detail"]["checks"]["corpus_available"] == 1.0
 
 def test_historico_de_sucesso_e_calculado_por_candidato():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),

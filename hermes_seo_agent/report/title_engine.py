@@ -232,8 +232,11 @@ def family_rankability(family: dict[str, Any], *, query_signals: dict[str, Any] 
     signals.setdefault("clicks", family.get("clicks"))
     signals.setdefault("position", family.get("weighted_position"))
     signals.setdefault("semantic", family_semantic_signals(family, title=title))
-    if topic_authority is not None:
-        signals.setdefault("topic_authority", topic_authority)
+    # OBS: `setdefault` NÃO substitui chave existente com valor None — e
+    # `build_query_signals()` devolve `topic_authority: None`. Sem este guard o
+    # Topic Authority calculado simplesmente não entrava no observed_ease.
+    if topic_authority is not None and signals.get("topic_authority") is None:
+        signals["topic_authority"] = topic_authority
     dist = distribution or {
         "total": 1,
         "counts": {"top3": 0, "top10": 0, "top20": 0, "top50": 0},
@@ -617,6 +620,9 @@ def decide_title(
     historical_success_fn: Callable[[int, str | None], dict[str, Any]] | None = None,
     title_evaluator: Callable[..., dict[str, Any]] | None = None,
     observation_ratio: float | None = None,
+    observed_impressions: float | None = None,
+    corpus_available: bool | None = None,
+    semantic_evidence: float | None = None,
     weights: dict[str, float] | None = None,
     model_version: str = MODEL_VERSION,
     weights_version: int = 0,
@@ -636,12 +642,22 @@ def decide_title(
       ga4, trends, checks, reason, explanation.
     """
     ga4_status = ga4_evidence_status(ga4)
+    # Impressões OBSERVADAS das queries (não um share!): o chamador pode passar
+    # demand["observed_impressions"]; senão somamos as famílias.
+    if observed_impressions is None:
+        observed_impressions = sum(float(f.get("impressions") or 0) for f in families)
+    # Confiança: corpus e evidência semântica têm de vir do que foi REALMENTE
+    # medido — ter famílias do GSC não prova corpus nem sinais semânticos.
+    if corpus_available is None:
+        corpus_available = bool(families)
+    if semantic_evidence is None:
+        semantic_evidence = 0.7 if families else 0.0
     confidence = confidence_v2({
         "gsc_sample": min(float(page.get("impressions") or 0) / 5000.0, 1.0),
         "windows": confidence_score if confidence_score is not None else 0.6,
         "ga4_available": 1.0 if ga4_status["status"] == GA4_AVAILABLE else 0.0,
-        "corpus_available": 1.0 if families else 0.0,
-        "semantic_evidence": 0.7 if families else 0.0,
+        "corpus_available": 1.0 if corpus_available else 0.0,
+        "semantic_evidence": float(semantic_evidence),
         "query_stability": 0.6,
         "technical_known": 0.7,
     })
@@ -757,14 +773,14 @@ def decide_title(
             "source": (baseline_verdict or {}).get("baseline_source", ""),
         },
         "observation": {
-            "observed_impressions": coverage.get("observed_share_universe"),
+            "observed_impressions": round(float(observed_impressions or 0), 2),
             "page_impressions": page.get("impressions"),
             "query_observation_ratio": observation_ratio,
             "status": ("unknown" if observation_ratio is None else
                        "well_observed" if float(observation_ratio) >= 0.5 else
                        "partial" if float(observation_ratio) >= 0.2 else "thin"),
-            "note": ("fração das impressões da página explicada pelas queries "
-                     "observadas; o share das famílias é do universo observado"),
+            "note": ("impressões OBSERVADAS das queries / impressões da página; "
+                     "o share das famílias é do universo observado"),
         },
         "headroom": hr_detail,
         "query_families": [

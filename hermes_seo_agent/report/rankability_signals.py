@@ -16,36 +16,63 @@ _QUESTION_WORDS = ("quem", "qual", "quais", "como", "quando", "onde", "quantos",
                    "melhor", "vale a pena", "existe")
 
 
+def latest_window_pair(storage: Any) -> tuple[str, str]:
+    """A janela VIGENTE dos sinais persistidos: par (window_start, window_end).
+
+    Uma decisão = uma janela temporal. Filtrar só ``window_start`` (ou nada)
+    somava coletas de 28d/7d/1d e inflava a tração da query.
+    """
+    row = storage.conn.execute(
+        "SELECT window_start, window_end FROM query_pages "
+        "ORDER BY window_end DESC, window_start DESC LIMIT 1").fetchone()
+    if not row:
+        return "", ""
+    return str(row[0] or ""), str(row[1] or "")
+
+
+def _window_clause(window_start: str | None,
+                   window_end: str | None) -> tuple[str, list[Any]]:
+    """Cláusula de janela para os sinais GSC (par completo quando conhecido)."""
+    if not window_start:
+        return "", []
+    args: list[Any] = [window_start]
+    clause = " AND window_start = ?"
+    if window_end:
+        args.append(window_end)
+        clause += " AND window_end = ?"
+    return clause, args
+
+
 def _window_impressions(storage: Any, urls: list[str], entity: str,
-                        window: str) -> float:
+                        window: str, window_end: str | None = None) -> float:
     if not urls or not window:
         return 0.0
-    placeholders = ",".join("?" * len(urls))
+    placeholders = ", ".join("?" * len(urls))
+    clause, extra = _window_clause(window, window_end)
     row = storage.conn.execute(
         f"SELECT SUM(impressions) FROM query_pages WHERE url IN ({placeholders}) "
-        "AND window_start = ? AND query LIKE ?", (*urls, window, f"%{entity}%")
+        f"AND query LIKE ?{clause}", (*urls, f"%{entity}%", *extra)).fetchone()
+    return float(row[0] or 0.0) if row else 0.0
+
+
+def _previous_window(storage: Any, window: str) -> tuple[str, str] | None:
+    row = storage.conn.execute(
+        "SELECT window_start, window_end FROM query_pages WHERE window_start < ? "
+        "ORDER BY window_end DESC, window_start DESC LIMIT 1", (window,)
     ).fetchone()
-    return float(row[0] or 0.0)
-
-
-def _previous_window(storage: Any, window: str) -> str | None:
-    rows = storage.conn.execute(
-        "SELECT DISTINCT window_start FROM query_pages WHERE window_start < ? "
-        "ORDER BY window_start DESC LIMIT 1", (window,)
-    ).fetchall()
-    return rows[0][0] if rows else None
+    return (str(row[0]), str(row[1])) if row else None
 
 
 def _cluster_positions(storage: Any, urls: list[str], entity: str,
-                       window: str) -> list[float]:
+                       window: str, window_end: str | None = None) -> list[float]:
     if not urls or not window:
         return []
-    placeholders = ",".join("?" * len(urls))
+    placeholders = ", ".join("?" * len(urls))
+    clause, extra = _window_clause(window, window_end)
     rows = storage.conn.execute(
         f"SELECT position FROM query_pages WHERE url IN ({placeholders}) "
-        "AND window_start = ? AND query LIKE ? AND position IS NOT NULL",
-        (*urls, window, f"%{entity}%"),
-    ).fetchall()
+        f"AND query LIKE ?{clause} AND position IS NOT NULL",
+        (*urls, f"%{entity}%", *extra)).fetchall()
     return [float(r[0]) for r in rows]
 
 
@@ -134,17 +161,23 @@ def _technical(storage: Any, urls: list[str], indexable_urls: int,
 
 
 def build_cluster_signals(storage: Any, entity: str, *, window_start: str | None = None,
+                          window_end: str | None = None,
                           index: dict[str, Any] | None = None) -> dict[str, Any]:
     """Sinais do cluster (R2/R3/R4) a partir do storage.
 
     `index` (de :func:`hermes_seo_agent.report.topics.build_cluster_index`)
     permite reaproveitar os índices construídos uma vez por request (P3),
     evitando reconstruí-los a cada cluster.
+
+    `window_end` acompanha `window_start` para a janela ser o PAR completo (uma
+    decisão = uma janela): sem ele, coletas de períodos diferentes somavam.
     """
-    cov = cluster_coverage(storage, entity, window_start=window_start, index=index)
+    cov = cluster_coverage(storage, entity, window_start=window_start,
+                           window_end=window_end, index=index)
     urls = cov["urls"]
     ws = cov["window_start"]
-    prev_ws = _previous_window(storage, ws) if ws else None
+    we = cov.get("window_end") or ""
+    prev = _previous_window(storage, ws) if ws else None
     # P1: cluster_coverage já leu posições/impressões/cliques em lote — reutiliza.
     positions = cov.get("positions", [])
     edge_counts = (index or {}).get("entity_counts")
@@ -153,8 +186,8 @@ def build_cluster_signals(storage: Any, entity: str, *, window_start: str | None
 
     cur_imp = cov.get("impressions") or 0.0
     momentum = None
-    if prev_ws:
-        prev_imp = _window_impressions(storage, urls, entity, prev_ws)
+    if prev:
+        prev_imp = _window_impressions(storage, urls, entity, prev[0], prev[1])
         if prev_imp > 0:
             momentum = round((cur_imp - prev_imp) / prev_imp * 100, 1)
 
@@ -185,16 +218,24 @@ def build_cluster_signals(storage: Any, entity: str, *, window_start: str | None
 
 
 def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: str,
-                        ) -> dict[str, Any]:
-    """Sinais da query (R1/R4): fit semântico, tração, dificuldade observada."""
+                        *, window_start: str | None = None,
+                        window_end: str | None = None) -> dict[str, Any]:
+    """Sinais da query (R1/R4): fit semântico, tração, facilidade observada.
+
+    * Sinais semânticos NÃO medidos ficam ``None`` (desconhecido) — antes
+      começavam em 0.0, o que fazia ausência de medição entrar como medição ruim
+      e derrubava o rankability mesmo com a renormalização do ``semantic_fit``.
+    * ``window_start``/``window_end`` restringem a tração a UMA janela: sem isso
+      somava coletas de 28d/7d/1d da mesma query (tração inflada).
+    """
     variants = expand_query(query)
     ent = canonical_entity(query)
     cluster_signals.setdefault("entity", ent)
 
     # fit semântico via hybrid_search (M7) -> melhor doc do cluster
-    semantic = {"entity_fit": 0.0, "title_fit": 0.0, "h1_fit": 0.0,
-                "heading_fit": 0.0, "body_fit": 0.0, "question_fit": 0.0,
-                "related_entity_fit": 0.0}
+    semantic: dict[str, Any] = {"entity_fit": None, "title_fit": None, "h1_fit": None,
+                                "heading_fit": None, "body_fit": None,
+                                "question_fit": None, "related_entity_fit": None}
     try:
         from ..report.semantic import hybrid_search
         hits = hybrid_search(storage, query, limit=10)
@@ -208,16 +249,18 @@ def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: st
     except Exception:
         pass
 
-    # tração: query_pages da query (e variantes canônicas) no cluster
+    # tração: query_pages da query (e variantes canônicas) no cluster, na janela
     impressions = clicks = 0.0
     position = None
     if cluster_signals.get("urls") and variants:
-        placeholders = ",".join("?" * len(cluster_signals["urls"]))
+        placeholders = ", ".join("?" * len(cluster_signals["urls"]))
+        clause, extra = _window_clause(window_start, window_end)
         for v in variants:
             row = storage.conn.execute(
                 f"SELECT SUM(impressions), SUM(clicks), AVG(position) "
                 f"FROM query_pages WHERE url IN ({placeholders}) "
-                "AND query LIKE ?", (*cluster_signals["urls"], f"%{v}%")
+                f"AND query LIKE ?{clause}",
+                (*cluster_signals["urls"], f"%{v}%", *extra)
             ).fetchone()
             if row:
                 impressions += row[0] or 0
@@ -236,6 +279,59 @@ def build_query_signals(storage: Any, cluster_signals: dict[str, Any], query: st
         "semantic": semantic,
         "topic_authority": None,  # preenchido pelo chamador se quiser
         "related_top10_share": top10_share,
+    }
+
+
+def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
+                               family: dict[str, Any], *,
+                               window_start: str | None = None,
+                               window_end: str | None = None,
+                               max_queries: int = 3) -> dict[str, Any]:
+    """Sinais da FAMÍLIA: semântica ponderada por impressões das suas queries.
+
+    O motor agregava a demanda por família, mas construía a semântica a partir
+    de UMA query representante (``family["queries"][0]``). Aqui cada query da
+    família (até ``max_queries``, por impressões) contribui com o seu fit e a
+    média é ponderada pela tração — os campos continuam ``None`` quando nada foi
+    medido. Tração e posição são somadas/melhoradas entre as queries.
+    """
+    queries = list(family.get("queries") or [])[: max(int(max_queries or 1), 1)]
+    collected: list[tuple[float, dict[str, Any]]] = []
+    for query in queries:
+        signals = build_query_signals(storage, dict(cluster_signals), str(query),
+                                      window_start=window_start, window_end=window_end)
+        weight = float(signals.get("impressions") or 0) or 1.0
+        collected.append((weight, signals))
+    if not collected:
+        return build_query_signals(storage, dict(cluster_signals), "", window_start=window_start,
+                                   window_end=window_end)
+
+    keys = ("entity_fit", "title_fit", "h1_fit", "heading_fit", "body_fit",
+            "question_fit", "related_entity_fit")
+    semantic: dict[str, Any] = {}
+    for key in keys:
+        total = weight_sum = 0.0
+        for weight, signals in collected:
+            value = (signals.get("semantic") or {}).get(key)
+            if value is None:
+                continue
+            total += float(value) * weight
+            weight_sum += weight
+        semantic[key] = round(total / weight_sum, 4) if weight_sum else None
+    impressions = sum(float(s.get("impressions") or 0) for _w, s in collected)
+    clicks = sum(float(s.get("clicks") or 0) for _w, s in collected)
+    positions = [float(s["position"]) for _w, s in collected
+                 if s.get("position") is not None]
+    return {
+        "keyword": family.get("family_id") or family.get("family"),
+        "impressions": impressions,
+        "clicks": clicks,
+        "position": min(positions) if positions else family.get("weighted_position"),
+        "semantic": semantic,
+        "topic_authority": None,
+        "related_top10_share": (collected[0][1] or {}).get("related_top10_share", 0.0),
+        "queries_measured": len(collected),
+        "weighting": "impressões das queries da família",
     }
 
 

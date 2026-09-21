@@ -114,6 +114,18 @@ Inconsistências apontadas na revisão e o que mudou:
 Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração estendida em
 `tests/test_title_engine_integration.py`).
 
+## Segunda rodada de correções (revisão do c706e87)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 5a | `family_rankability` usava `setdefault` para o Topic Authority — `setdefault` NÃO substitui chave existente com `None`, e `build_query_signals` devolve `topic_authority: None`: o TA calculado não entrava no `observed_ease` | guard explícito (`if topic_authority is not None and signals.get(...) is None`) + teste com `topic_authority=None` nos sinais |
+| 5b | `build_query_signals` inicializava os sinais semânticos em `0.0` (ausência de medição entrava como medição ruim, apesar da renormalização) | inicialização em `None`; só o que foi medido é preenchido |
+| 5c | Semântica vinha de UMA query representante da família | novo `build_family_query_signals()`: média dos fits PONDERADA por impressões das queries da família (até 3), com tração somada e melhor posição |
+| 5d | `corpus_available`/`semantic_evidence` da confiança vinham de `bool(families)` (GSC não prova corpus) | viram entradas explícitas: a CLI passa corpus real (`cluster_signals`) e fração de famílias com semântica medida |
+| 7 | Tração/posições do rankability somavam janelas históricas (`query_pages` sem filtro de janela) | `window_start`+`window_end` em `build_query_signals` e em `cluster_coverage` (novo param `window_end`); a CLI resolve o par vigente com `latest_window_pair()` e usa UM par por decisão, registrado em `signal_window` |
+| 9 | `observation.observed_impressions` recebia `observed_share_universe` (um SHARE, ~0.85) | `decide_title(observed_impressions=...)` — impressões reais (fallback: soma das famílias) |
+| 12 | O re-score do título (`finalize_titles`) não recebia `historical_success` e voltava ao neutro 0.5 — e era esse valor que ia para a calibração | a CLI repassa o histórico da combinação que selecionou o candidato |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

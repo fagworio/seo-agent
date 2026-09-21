@@ -2199,7 +2199,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     from .report.query_families import (build_families, demand_share, title_coverage,
                                         tokens as _tokens)
     from .report.rankability_signals import (build_cluster_signals,
-                                             build_query_signals,
+                                             build_family_query_signals,
+                                             latest_window_pair,
                                              resolve_cluster_entity)
     from .report.rankability_v2 import confidence_v2 as _confidence_v2
     from .report.rankability_v2 import query_distribution as _qdist
@@ -2259,6 +2260,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             window_end=end.isoformat(), min_impressions=min_impressions)
         cases = load_cases(store, limit=2000)
         saved_weights = (store.get_signals() or {}).get("title_weights") or {}
+        # JANELA ÚNICA para os sinais persistidos (rankability/cluster): o par
+        # mais recente de query_pages. Uma decisão = uma janela temporal.
+        signal_window = latest_window_pair(store)
 
     weights = saved_weights.get("weights") if isinstance(saved_weights.get("weights"), dict) else None
     weights_version = int(saved_weights.get("weights_version") or 0)
@@ -2405,14 +2409,17 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                          if r.get("position") is not None]
             dist = _qdist(positions)
             # SINAIS REAIS de rankability (FASE 6): cluster do assunto no corpus
-            # (Topic Authority) + sinais da query por família. Sem corpus os
-            # sinais semânticos ficam DESCONHECIDOS (nunca inventados).
+            # (Topic Authority) + sinais por FAMÍLIA (semântica ponderada por
+            # impressões das queries da família). UMA JANELA por decisão: o par
+            # (window_start, window_end) vem do dado persistido mais recente.
             cluster_signals: dict[str, Any] = {}
             topic_score: float | None = None
+            semantic_measured = 0
             if not args.no_deep_signals:
                 try:
                     cluster_signals, _cover = build_cluster_signals(
-                        store, hint or entity, window_start=start.isoformat())
+                        store, hint or entity, window_start=signal_window[0] or None,
+                        window_end=signal_window[1] or None)
                     topic = _topic_authority(cluster_signals)
                     topic_score = float(topic.get("score") or 0.0)
                 except Exception:  # noqa: BLE001
@@ -2420,10 +2427,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             rankability: dict[str, float] = {}
             for family in relevant:
                 real_signals: dict[str, Any] | None = None
-                if not args.no_deep_signals and family.get("queries"):
+                if not args.no_deep_signals:
                     try:
-                        real_signals = build_query_signals(
-                            store, dict(cluster_signals), str(family["queries"][0]))
+                        real_signals = build_family_query_signals(
+                            store, cluster_signals, family,
+                            window_start=signal_window[0] or None,
+                            window_end=signal_window[1] or None)
+                        if any(v is not None
+                               for v in (real_signals.get("semantic") or {}).values()):
+                            semantic_measured += 1
                     except Exception:  # noqa: BLE001
                         real_signals = None
                 rankability[family["family"]] = family_rankability(
@@ -2466,6 +2478,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     rankability=rankability,
                     headroom_value=ctx.get("headroom", headroom_detail),
                     trends=family_trend_map, weights=weights,
+                    # o histórico EMPÍRICO da combinação precisa sobreviver ao
+                    # re-score do título (senão o fator volta ao neutro 0.5 e é
+                    # esse valor errado que vai para a calibração).
+                    historical_success=(cand.get("history") or {}).get("value"),
                     confidence_score=float(ctx.get("confidence_score") or 0.0))
                 outcome["generation"] = {"mode": gen_mode, "llm_used": False,
                                          "validated": len(generated_titles["candidates"]),
@@ -2484,9 +2500,18 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 historical_success_fn=history_fn,
                 title_evaluator=_evaluate_title,
                 observation_ratio=demand.get("query_observation_ratio"),
+                observed_impressions=demand.get("observed_impressions"),
+                # confiança honesta: corpus e evidência semântica medidos (não
+                # derivados de "existem famílias do GSC")
+                corpus_available=bool(cluster_signals),
+                semantic_evidence=min(semantic_measured / max(len(relevant), 1), 1.0)
+                if relevant else 0.0,
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
             contract["topic_authority"] = topic_score
+            contract["signal_window"] = {"window_start": signal_window[0],
+                                         "window_end": signal_window[1],
+                                         "families_with_measured_semantics": semantic_measured}
             contract["baseline"]["source"] = baseline.get("source")
             contract["baseline"]["window_start"] = baseline.get("window_start")
             contract["baseline"]["baseline_pages"] = baseline.get("pages")

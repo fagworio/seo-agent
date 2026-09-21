@@ -162,6 +162,7 @@ def build_topic_graph(storage: Any, *, min_urls: int = 1,
 
 
 def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = None,
+                     window_end: str | None = None,
                      index: dict[str, Any] | None = None) -> dict[str, Any]:
     """Cobertura completa de um cluster (critério M3).
 
@@ -169,9 +170,15 @@ def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = No
     agregadas (IN) + uma passada Python leve. `index` (de
     :func:`build_cluster_index`) evita reconstruir os índices de corpus/GSC e
     refazer latest_window/latest_ga4_window por chamada (P3).
+
+    `window_end` opcional fecha o PAR da janela: os sinais GSC do cluster passam
+    a vir de UM período (sem somar coletas de 28d/7d/1d da mesma entidade).
     """
     key = canonical_entity(entity)
     ws = window_start or (index or {}).get("window") or storage.latest_window_start()
+    we = window_end or ""
+    window_clause = " AND window_start = ?" + (" AND window_end = ?" if we else "")
+    window_args: list[Any] = [ws] + ([we] if we else [])
     if index is None:
         index = build_cluster_index(storage)
     corpus_index = index["corpus_index"]
@@ -229,14 +236,14 @@ def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = No
         if ws:
             row = storage.conn.execute(
                 f"SELECT SUM(impressions), SUM(clicks) FROM query_pages "
-                f"WHERE url IN ({ph}) AND window_start = ? AND query LIKE ?",
-                (*urls, ws, f"%{entity}%")).fetchone()
+                f"WHERE url IN ({ph}) AND query LIKE ?{window_clause}",
+                (*urls, f"%{entity}%", *window_args)).fetchone()
             impressions = float(row[0] or 0)
             clicks = float(row[1] or 0)
             for (pos,) in storage.conn.execute(
                 f"SELECT position FROM query_pages WHERE url IN ({ph}) "
-                "AND window_start = ? AND query LIKE ? AND position IS NOT NULL",
-                (*urls, ws, f"%{entity}%")).fetchall():
+                f"AND query LIKE ?{window_clause} AND position IS NOT NULL",
+                (*urls, f"%{entity}%", *window_args)).fetchall():
                 if pos is not None:
                     positions.append(float(pos))
                     if pos <= 3:
@@ -268,6 +275,7 @@ def cluster_coverage(storage: Any, entity: str, *, window_start: str | None = No
         "ga4_organic_sessions": ga4_sessions,
         "ga4_status": ga4_status,
         "window_start": ws or "",
+        "window_end": we,
         "urls": urls,
         "positions": positions,
     }
