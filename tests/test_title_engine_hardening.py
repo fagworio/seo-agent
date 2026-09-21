@@ -719,6 +719,96 @@ def test_janela_desalinhada_derruba_review_title_para_investigate():
     assert neutro["checks"]["signal_window_aligned"] is None
 
 
+def test_query_title_alignment_nao_confunde_franquias():
+    """Entidade composta que só compartilha um token não é o mesmo assunto."""
+    from hermes_seo_agent.report.query_families import (entity_alignment_score,
+                                                        query_title_alignment)
+
+    assert entity_alignment_score("dragon ball", "Dragon Quest") == 0.5
+    assert entity_alignment_score("dragon ball", "Dragon Ball Z") == 1.0
+    assert entity_alignment_score("gojo", "Satoru Gojo") == 1.0
+
+    franquia_errada = query_title_alignment("dragon ball idade",
+                                            "Dragon Quest: idade dos personagens")
+    franquia_certa = query_title_alignment("dragon ball idade",
+                                           "Dragon Ball: idade dos personagens")
+    assert franquia_errada < 0.6
+    assert franquia_certa > 0.8
+    # entidade ausente do texto também é OUTRO assunto (teto 0.5), mesmo que a
+    # intenção coincida
+    outra = query_title_alignment("gojo poderes", "Naruto: poderes e tecnicas")
+    assert outra <= 0.5
+
+
+def test_related_top10_share_vem_do_cluster_e_move_o_rankability(tmp_path):
+    """O refactor zerou 40% do observed_ease: o share é do CLUSTER, não da query."""
+    import hermes_seo_agent.report.rankability_signals as rs
+
+    storage = Storage(str(tmp_path / "share.db"))
+    rows = [_row("quantos anos tem gojo", 900, 9, 4.0)]
+    family = build_families(rows)[0]
+    fraco = rs.build_family_query_signals(
+        storage, {"positions": [15.0, 18.0, 20.0, 25.0]}, family,
+        target_url="https://x/a")
+    forte = rs.build_family_query_signals(
+        storage, {"positions": [2.0, 4.0, 8.0, 15.0]}, family,
+        target_url="https://x/a")
+    assert fraco["related_top10_share"] == 0.0
+    assert forte["related_top10_share"] == 0.75
+    assert forte["related_top10_source"] == "cluster_positions"
+
+    # mais related_top10_share -> observed_ease maior -> rankability nunca menor
+    base = {"topic_authority": 0.4}
+    r_fraco = family_rankability(family, query_signals={**base, **_ease_inputs(fraco)},
+                                 cluster_signals={"positions": [15.0, 18.0, 20.0, 25.0]},
+                                 title="Gojo: historia")
+    r_forte = family_rankability(family, query_signals={**base, **_ease_inputs(forte)},
+                                 cluster_signals={"positions": [2.0, 4.0, 8.0, 15.0]},
+                                 title="Gojo: historia")
+    assert (r_forte["factors"]["observed_ease"]["score"]
+            > r_fraco["factors"]["observed_ease"]["score"])
+    assert r_forte["score"] >= r_fraco["score"]
+    storage.close()
+
+
+def _ease_inputs(signals: dict[str, Any]) -> dict[str, Any]:
+    return {"impressions": signals["impressions"], "clicks": signals["clicks"],
+            "position": signals["position"],
+            "related_top10_share": signals["related_top10_share"]}
+
+
+def test_janela_desalinhada_conta_em_checks_passed_e_failed():
+    """`aligned=false` precisa aparecer no veredito agregado (não só na decisão)."""
+    rows = [_row("quantos anos tem gojo", 1760, 14, 4.8),
+            _row("gojo poderes", 1510, 11, 5.4),
+            _row("altura do gojo", 290, 3, 7.0)]
+    share, _shares, coverage, relevant, candidates = _evidence(
+        rows, "Gojo: poderes em Jujutsu Kaisen")
+    verdict = {"verdict": "below_p10", "context": "5-10|imp2k+", "sample_size": 41,
+               "bucket": {"p10": 0.01, "p50": 0.03}}
+    base: dict[str, Any] = dict(
+        url="https://x/g", title="Gojo: poderes em Jujutsu Kaisen",
+        page={"impressions": 4200, "clicks": 31, "position": 5.2, "entity": "Gojo"},
+        baseline_verdict=verdict, families=share["families"], coverage=coverage,
+        candidates=candidates,
+        rankability={f["family"]: 0.8 for f in relevant},
+        headroom_value=page_headroom(5.2, 31 / 4200, verdict),
+        ga4={"sessions": 340, "engagement_rate": 0.71})
+
+    alinhado = decide_title(**base, signal_window_aligned=True)
+    assert alinhado["checks"]["passed"] is True
+    assert "signal_window_aligned" not in alinhado["checks"]["failed"]
+
+    desalinhado = decide_title(**base, signal_window_aligned=False)
+    assert desalinhado["checks"]["passed"] is False
+    assert "signal_window_aligned" in desalinhado["checks"]["failed"]
+
+    # não informado: veredito agregado como antes (sem o gate novo)
+    neutro = decide_title(**base, signal_window_aligned=None)
+    assert neutro["checks"]["passed"] is True
+    assert "signal_window_aligned" not in neutro["checks"]["failed"]
+
+
 def test_historico_de_sucesso_e_calculado_por_candidato():
     rows = [_row("quantos anos tem gojo", 900, 9, 4.0),
             _row("gojo poderes", 500, 5, 6.0)]

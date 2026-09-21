@@ -307,7 +307,7 @@ def build_query_semantic_signals(storage: Any, query: str, *,
     texto. Se a URL não estiver no corpus, os campos ficam ``None``
     (DESCONHECIDO) — nunca substituídos por outra página.
     """
-    from ..report.query_families import (detect_entity, entity_covered,
+    from ..report.query_families import (detect_entity, entity_alignment_score,
                                          expand_variants, query_title_alignment,
                                          significant_tokens, tokens, _token_hit)
     semantic: dict[str, Any] = {key: None for key in _SEMANTIC_KEYS}
@@ -333,10 +333,11 @@ def build_query_semantic_signals(storage: Any, query: str, *,
 
     entity = detect_entity(query)
     if entity:
-        semantic["entity_fit"] = 1.0 if (entity_covered(entity, f"{title} {h1}",
-                                                        title_variants)
-                                         or entity_covered(entity, body,
-                                                           body_variants)) else 0.0
+        # mesma régua do title_fit: fração de tokens da entidade na página
+        entity_scores = [s for s in (entity_alignment_score(entity, f"{title} {h1}"),
+                                     entity_alignment_score(entity, body))
+                         if s is not None]
+        semantic["entity_fit"] = round(max(entity_scores), 4) if entity_scores else None
     semantic["title_fit"] = query_title_alignment(query, title)
     semantic["h1_fit"] = query_title_alignment(query, h1)
     if headings:
@@ -466,7 +467,11 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
         return {"keyword": family.get("family_id") or family.get("family"),
                 "semantic": {key: None for key in _SEMANTIC_KEYS},
                 "semantic_scope": "no_queries", "semantic_note": "família sem queries",
-                "topic_authority": None, "related_top10_share": 0.0,
+                "topic_authority": None,
+                "related_top10_share": _top10_share(
+                    [float(p) for p in (cluster_signals.get("positions") or [])
+                     if p is not None]),
+                "related_top10_source": "cluster_positions",
                 "traction_source": "family (agregado real, sem expansão)",
                 "impressions": family.get("impressions"),
                 "clicks": family.get("clicks"),
@@ -483,6 +488,12 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
             total += float(value) * weight
             weight_sum += weight
         semantic[key] = round(total / weight_sum, 4) if weight_sum else None
+    # `related_top10_share` NÃO vem das queries: é do CLUSTER (posições já
+    # carregadas em cluster_signals) e compõe 40% do observed_ease. Depois do
+    # refactor ele ficou em 0.0, zerando esse peso em silêncio.
+    related_top10_share = _top10_share(
+        [float(p) for p in (cluster_signals.get("positions") or [])
+         if p is not None])
 
     impressions = family.get("impressions")
     clicks = family.get("clicks")
@@ -506,7 +517,8 @@ def build_family_query_signals(storage: Any, cluster_signals: dict[str, Any],
         "semantic_match": match_kind,
         "semantic_note": note,
         "topic_authority": None,
-        "related_top10_share": (collected[0][2] or {}).get("related_top10_share", 0.0),
+        "related_top10_share": related_top10_share,
+        "related_top10_source": "cluster_positions",
         "semantic_queries": [query for query, _w, _s in collected],
         "weighting": "impressões GSC por query (apenas para a média semântica)",
         "traction_source": "family (agregado real, sem expansão)",

@@ -385,6 +385,12 @@ def compatible_entity(entity: str, hint: str, *, min_overlap: float = 0.6) -> bo
     return (hits / min(len(terms), len(hint_terms))) >= float(min_overlap)
 
 
+# Piso único de cobertura de entidade (mesma régua em todo o motor): abaixo dele
+# a entidade é considerada OUTRO assunto — nem merge de família nem alinhamento
+# semântico podem tratar como a mesma coisa.
+ENTITY_OVERLAP_FLOOR = 0.6
+
+
 # ---------------------------------------------------------------------------
 # FASE 1 — consolidação das famílias
 # ---------------------------------------------------------------------------
@@ -675,8 +681,10 @@ def query_title_alignment(query: str, doc_title: str) -> float | None:
         return None
     title_variants = expand_variants(tokens(title_text))
     entity = detect_entity(query_text)
-    entity_ok: float | None = (1.0 if entity_covered(entity, title_text, title_variants)
-                               else 0.0) if entity else None
+    # SCORE de cobertura da entidade (não booleano): entidade composta que só
+    # compartilha um token ("dragon ball" × "Dragon Quest") NÃO pode valer 1.0.
+    entity_ok: float | None = (entity_alignment_score(entity, title_text)
+                               if entity else None)
     intents = intent_matches(query_text)
     if intents:
         hits = sum(1 for label in intents
@@ -695,7 +703,36 @@ def query_title_alignment(query: str, doc_title: str) -> float | None:
     if not known:
         return None
     total = sum(weight for weight, _value in known)
-    return round(sum(weight * float(value) for weight, value in known) / total, 4)
+    score = sum(weight * float(value) for weight, value in known) / total
+    # ASSUNTO DIFERENTE: cobertura de entidade abaixo do piso (mesma régua de
+    # `compatible_entity`) significa que o documento NÃO é sobre a entidade da
+    # query — coincidir a intenção não pode elevar o alinhamento.
+    # "dragon ball idade" × "Dragon Quest: idade" não é meio alinhado: é outro
+    # assunto (0.5 de teto), e não 0.73 pela soma de intenção + tokens.
+    if entity and entity_ok is not None and entity_ok < ENTITY_OVERLAP_FLOOR:
+        score = min(score, 0.5)
+    return round(score, 4)
+
+
+def entity_alignment_score(entity: str, text: str) -> float | None:
+    """Fração dos tokens significativos da ENTIDADE presentes no texto (0..1).
+
+    `entity_covered()` responde booleano ("algum token aparece?"), o que basta
+    para um gate de preservação — mas em alinhamento semântico ele inventa
+    fit entre franquias que só compartilham o primeiro nome:
+
+        "dragon ball" × "Dragon Quest"  ->  1/2 = 0.5  (não 1.0)
+        "dragon ball" × "Dragon Ball Z" ->  2/2 = 1.0
+        "gojo"        × "Satoru Gojo"   ->  1/1 = 1.0
+
+    Sem tokens na entidade devolve ``None`` (não medível), nunca 1.0 implícito.
+    """
+    terms = [t for t in tokens(entity) if len(t) > 2 and not _is_stop(t)]
+    if not terms:
+        return None
+    variants = expand_variants(tokens(text))
+    hits = sum(1 for t in terms if _token_hit(t, variants))
+    return round(hits / len(terms), 4)
 
 
 def entity_covered(entity: str, title: str, title_variants: set[str]) -> bool:

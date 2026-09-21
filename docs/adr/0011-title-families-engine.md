@@ -143,6 +143,14 @@ Testes desses casos: `tests/test_title_engine_hardening.py` (+ integração este
 | 2 | **Semantic fit podia vir de OUTRA página**: `hybrid_search(...)[0]` escolhia o melhor documento de TODO o corpus | `build_query_semantic_signals(storage, query, target_url=...)`: medição determinística no corpus DA PÁGINA (título, h1, headings, texto); URL fora do corpus → campos `None` (`target_url_unavailable`), sem fallback para outra página; o match tolera host diferente (GSC `www.` × corpus `prod.`) pelo caminho normalizado (`inventory.reconcile.normalize_url`), registrado em `semantic_match`/`semantic_url` |
 | 3 | SQL redundante: `build_family_query_signals` chamava `build_query_signals`, que refazia `expand_query()` + `SELECT` por variante só para descartar a tração | o caminho da família usa apenas `build_query_semantic_signals` (nenhuma consulta a `query_pages`): tração vem do agregado da família; teste com conexão instrumentada garante que só tabelas `corpus_*` são consultadas |
 
+## Quinta rodada de correções (revisão do e61af0b)
+
+| # | Problema | Correção |
+| - | -------- | -------- |
+| 1 | **Regressão**: ao remover o SQL do family path, `related_top10_share` passou a sair sempre `0.0` (a função semântica não devolve esse campo) — zerando 40% do `observed_ease` em silêncio | o share é do CLUSTER: `_top10_share(cluster_signals["positions"])`, sem nenhuma consulta GSC, com `related_top10_source="cluster_positions"` no sinal; teste garante 0.75 para posições [2,4,8,15] e que mais share nunca reduz o rankability |
+| 2 | `checks.passed` podia ser `true` com `signal_window_aligned: false` (o gate não estava em `critical`) — decisão segura, explicabilidade contraditória | o gate entra em `critical` **quando informado** (`None` mantém o comportamento legado); `failed` passa a listar `signal_window_aligned` |
+| 3 | `query_title_alignment` usava `entity_covered` (booleano "algum token aparece"): uma query de "dragon ball" pontuava ~0.93 num título de "Dragon Quest" | novo `entity_alignment_score(entity, text)` = fração dos tokens significativos da entidade no texto (1/2 = 0.5 em Dragon Ball × Dragon Quest) e, abaixo do piso único `ENTITY_OVERLAP_FLOOR = 0.6` (mesma régua de `compatible_entity`), o alinhamento é limitado a 0.5 — assunto diferente não é "meio alinhado". O `entity_fit` da página usa a mesma régua |
+
 ## Consequências
 - A decisão fica **reproduzível e auditável** a partir de `evidence` + `checks`
   + `confidence` (Evidence Contract), com explicação em texto

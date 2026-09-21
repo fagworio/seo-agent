@@ -589,9 +589,14 @@ def title_gates(*, page: dict[str, Any], families: Sequence[dict[str, Any]],
         "ga4": ga4_status,
         "notes": notes,
     }
-    critical = ("page_impressions_sufficient", "query_family_demand_sufficient",
+    critical = ["page_impressions_sufficient", "query_family_demand_sufficient",
                 "baseline_anomaly", "title_coverage_gap", "position_actionable",
-                "entity_preserved", "evidence_confidence")
+                "entity_preserved", "evidence_confidence"]
+    # Gate só entra no veredito agregado quando FOI informado: `passed=false`
+    # com `signal_window_aligned=false` no contrato seria contraditório para
+    # qualquer consumidor que leia `checks.passed` como "todos os gates".
+    if signal_window_aligned is not None:
+        critical.append("signal_window_aligned")
     gates["passed"] = all(gates[k] for k in critical)
     gates["failed"] = [k for k in critical if not gates[k]]
     return gates
