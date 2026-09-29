@@ -464,3 +464,317 @@ def test_lifecycle_ignora_status_invalido(tmp_path):
                                            when="2026-09-29T00:00:00+00:00") == 0
         assert store.close_title_checklist([], status="done",
                                            when="2026-09-29T00:00:00+00:00") == 0
+
+
+# --- Sprint 1.2: integridade do feedback loop ------------------------------
+
+_URL_12 = "https://www.unicorniohater.com.br/medicao/"
+
+
+def _pendente(store):
+    store.conn.execute(
+        "INSERT INTO improvement_checklist (url, item, status, created_at) "
+        "VALUES (?, 'title_meta', 'pending', '2026-09-01')", (_URL_12,))
+    store.conn.commit()
+
+
+def test_outcome_falho_nao_fecha_a_caixa(tmp_path):
+    """P0.6: WordPress atualizado + REST ok + outcome FALHOU => NAO vira done.
+
+    A Caixa nao pode mentir fechando um item que o Google nunca vai medir.
+    O item fica recuperavel (pending + measurement_unavailable) com o erro.
+    """
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "p06.db")) as store:
+        _pendente(store)
+        fechaveis: list[str] = []
+        try:
+            raise RuntimeError("disco cheio")
+        except RuntimeError as exc:
+            # mesmo caminho do CLI: falha do outcome marca pendencias de medicao
+            store.mark_measurement_pending(
+                _URL_12, error=f"outcome_failed: {exc}", commit=False)
+        store.conn.commit()
+        # so o que teve outcome entra em `fechaveis` — aqui, nada
+        assert store.close_title_checklist(
+            fechaveis, status="done", when="2026-09-29T00:00:00+00:00") == 0
+
+        row = store.conn.execute(
+            "SELECT status, measurement_unavailable, rejection_reason "
+            "FROM improvement_checklist WHERE url = ?", (_URL_12,)).fetchone()
+        assert row[0] == "pending"          # NAO fechou
+        assert row[1] == 1                  # marcado como pendencia de medicao
+        assert "outcome_failed" in (row[2] or "")
+
+
+def test_outcome_ok_fecha_a_caixa(tmp_path):
+    """Contraprova: outcome persistido => a URL entra em fechaveis e vira done."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "ok.db")) as store:
+        _pendente(store)
+        store.record_implemented_outcome(
+            url=_URL_12, action_type="title_engine", implemented_action="fix",
+            before={"rank_math_title": "A"}, after={"rank_math_title": "B"},
+            implemented_at="2026-09-29T00:00:00+00:00",
+            gsc_baseline={"page": {"impressions": 100}},
+            ga4_baseline={"status": "available", "sessions": 7.0})
+        assert store.close_title_checklist(
+            [_URL_12], status="done", when="2026-09-29T00:00:00+00:00") == 1
+        status = store.conn.execute(
+            "SELECT status FROM improvement_checklist WHERE url = ?",
+            (_URL_12,)).fetchone()[0]
+        assert status == "done"
+
+
+def test_baseline_estruturado_permite_medir_o_ga4(tmp_path):
+    """Item 4/6/9: baseline {gsc, ga4, change} — e o GA4 deixa de ser None.
+
+    Antes gravava {before, after}: `baseline_ga4()` devolvia None e
+    `engagement_deltas()` caia em insufficient_data/missing_before_or_after.
+    """
+    import json
+
+    from hermes_seo_agent.report.impact_ga4 import baseline_ga4, engagement_deltas
+    from hermes_seo_agent.storage.db import Storage
+
+    ga4_pre = {"status": "available", "sessions": 7.0, "engagement_rate": 0.42}
+    with Storage(str(tmp_path / "ga4.db")) as store:
+        oid = store.record_implemented_outcome(
+            url=_URL_12, action_type="title_engine", implemented_action="fix",
+            before={"rank_math_title": "A"}, after={"rank_math_title": "B"},
+            implemented_at="2026-09-29T00:00:00+00:00",
+            gsc_baseline={"page": {"impressions": 503.0},
+                          "context": {"window_start": "2026-09-01"}},
+            ga4_baseline=ga4_pre)
+        raw = store.conn.execute(
+            "SELECT baseline_json FROM opportunity_outcomes WHERE id = ?",
+            (oid,)).fetchone()[0]
+    baseline = json.loads(raw)
+
+    assert set(baseline) >= {"gsc", "ga4", "change"}
+    assert baseline["change"]["before"] == {"rank_math_title": "A"}
+    assert baseline["gsc"]["page"]["impressions"] == 503.0
+    assert baseline["measurement_status"] == "complete"
+
+    # o medidor agora CONSEGUE ler o antes (era None)
+    # `baseline_ga4` devolve o slice NORMALIZADO: o `status` do contrato vira
+    # `measurement_status` (o campo que `engagement_deltas` compara).
+    assert baseline_ga4(baseline) == {**ga4_pre, "measurement_status": "available"}
+    deltas = engagement_deltas(
+        baseline_ga4(baseline),
+        {"sessions": 12.0, "engagement_rate": 0.55,
+         "measurement_status": "available"})
+    assert deltas.get("data_quality") != "missing_before_or_after"
+
+
+def test_baseline_sem_ga4_e_explicito_e_nao_some(tmp_path):
+    """Item 6: ausencia do GA4 e EXPLICITA (measurement_status=missing)."""
+    import json
+
+    from hermes_seo_agent.report.impact_ga4 import baseline_ga4
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "missing.db")) as store:
+        oid = store.record_implemented_outcome(
+            url=_URL_12, action_type="title_engine", implemented_action="fix",
+            before={"rank_math_title": "A"}, after={"rank_math_title": "B"},
+            implemented_at="2026-09-29T00:00:00+00:00")
+        raw = store.conn.execute(
+            "SELECT baseline_json FROM opportunity_outcomes WHERE id = ?",
+            (oid,)).fetchone()[0]
+    baseline = json.loads(raw)
+    assert baseline["measurement_status"] == "missing"
+    assert baseline["ga4"] == {}
+    # `baseline_ga4` devolve o valor de `baseline["ga4"]`; vazio = ausencia
+    # EXPLICITA (e falsy, entao `engagement_deltas` reporta insufficient_data em
+    # vez de fingir que existe dado).
+    assert baseline_ga4(baseline) == {}
+    assert not baseline_ga4(baseline)
+
+
+def test_outcome_em_transacao_sem_commit_nao_persiste_antes(tmp_path):
+    """Item 3: `commit=False` permite outcome + lifecycle na MESMA transacao."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "tx.db")) as store:
+        store.record_implemented_outcome(
+            url=_URL_12, action_type="title_engine", implemented_action="fix",
+            before={}, after={}, implemented_at="2026-09-29T00:00:00+00:00",
+            commit=False)
+        # nao commitado: outra conexao nao veria; aqui conferimos a API
+        assert store.conn.in_transaction is True
+        store.conn.commit()
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes").fetchone()[0] == 1
+
+
+# --- Sprint 1.2: tracacao real (item 1) e reconciliacao (itens 5-8) --------
+
+def test_transacao_agrupa_e_desfaz_tudo_em_caso_de_erro(tmp_path):
+    """Item 1: ou grava tudo (outcome + done), ou NADA. Sem estado parcial."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "tx_rb.db")) as store:
+        try:
+            with store.transaction():
+                store.record_implemented_outcome(
+                    url=_URL_12, action_type="t", implemented_action="t",
+                    before={}, after={},
+                    implemented_at="2026-09-29T00:00:00+00:00", commit=False)
+                raise RuntimeError("crash entre outcome e checklist")
+        except RuntimeError:
+            pass
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes").fetchone()[0] == 0
+
+
+def test_transacao_commita_outcome_e_checklist_juntos(tmp_path):
+    """Item 1 (contraprova): outcome + checklist done, atomicos."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "tx_ok.db")) as store:
+        _pendente(store)
+        with store.transaction():
+            store.record_implemented_outcome(
+                url=_URL_12, action_type="t", implemented_action="t",
+                before={}, after={},
+                implemented_at="2026-09-29T00:00:00+00:00", commit=False)
+            store.close_title_checklist(
+                [_URL_12], status="done", when="2026-09-29T00:00:00+00:00",
+                commit=False)
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
+            (_URL_12,)).fetchone()[0] == 1
+        assert store.conn.execute(
+            "SELECT status FROM improvement_checklist WHERE url = ?",
+            (_URL_12,)).fetchone()[0] == "done"
+
+
+def _acao_executada(store, url: str, *, status: str = "executed") -> None:
+    """Grava uma acao no audit trail exatamente como o Executor faz."""
+    import json as _json
+
+    store.conn.execute(
+        "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, "
+        "before_json, after_json, rollback_json, executed_at, fix_json) "
+        "VALUES ('c1', 'title_engine', ?, 'safe_fix', ?, ?, ?, ?, '{}', ?, ?)",
+        (url, status, f"fp-{url}-{status}",
+         _json.dumps({"rank_math_title": "Título antigo"}),
+         _json.dumps({"rank_math_title": "Título novo"}),
+         "2026-09-29T10:00:00+00:00",
+         _json.dumps({"type": "wp_post_meta", "post_id": 1,
+                      "meta": {"rank_math_title": "Título novo"}})))
+    store.conn.commit()
+
+
+def _url(sub: str) -> str:
+    return f"https://www.unicorniohater.com.br/{sub}/"
+
+
+def test_reconciliacao_cria_outcome_de_acao_executada_sem_outcome(tmp_path):
+    """Item 6: `executed` sem outcome -> a reconciliacao cria o outcome perdido.
+
+    E o caso 'WordPress escreveu e o processo caiu antes do outcome': nenhum
+    outro caminho recupera (o motor decide no_title_change e o executor ve
+    `already executed`). NAO reexecuta o WordPress.
+    """
+    import json
+
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("reconciliar")
+    with Storage(str(tmp_path / "rec.db")) as store:
+        _acao_executada(store, url)
+        assert [p["url"] for p in store.executed_without_outcome()] == [url]
+
+        res = store.reconcile_executed_outcomes()
+        assert res["outcomes_created"] == 1
+
+        row = store.conn.execute(
+            "SELECT baseline_json FROM opportunity_outcomes WHERE url = ?",
+            (url,)).fetchone()
+        assert row is not None                     # o outcome existe agora
+        baseline = json.loads(row[0])
+        # before/after vieram da ACAO ja executada (audit trail)
+        assert baseline["change"]["after"]["rank_math_title"] == "Título novo"
+        assert baseline["change"]["before"]["rank_math_title"] == "Título antigo"
+        # honestidade: o PRE daquele instante se perdeu
+        assert baseline["measurement_status"] == "missing"
+
+
+def test_reconciliacao_fecha_a_caixa(tmp_path):
+    """Item 7: reconciliacao concluida -> o checklist vira done."""
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("reconciliar2")
+    with Storage(str(tmp_path / "rec2.db")) as store:
+        store.conn.execute(
+            "INSERT INTO improvement_checklist (url, item, status, created_at) "
+            "VALUES (?, 'title_meta', 'pending', '2026-09-01')", (url,))
+        store.conn.commit()
+        _acao_executada(store, url)
+        res = store.reconcile_executed_outcomes()
+        assert res["checklist_closed"] == 1
+        assert store.conn.execute(
+            "SELECT status FROM improvement_checklist WHERE url = ?",
+            (url,)).fetchone()[0] == "done"
+
+
+def test_reconciliacao_duas_vezes_nao_duplica_outcome(tmp_path):
+    """Item 8: rodar a reconciliacao de novo NAO cria outcome duplicado."""
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("reconciliar3")
+    with Storage(str(tmp_path / "rec3.db")) as store:
+        _acao_executada(store, url)
+        store.reconcile_executed_outcomes()
+        res2 = store.reconcile_executed_outcomes()
+        assert res2["candidates"] == 0
+        assert res2["outcomes_created"] == 0
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
+            (url,)).fetchone()[0] == 1
+
+
+def test_acao_nao_executada_nao_entra_na_reconciliacao(tmp_path):
+    """So `executed` conta: preview/skipped/unverified nao geram outcome."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "rec4.db")) as store:
+        _acao_executada(store, _url("nunca"), status="previewed")
+        store.reconcile_executed_outcomes()
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes").fetchone()[0] == 0
+
+
+def test_executor_nao_reescreve_wordpress_na_proxima_vez(tmp_path):
+    """Item 5: depois de `executed`, a proxima execucao NAO escreve de novo.
+
+    E por isso que a reconciliacao e obrigatoria: a idempotencia protege o
+    WordPress, mas sozinha deixaria o outcome perdido para sempre.
+    """
+    from dataclasses import replace
+
+    from hermes_seo_agent.config import load_config
+    from hermes_seo_agent.executor.executor import Executor
+
+    wp = _fake_wp("Título A")
+
+    class _StoreJaExecutado:
+        def action_executed(self, fingerprint):  # noqa: ANN001
+            return True                            # ja gravado na rodada anterior
+
+        def record_action(self, **kw):  # noqa: ANN003
+            return 1
+
+        def log_audit(self, **kw):  # noqa: ANN003
+            return 1
+
+    cfg = replace(load_config(), dry_run=False)
+    res = Executor(cfg, wp, _StoreJaExecutado()).apply_safe_actions(  # type: ignore[arg-type]
+        [_title_action_for("Título A", "Título B")], cycle_id="c5")
+    assert res["executed"] == []
+    assert wp.updates == []                        # WP intocado
+    assert any("idempotent" in s.get("reason", "") for s in res["skipped"])

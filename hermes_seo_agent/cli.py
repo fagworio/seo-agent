@@ -2650,6 +2650,26 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         built = decisions_to_actions(
             review_contracts,
             max_len=int(getattr(config, "title_max_len", 60) or 60))
+        # Item 5/6 (Sprint 1.2) — snapshot GSC PRE no formato que `baseline_gsc()`
+        # le: metricas PLANAS em `gsc` (o medidor compara campo a campo com a
+        # janela seguinte) e metadados de janela em `_meta`.
+        def _gsc_snapshot(contrato: dict[str, Any]) -> dict[str, Any]:
+            page = contrato.get("page") or {}
+            ctx = contrato.get("baseline") or {}
+            sw = contrato.get("signal_window") or {}
+            snap: dict[str, Any] = {
+                k: page.get(k) for k in
+                ("impressions", "clicks", "ctr", "position")
+                if page.get(k) is not None}
+            snap["_meta"] = {
+                "entity": page.get("entity"),
+                "post_id": page.get("post_id"),
+                "window_start": ctx.get("window_start") or sw.get("window_start"),
+                "window_end": ctx.get("window_end") or sw.get("window_end"),
+                "source": "title_engine_contract",
+            }
+            return snap
+
         write_summary: dict[str, Any] = {
             "built": built["counts"]["built"],
             "refused": built["counts"]["skipped"],
@@ -2723,6 +2743,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                            or []) if u]
             acoes_executadas = list(
                 (write_summary.get("executor") or {}).get("executed_actions") or [])
+            # baseline PRE: o proprio contrato decidido pelo motor ja carrega o
+            # GSC (page/context/signal_window) e o GA4 do banco na MESMA janela —
+            # sem rede, deterministico e temporalmente compativel (Sprint 1.2).
+            contratos_por_url = {str(c.get("url")): c for c in contracts if c.get("url")}
             sem_mudanca = [c.get("url") for c in contracts
                            if c.get("decision") == "no_title_change" and c.get("url")]
             fechados = {"done": 0, "superseded": 0}
@@ -2730,37 +2754,67 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if executadas or sem_mudanca:
                 agora = _dt_life.datetime.now(_dt_life.timezone.utc).isoformat()
                 with Storage(config.sqlite_path) as store_life:
-                    # P0.3 (Sprint 1.1) — FEEDBACK LOOP. SOMENTE `executed`
-                    # (escrita confirmada pela verificacao REST) gera outcome
-                    # medivel; `unverified` NAO gera. O caminho antigo
-                    # (`_cmd_apply`) registrava isto; o novo nao registrava, e a
-                    # cadeia decidia/aplicava/fechava a Caixa sem que o Google
-                    # pudesse medir. Cria o opportunity_outcome com baseline
-                    # (before/after) + implemented_at, que e o que o
-                    # `revalidate-due` consome nas janelas 7/28/56/90d.
+                    # P0.6 (Sprint 1.2) — ORDEM: primeiro o OUTCOME, depois o
+                    # 'done'. Antes a Caixa fechava independentemente do outcome,
+                    # permitindo "WordPress atualizado + Caixa done + Google sem
+                    # medir" — o closed loop que mente. Agora uma URL só entra em
+                    # `fechaveis` se o outcome foi persistido. Tudo com
+                    # commit=False e um único commit: nao existe estado parcial.
+                    fechaveis: list[str] = []
+                    falhas: list[dict[str, Any]] = []
                     for acao in acoes_executadas:
-                        url_acao = acao.get("url")
+                        url_acao = str(acao.get("url") or "")
                         if not url_acao:
                             continue
                         fix_acao = acao.get("fix") or {}
+                        contrato_acao = contratos_por_url.get(url_acao) or {}
                         try:
-                            store_life.record_implemented_outcome(
-                                url=str(url_acao),
-                                action_type=str(acao.get("rule_id") or "title_engine"),
-                                implemented_action=str(acao.get("detail") or "fix"),
-                                before=acao.get("before"),
-                                after=(fix_acao.get("meta")
-                                       or fix_acao.get("alt_text") or fix_acao),
-                                implemented_at=agora,
-                            )
+                            # Item 1 (Sprint 1.2) — TRANSACAO DE VERDADE: outcome
+                            # e fechamento da Caixa na MESMA transacao. Usar a
+                            # mesma instancia de Storage nao bastava: os dois
+                            # metodos commitavam por conta propria e um crash
+                            # entre eles deixaria a Caixa 'done' com o Google sem
+                            # medir. Uma transacao por URL: falha de uma nao
+                            # desfaz as outras (regra principal do roadmap).
+                            with store_life.transaction():
+                                store_life.record_implemented_outcome(
+                                    url=url_acao,
+                                    action_type=str(acao.get("rule_id")
+                                                    or "title_engine"),
+                                    implemented_action=str(acao.get("detail") or "fix"),
+                                    before=acao.get("before"),
+                                    after=(fix_acao.get("meta")
+                                           or fix_acao.get("alt_text") or fix_acao),
+                                    implemented_at=agora,
+                                    gsc_baseline=_gsc_snapshot(contrato_acao),
+                                    ga4_baseline=contrato_acao.get("ga4"),
+                                    commit=False,
+                                )
+                                # SO dentro da mesma transacao o item vira 'done'
+                                store_life.close_title_checklist(
+                                    [url_acao], status="done", when=agora,
+                                    commit=False)
                             outcomes_criados += 1
-                        except Exception:
-                            # um outcome que falha nao impede a medicao dos outros
-                            pass
+                            fechados["done"] += 1
+                        except Exception as exc:
+                            # P0.6: NAO engolir. Registra o erro e mantem o item
+                            # recuperavel (pending + measurement_unavailable).
+                            falhas.append({
+                                "url": url_acao,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            })
+                            store_life.mark_measurement_pending(
+                                url_acao,
+                                error=f"outcome_failed: {type(exc).__name__}: {exc}",
+                                commit=False)
+                    # transacao unica: outcomes + marcas de pendencia
+                    store_life.conn.commit()
                     fechados["done"] = store_life.close_title_checklist(
-                        executadas, status="done", when=agora)
+                        fechaveis, status="done", when=agora)
                     fechados["superseded"] = store_life.close_title_checklist(
                         sem_mudanca, status="superseded", when=agora)
+                    if falhas:
+                        write_summary["outcome_failed"] = falhas
             write_summary["outcomes_implemented"] = outcomes_criados
             write_summary["closed_checklist"] = fechados
         except Exception as exc:

@@ -975,29 +975,89 @@ class Storage:
     def record_implemented_outcome(self, *, url: str, action_type: str,
                                    implemented_action: str, before: Any, after: Any,
                                    implemented_at: str, work_item_id: str | None = None,
-                                   campaign_item_id: int | None = None) -> int:
+                                   campaign_item_id: int | None = None,
+                                   gsc_baseline: Any = None, ga4_baseline: Any = None,
+                                   commit: bool = True) -> int:
         """B8 — vincula uma melhoria executada ao pipeline de revalidação.
 
         Cria um opportunity_outcome (human_decision=approved, implemented_at) com
         o baseline (before/after da correção). O fluxo de revalidação já existente
         (`_revalidations` → `revalidate_outcome`) passa a medir este item.
         Retorna o id do outcome criado e o registra no lifecycle canônico.
+
+        Sprint 1.2 — o baseline passou a ser ESTRUTURADO: {"gsc", "ga4",
+        "change"}. O medidor lê `baseline["ga4"]` (via `baseline_ga4()`) e a
+        janela do GSC daqui. Antes gravava só {before, after}: o GSC sobrevivia
+        porque o revalidate RECONSTRÓI a janela (`gsc.page_metrics(implemented-N,
+        implemented)`), mas o GA4 ficava sem `before` para sempre —
+        `engagement_deltas()` devolvia insufficient_data/missing_before_or_after
+        e o ciclo nunca media o efeito pós-clique.
+
+        `commit=False` existe para que o outcome e o lifecycle da Caixa sejam
+        gravados na MESMA transação: assim é impossível ficar no estado
+        "WordPress atualizado + Caixa done + Google sem medir".
         """
+        # Contrato do baseline (consumido por `baseline_gsc`/`baseline_ga4`,
+        # usados em services/control_plane.py:1518):
+        #   {"gsc": {impressions, clicks, ctr, position, ...},
+        #    "ga4": {sessions, engaged_sessions, engagement_rate,
+        #            measurement_status},
+        #    "change": {"before": ..., "after": ...}}
+        # `gsc`/`ga4` sao os SNAPSHOTS PRE-mudanca (o medidor compara com a
+        # janela seguinte). NAO se aninha `before` dentro deles: os consumidores
+        # leem `baseline["gsc"]` / `baseline["ga4"]` direto.
+        gsc = dict(gsc_baseline) if isinstance(gsc_baseline, dict) else {}
+        ga4 = dict(ga4_baseline) if isinstance(ga4_baseline, dict) else {}
+        # Normalizacao: o contrato do motor traz `status`, mas o modulo de
+        # impacto (impact_ga4.engagement_deltas) compara `measurement_status`.
+        if ga4 and not ga4.get("measurement_status"):
+            ga4["measurement_status"] = (
+                str(ga4.get("status") or "").strip()
+                or ("available" if ga4.get("sessions") is not None else "missing"))
+        baseline = {
+            "gsc": gsc,
+            "ga4": ga4,
+            "change": {"before": before, "after": after},
+            # Ausência EXPLÍCITA — nunca desaparece: o medidor vê o que falta.
+            "measurement_status": ("complete" if (gsc and ga4) else "missing"),
+            "captured_at": implemented_at,
+        }
         cur = self.conn.execute(
             "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
             "human_decision, implemented_action, url, baseline_json, implemented_at, "
             "created_at, work_item_id, campaign_item_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (url, action_type, action_type, "approved", implemented_action, url,
-             json.dumps({"before": before, "after": after}, ensure_ascii=False, default=str),
+             json.dumps(baseline, ensure_ascii=False, default=str),
              implemented_at, implemented_at, work_item_id, campaign_item_id))
         outcome_id = int(cur.lastrowid)
         if work_item_id:
             self.set_work_item_lifecycle(
                 work_item_id, "implemented", source="",
                 url=url, action_fingerprint=None, outcome_id=outcome_id)
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return outcome_id
+
+    def mark_measurement_pending(self, url: str, *, error: str = "",
+                                 commit: bool = True) -> int:
+        """Sprint 1.2 (P0.6) — a execução ocorreu mas o OUTCOME falhou.
+
+        O item NÃO pode virar 'done': a Caixa estaria mentindo (WordPress
+        atualizado, Google sem medir — exatamente o closed loop quebrado). Fica
+        'pending' com `measurement_unavailable` marcado e o erro registrado, para
+        ser reprocessado e para a UI mostrar o motivo.
+        """
+        cur = self.conn.execute(
+            "UPDATE improvement_checklist SET measurement_unavailable = 1, "
+            "rejection_reason = COALESCE(?, rejection_reason) "
+            "WHERE url = ? AND status = 'pending' "
+            "AND (item LIKE '%title%' OR item = 'title_opportunity') "
+            "AND item <> 'title_regression'",
+            (error or None, url))
+        if commit:
+            self.conn.commit()
+        return cur.rowcount or 0
 
     # -- lifecycle canônico de work item ------------------------------------
 
@@ -1557,8 +1617,39 @@ class Storage:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def transaction(self):
+        """Sprint 1.2 (item 1) — agrupa escritas em UMA transação de verdade.
+
+        `record_implemented_outcome` e `close_title_checklist` fazem commit
+        próprio; usar a MESMA instância de Storage não torna nada atômico. Com
+        este context manager as duas entram na mesma transação: ou grava tudo
+        (outcome + checklist done), ou nada (outcome ausente + item recuperável).
+        Assim é impossível sobrar "WordPress atualizado + Caixa done + Google sem
+        medir".
+
+        Uso:
+            with storage.transaction():
+                storage.record_implemented_outcome(..., commit=False)
+                storage.close_title_checklist(..., commit=False)
+        """
+        class _Tx:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is not None:
+                    self.conn.rollback()
+                    return False        # propaga a excecao
+                self.conn.commit()
+                return False
+
+        return _Tx(self.conn)
+
     def close_title_checklist(self, urls: list[str], *, status: str,
-                              when: str) -> int:
+                              when: str, commit: bool = True) -> int:
         """FASE 10 (roadmap) — lifecycle: o item resolvido SAI da Caixa.
 
         Sem isto a URL ficava 'pending' para sempre: o motor a re-analisava a cada
@@ -1585,8 +1676,88 @@ class Storage:
                 "AND item <> 'title_regression'",
                 (status, when, url))
             total += cur.rowcount or 0
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return total
+
+    # -- Sprint 1.2 (item 3): reconciliacao pos-write ------------------------
+
+    def executed_without_outcome(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Conjunto derivado EXECUTED_UNMEASURED (sem tabela nova).
+
+        `actions.status = 'executed'` E nenhum `opportunity_outcome` para a URL.
+
+        WordPress + SQLite nao formam transacao distribuida: se o processo cair
+        entre a escrita CONFIRMADA e o outcome, ninguem mede — e o motor decide
+        `no_title_change` no ciclo seguinte (o titulo ja esta la) enquanto o
+        executor ve `already executed (idempotent)`. Estes itens sao o ponto de
+        retomada, e NUNCA precisam reescrever o WordPress.
+        """
+        # `actions` NAO tem coluna `detail` (schema: rule_id, url, level, status,
+        # fingerprint, before_json, after_json, rollback_json, executed_at,
+        # fix_json, work_item_id) — o detalhe legivel sai do `rule_id`.
+        rows = self.conn.execute(
+            "SELECT a.url, a.rule_id, a.before_json, a.after_json, "
+            "       a.fix_json, a.executed_at "
+            "FROM actions a WHERE a.status = 'executed' AND a.url IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM opportunity_outcomes o "
+            "                WHERE o.url = a.url) "
+            "ORDER BY a.id DESC LIMIT ?", (limit,)).fetchall()
+
+        def _loads(raw):
+            if not raw:
+                return None
+            try:
+                return json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+
+        return [{"url": r[0], "rule_id": r[1],
+                 "before": _loads(r[2]), "after": _loads(r[3]),
+                 "fix": _loads(r[4]), "executed_at": r[5]}
+                for r in rows]
+
+    def reconcile_executed_outcomes(self, *, limit: int = 50,
+                                    close_checklist: bool = True) -> dict[str, Any]:
+        """Sprint 1.2 (item 3) — recupera acoes EXECUTADAS que ficaram sem outcome.
+
+        Cria o outcome a partir da acao JA executada (o Executor gravou
+        `before_json`/`after_json` no audit trail) e, SO entao, fecha a Caixa.
+        Nunca reexecuta o WordPress.
+
+        Idempotente: apos reconciliar, o item sai do conjunto derivado, entao
+        rodar de novo nao cria outcome duplicado.
+
+        O baseline do recovery nasce com `measurement_status: missing` e sem
+        `ga4`: a informacao PRE daquele instante se perdeu (nao existe uma
+        transacao distribuida WordPress+SQLite). O GSC ainda se recupera porque o
+        revalidate RECONSTROI a janela com `page_metrics(implemented-N,
+        implemented)`; o GA4 fica explicitamente marcado como ausente em vez de
+        fingir medicao — que e exatamente a honestidade que o roadmap pede.
+        """
+        pendentes = self.executed_without_outcome(limit=limit)
+        criados, fechados, erros = 0, 0, []
+        for item in pendentes:
+            when = item.get("executed_at") or _now()
+            try:
+                with self.transaction():
+                    self.record_implemented_outcome(
+                        url=item["url"],
+                        action_type=str(item.get("rule_id") or "title_engine"),
+                        implemented_action=str(item.get("rule_id") or "recovery"),
+                        before=item.get("before"), after=item.get("after"),
+                        implemented_at=when, commit=False)
+                    if close_checklist:
+                        self.close_title_checklist(
+                            [item["url"]], status="done", when=when, commit=False)
+                criados += 1
+                if close_checklist:
+                    fechados += 1
+            except Exception as exc:
+                erros.append({"url": item["url"],
+                              "error": f"{type(exc).__name__}: {exc}"})
+        return {"candidates": len(pendentes), "outcomes_created": criados,
+                "checklist_closed": fechados, "errors": erros}
 
     def title_review_skippable(self, url: str, *, measurement_days: int,
                                ignore_pending_review: bool = False) -> tuple[bool, str]:
