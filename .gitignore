@@ -20,6 +20,22 @@ __pycache__/
 # Resíduo duplicado na raiz (cópia de hermes_seo_agent/report) — âncora na raiz
 /report/
 
+# Artefatos de runtime (raiz). Um `git add -A` capturou 409 destes de uma vez
+# (205k linhas) porque só o `title-opportunities-fixes.json` exato estava
+# ignorado — as variantes com timestamp/número passavam. Todos ANCORADOS na
+# raiz para não ignorar arquivos legítimos dentro do pacote.
+/cycle_run_*
+/apply_run_*
+/apply_short_run_*
+/audit_run_*
+/title-opportunities_run_*
+/title-opportunities-fixes.raw-*
+/apply.json
+/apply.err
+*.log
+*.err
+/.htaccess
+
 # Hermes
 .hermes/
 .git-ssh/
