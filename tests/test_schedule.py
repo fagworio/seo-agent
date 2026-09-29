@@ -143,7 +143,7 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
     assert "gsc-demand" in result["summary"]["steps"]
     # shadow automático: observa, compara e persiste — NUNCA publica título
     assert title_engine_calls == [("observe", True, True, False)]
-    assert "title-engine-shadow" in result["summary"]["steps"]
+    assert "title-engine-observe" in result["summary"]["steps"]
     with Storage(str(db)) as storage:
         run = storage.conn.execute(
             "SELECT status, intent, summary_json FROM agent_runs ORDER BY id DESC LIMIT 1"

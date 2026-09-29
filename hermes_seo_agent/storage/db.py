@@ -1557,11 +1557,20 @@ class Storage:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
-    def title_review_skippable(self, url: str, *, measurement_days: int) -> tuple[bool, str]:
+    def title_review_skippable(self, url: str, *, measurement_days: int,
+                               ignore_pending_review: bool = False) -> tuple[bool, str]:
         """Uma URL NÃO deve ser re-analisada para título se já está em revisão ou
         se a medição está em andamento (reaplicar quebraria a janela de medição).
 
         Evita que o agente repita candidatos que ele já tratou (laço de re-análise).
+
+        `ignore_pending_review=True` (usado quando existe executor ativo — modo de
+        escrita): a URL com revisão PENDENTE não é pulada. O item da Caixa é
+        justamente a decisão já tomada; sem esta saída o motor pulava a URL para
+        sempre ("já existe revisão de título pendente") enquanto ninguém a
+        executava — era o deadlock que impedia a trilhagem contínua de títulos
+        (roadmap Fase 9/10). O controle de repetição continua garantido pela
+        medição em andamento (regra 2) e pela idempotência do executor.
         """
         import datetime as _dt
 
@@ -1583,7 +1592,7 @@ class Storage:
             "AND item <> 'title_regression' LIMIT 1",
             (url,),
         ).fetchone()
-        if row:
+        if row and not ignore_pending_review:
             return True, "já existe revisão de título pendente"
 
         # (2) oportunidade aprovada e implementada recentemente -> medição em andamento

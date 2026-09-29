@@ -1575,16 +1575,32 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 # publica título (observe + shadow + persist). É o que acumula
                 # evidência real para a FASE 22 antes de qualquer automação.
                 if getattr(config, "title_engine_in_schedule", True):
+                    # FASE 5 (roadmap): o scheduler NAO fixa o modo e NAO publica
+                    # por conta propria — ele respeita config.title_engine_mode.
+                    # Antes: mode="observe", shadow=True, write=False HARDCODED,
+                    # entao o motor decidia e nada era aplicado (a ultima acao
+                    # automatica de titulo foi 16/09; o trabalho saia todo a mao).
+                    #   observe  -> shadow=on,  write=off  (so observa/telemetria)
+                    #   approval -> shadow=off, write=on   (monta a acao; execucao
+                    #                       segue o gate de confianca high/medium)
+                    #   auto     -> shadow=off, write=on   (escreve o decidido)
+                    engine_mode = str(
+                        getattr(config, "title_engine_mode", "observe") or "observe"
+                    ).strip().lower()
+                    if engine_mode not in ("observe", "approval", "auto"):
+                        engine_mode = "observe"
+                    escreve = engine_mode in ("approval", "auto")
                     run_silently(_cmd_title_engine,
                                  args=_ns(limit=10, min_impressions=100.0,
                                           query_min_impressions=10.0, top_families=0,
-                                          mode="observe", generation_mode="",
-                                          shadow=True, explain=False, persist=True,
-                                          write=False, sample_per_decision=0,
+                                          mode=engine_mode, generation_mode="",
+                                          shadow=(not escreve), explain=False,
+                                          persist=True, write=escreve,
+                                          sample_per_decision=0,
                                           include_non_anomalous=False,
                                           no_deep_signals=False,
                                           _run_context=run_context), config=config)
-                    steps.append("title-engine-shadow")
+                    steps.append(f"title-engine-{engine_mode}")
                 _mark("gsc:last_daily")
             # Background: mantém a fila de melhorias crescendo diariamente.
             run_silently(_cmd_post_audit,
@@ -2320,8 +2336,16 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if len(targets) >= cap:
                 break
             url = (row.get("keys") or [""])[0]
+            # FASE 9/10 (roadmap): quando o motor vai ESCREVER (--write, isto é
+            # modo auto/approval), a revisão pendente NAO bloqueia a URL — o item
+            # da Caixa é a decisão JA tomada, e quem a aplica é o executor de
+            # títulos (montado logo abaixo, em decisions_to_actions). Sem esta
+            # saída o motor pulava a URL para sempre ("já existe revisão de
+            # título pendente") e nenhuma decisão saía da Caixa: era o deadlock
+            # que parava a trilhagem contínua.
             skip, reason = store.title_review_skippable(
-                url, measurement_days=config.editorial_measurement_min_days)
+                url, measurement_days=config.editorial_measurement_min_days,
+                ignore_pending_review=bool(getattr(args, "write", False)))
             if skip:
                 skipped.append({"url": url, "reason": reason})
             else:
@@ -2596,6 +2620,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if contract["decision"] == "review_title":
                 print(f"\n=== {contract['url']}\n{contract['explanation']}", file=sys.stderr)
 
+    write_result: dict[str, Any] = {}
+    published_count = 0
     if args.write:
         fixes = [{"url": c["url"], "current_title": (c.get("current_title") or {}).get("title"),
                   "suggested_titles": c["suggested_titles"],
@@ -2607,6 +2633,66 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         Path("title-engine-candidates.json").write_text(
             json.dumps(fixes, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        # FASE 9 (roadmap) — fecha o pipeline de titulos:
+        # decisao -> TitleActionBuilder -> SafeAction -> Executor -> WordPress
+        # -> verificacao REST. Antes o `--write` apenas gravava o JSON acima e o
+        # `published_titles` ficava hardcoded em 0: a decisao morria na Caixa e
+        # alguem aplicava a mao (a ultima acao AUTOMATICA do motor foi 16/09).
+        # O executor eh o MESMO usado por `apply`/`set-title` (nao ha outro).
+        # O motor continua puro: quem monta a acao eh decisions_to_actions.
+        from .report.title_action import decisions_to_actions
+        review_contracts = [c for c in contracts if c.get("decision") == "review_title"]
+        built = decisions_to_actions(review_contracts)
+        write_summary: dict[str, Any] = {
+            "built": built["counts"]["built"],
+            "refused": built["counts"]["skipped"],
+            "refused_detail": built["skipped"][:20],
+            "executor": None,
+        }
+        if built["actions"]:
+            # Fase 7 (backpressure) — teto por ciclo no executor de titulos.
+            try:
+                teto = int(config.max_safe_fix_per_cycle or 10)
+            except (TypeError, ValueError):
+                teto = 10
+            from .executor.executor import Executor
+
+            cycle_id = f"title-engine-{uuid.uuid4().hex[:12]}"
+            with Storage(config.sqlite_path) as wp_store, \
+                    WordPressClient(config) as wp_client:
+                executor_client = Executor(config, wp_client, wp_store)
+
+                def _verify_title_persisted(fix: dict[str, Any], after: Any) -> bool:
+                    """Confirmacao REST pos-write: rele o post e confere o meta."""
+                    try:
+                        fresh = wp_client.get_post(fix["post_id"])
+                    except Exception:
+                        return False
+                    expected = (fix.get("meta") or {}).get("rank_math_title", "")
+                    return ((fresh.get("meta") or {}).get("rank_math_title")
+                            or "") == expected
+
+                try:
+                    outcome = executor_client.apply_safe_actions(
+                        built["actions"], cycle_id=cycle_id,
+                        max_actions=min(10, teto), verify=_verify_title_persisted)
+                    write_summary["executor"] = {
+                        "executed": len(outcome.get("executed") or []),
+                        "previewed": len(outcome.get("previewed") or []),
+                        "skipped": len(outcome.get("skipped") or []),
+                        "unverified": len(outcome.get("unverified") or []),
+                        "dry_run": outcome.get("dry_run"),
+                    }
+                    published_count = len(outcome.get("executed") or [])
+                except Exception as exc:
+                    # Regra principal do roadmap: falha de escrita de UMA URL nao
+                    # derruba o ciclo — o erro vira dado de observabilidade.
+                    write_summary["executor"] = {
+                        "error": f"{type(exc).__name__}: {exc}"}
+                    warnings.append(
+                        f"executor de titulos falhou: {type(exc).__name__}: {exc}")
+        write_result = write_summary
+
     result = {
         "status": "ok",
         "summary": {"command": "title-engine", "mode": run_mode,
@@ -2617,7 +2703,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     "investigate_cause": telemetry["investigate_cause"],
                     "gather_more_data": telemetry["gather_more_data"],
                     "shadow": bool(args.shadow),
-                    "published_titles": 0,
+                    "published_titles": published_count,
                     "llm_calls": 0,
                     "weights_version": weights_version,
                     "skipped": len(skipped)},
@@ -2631,6 +2717,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         "persisted_cases": persisted,
         "skipped": skipped,
         "warnings": warnings,
+        "write": write_result,
     }
     _emit(result, force_json=True)
     return 0
