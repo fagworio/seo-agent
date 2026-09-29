@@ -119,15 +119,20 @@ def test_fencing_token_antigo_nao_conclui_nem_grava(tmp_path):
         assert b["lease_version"] == 3, "recovery + claim incrementam o fencing token"
 
         # A volta do crash e tenta concluir/gravar com a versão antiga
-        assert q.owns_lease("wi-1", "worker-A", a["lease_version"]) is False
-        assert q.complete("wi-1", "worker-A", a["lease_version"], now=T_LATE) is False
+        assert q.owns_lease("wi-1", "worker-A", a["lease_version"],
+                            now=T_LATE) is False
+        assert q.complete("wi-1", "worker-A", a["lease_version"],
+                          now=T_LATE) is False
         failed = q.fail("wi-1", "worker-A", a["lease_version"], "boom", now=T_LATE)
         assert failed["ok"] is False, "o worker antigo não pode nem registrar falha"
-        assert q.heartbeat("wi-1", "worker-A", a["lease_version"], now=T_LATE) is False
+        assert q.heartbeat("wi-1", "worker-A", a["lease_version"],
+                           now=T_LATE) is False
 
         # o item continua com B, que conclui normalmente
-        assert q.owns_lease("wi-1", "worker-B", b["lease_version"]) is True
-        assert q.complete("wi-1", "worker-B", b["lease_version"], now=T_LATE) is True
+        assert q.owns_lease("wi-1", "worker-B", b["lease_version"],
+                            now=T_LATE) is True
+        assert q.complete("wi-1", "worker-B", b["lease_version"],
+                          now=T_LATE) is True
 
 
 def test_item_que_derruba_workers_nao_derruba_para_sempre(tmp_path):

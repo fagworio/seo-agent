@@ -163,12 +163,30 @@ def work_item_key(lane: str, *parts: Any) -> str:
     return f"{lane}:{raw}"
 
 
+def normalize_limit(limit: int | None) -> int | None:
+    """Semântica ÚNICA de teto no projeto: `0` (ou negativo/None) = ILIMITADO.
+
+    Existe porque `LIMIT 0` no SQLite significa "zero linhas", não "sem limite" —
+    passar o zero direto para o SQL inverte o significado e transforma um teto
+    "desligado" em "não faça nada". Aqui o zero vira `None` (ausência de LIMIT),
+    que é o que o chamador quis dizer. Mesma convenção de `PUBLISH_LIMIT=0`.
+    """
+    if limit is None:
+        return None
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def lane_limit(lane: str, config: Any = None, default: int | None = None) -> int:
     """Teto de itens por ciclo da lane (backpressure independente).
 
     Precedência: `config.lane_limits[lane]` > `config.lane_limit_<lane>` > default
     do mapa. É config, não constante: cada lane tem o seu teto e ajustar uma não
-    mexe nas outras.
+    mexe nas outras. Semântica: `0` = ILIMITADO (ver `normalize_limit`); nunca
+    passe esse zero cru para um `LIMIT`.
     """
     if config is not None:
         limits = getattr(config, "lane_limits", None)

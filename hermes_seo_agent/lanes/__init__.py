@@ -17,7 +17,7 @@ from hermes_seo_agent.lanes import policy as lanes
 from hermes_seo_agent.lanes.policy import (  # noqa: F401  (reexport de conveniência)
     ALL_LANES, DEFAULT_LANE_LIMITS, LANE_AUDIT, LANE_DEAD_URL, LANE_MEASUREMENT,
     LANE_TECHNICAL, LANE_TITLE_DECISION, LANE_TITLE_EXECUTION,
-    backoff_seconds, classify_error, lane_limit, work_item_key,
+    backoff_seconds, classify_error, lane_limit, normalize_limit, work_item_key,
 )
 from hermes_seo_agent.lanes.queue import MAX_RECOVERIES, LaneQueue  # noqa: F401
 
