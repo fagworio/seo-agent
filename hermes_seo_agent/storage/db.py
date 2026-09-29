@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -680,6 +680,7 @@ CREATE TABLE IF NOT EXISTS title_decision (
     rollout_json TEXT NOT NULL DEFAULT '{}',
     confidence REAL,
     requires_review INTEGER NOT NULL DEFAULT 0,
+    before_known INTEGER NOT NULL DEFAULT 1,
     -- decided | enqueued | executed | stale | rejected | superseded
     status TEXT NOT NULL DEFAULT 'decided',
     not_executable_reason TEXT,
@@ -858,6 +859,12 @@ class Storage:
             "agent_runs": [
                 ("target_url", "TEXT"),
                 ("sources_json", "TEXT"),
+            ],
+            # 7A.2.2 — separa "observei o meta e estava VAZIO" de "nao consegui ler".
+            # `1` = observado (vazio ou nao); `0` = desconhecido => nunca executa.
+            # Backfill para 1: as decisoes ja' gravadas vieram de leitura do motor.
+            "title_decision": [
+                ("before_known", "INTEGER NOT NULL DEFAULT 1"),
             ],
         }
         editorial_extra = [
@@ -3625,6 +3632,7 @@ class Storage:
                               rollout: dict[str, Any] | None = None,
                               confidence: float | None = None,
                               requires_review: bool = False,
+                              before_known: bool = True,
                               not_executable_reason: str | None = None,
                               status: str = "decided",
                               decided_at: str | None = None,
@@ -3642,21 +3650,22 @@ class Storage:
         self.conn.execute(
             "INSERT INTO title_decision (decision_id, url, post_id, field, before, "
             "after, action_fingerprint, decision_version, evidence_json, "
-            "rollout_json, confidence, requires_review, status, "
+            "rollout_json, confidence, requires_review, before_known, status, "
             "not_executable_reason, decided_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(decision_id) DO UPDATE SET before=excluded.before, "
             "after=excluded.after, evidence_json=excluded.evidence_json, "
             "rollout_json=excluded.rollout_json, confidence=excluded.confidence, "
             "requires_review=excluded.requires_review, "
+            "before_known=excluded.before_known, "
             "not_executable_reason=excluded.not_executable_reason, "
             "updated_at=excluded.updated_at",
             (decision_id, url, post_id, field, before, after, action_fingerprint,
              int(decision_version),
              _json.dumps(evidence or {}, ensure_ascii=False),
              _json.dumps(rollout or {}, ensure_ascii=False), confidence,
-             1 if requires_review else 0, status, not_executable_reason,
-             decided_at or now, now))
+             1 if requires_review else 0, 1 if before_known else 0, status,
+             not_executable_reason, decided_at or now, now))
         if commit:
             self.conn.commit()
         return {"decision_id": decision_id, "url": url,
@@ -3667,8 +3676,9 @@ class Storage:
         row = self.conn.execute(
             "SELECT decision_id, url, post_id, field, before, after, "
             "action_fingerprint, decision_version, evidence_json, rollout_json, "
-            "confidence, requires_review, status, not_executable_reason, "
-            "decided_at, enqueued_at, executed_at, outcome_id "
+            "confidence, requires_review, before_known, status, "
+            "not_executable_reason, decided_at, enqueued_at, executed_at, "
+            "outcome_id "
             "FROM title_decision WHERE decision_id = ?",
             (decision_id,)).fetchone()
         if row is None:
@@ -3681,9 +3691,10 @@ class Storage:
                 "evidence": _json.loads(row[8] or "{}"),
                 "rollout": _json.loads(row[9] or "{}"),
                 "confidence": row[10], "requires_review": bool(row[11]),
-                "status": row[12], "not_executable_reason": row[13],
-                "decided_at": row[14], "enqueued_at": row[15],
-                "executed_at": row[16], "outcome_id": row[17]}
+                "before_known": bool(row[12]),
+                "status": row[13], "not_executable_reason": row[14],
+                "decided_at": row[15], "enqueued_at": row[16],
+                "executed_at": row[17], "outcome_id": row[18]}
 
     def title_decision_by_url(self, url: str, after: str | None = None) -> dict[str, Any] | None:
         """Decisao mais recente da URL (opcionalmente de um `after` especifico)."""

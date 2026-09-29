@@ -2811,10 +2811,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                             continue
                         try:
                             _p = _wp.get_post(int(_pid))
-                            _t = ((_p.get("meta") or {})
-                                  .get("rank_math_title") or "")
-                            if _t:
-                                live_titles[_u] = _t
+                            # O meta e' gravado COMO OBSERVADO, inclusive VAZIO. Um
+                            # post lido com `rank_math_title` ausente ou vazio esta'
+                            # num ESTADO REAL (sem meta definido) e esse e' o valor
+                            # que a escrita tem de conferir. Se a LEITURA falhar, a
+                            # URL nem entra no mapa -> `before_known=False` ->
+                            # decisao registrada, nunca executada (fail-closed).
+                            if _p:
+                                live_titles[_u] = (_p.get("meta") or {}).get(
+                                    "rank_math_title") or ""
                         except Exception:
                             continue  # uma URL estranha nunca derruba o lote
             except Exception as exc:

@@ -154,15 +154,23 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
         return {"ok": False, "skip": SKIP_NO_POST_ID,
                 "detail": _REASON_TEXT[SKIP_NO_POST_ID]}
 
-    before = _current_title(contract)
-
-    # Fase 16 — STALE: o site mudou entre a decisao e a escrita.
+    # DUAS SUPERFICIES DIFERENTES (correcao 7A.2.2):
+    #   `rendered` = o `<title>` do site            -> so' evidencia/analise
+    #   `before`   = meta BRUTO `rank_math_title`   -> precondition da escrita
+    # O contrato carrega `current_title` vindo do `<title>` renderizado, que no
+    # portal inclui o sufixo ("... — UnicornioHater"). Usar o renderizado como
+    # `before` do campo `rank_math_title` comparava coisas distintas: assim que
+    # passamos a ler o meta correto, `live != before` acusava STALE falso e
+    # bloquearia justamente o primeiro `review_title` real. A comparacao
+    # renderizado x bruto foi REMOVIDA daqui; o STALE que importa e' raw x raw e
+    # pertence ao executor (7B), que rele o meta antes de escrever.
+    rendered = _current_title(contract)
     if live_title is not None:
-        live = str(live_title or "").strip()
-        if before and live and live != before:
-            return {"ok": False, "skip": SKIP_STALE,
-                    "detail": _REASON_TEXT[SKIP_STALE],
-                    "before": before, "live": live}
+        # Valor BRUTO lido do WP. String vazia e' ESTADO REAL (meta nao definido),
+        # nao ausencia de leitura — por isso nao ha `.strip()`/`if live`.
+        before = str(live_title)
+    else:
+        before = rendered
 
     # Nada a fazer quando a proposta repete o valor atual.
     if before and before.strip() == title:
@@ -184,7 +192,10 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
             # `before` desta decisao (editor humano, outro agente). A garantia
             # fica no executor (perto da escrita), valendo para QUALQUER usuario
             # dele — nao so o title-engine.
-            "precondition": ({"meta": {"rank_math_title": before}} if before else {}),
+            # Precondition SEMPRE explicita: meta vazio e' um ESTADO REAL que a
+            # escrita tem de reconhecer como tal. `{}` (o que o `if before else {}`
+            # produzia) significa "sem precondicao" — exatamente o que nao queremos.
+            "precondition": {"meta": {"rank_math_title": before}},
         },
         "confidence": confidence,
         "source": "title_engine",

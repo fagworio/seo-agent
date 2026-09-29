@@ -385,8 +385,11 @@ def test_gate8_rollout_muda_sem_mudar_a_decisao(tmp_path):
 
 def test_gate8_decisao_invalida_nao_entra_na_reconciliacao(tmp_path):
     """O `make_decision` recusa antes de sujar o banco."""
-    with pytest.raises(ValueError, match="before vazio"):
-        _decisao(before="")
+    # `before=""` DESCONHECIDO continua erro (sem leitura confiavel nao ha
+    # precondicao). `before=""` OBSERVADO — `before_known=True`, o default — e'
+    # ESTADO REAL e passou a ser aceito: e' a distincao do 7A.2.2.
+    with pytest.raises(ValueError, match="before desconhecido"):
+        _decisao(before="", before_known=False)
     with pytest.raises(ValueError, match="post_id"):
         _decisao(post_id=None)
 
@@ -651,7 +654,11 @@ def _contrato(**kw):
     return c
 
 
-def _acao(title="Titulo reescrito pelo motor", before="Titulo atual bruto",
+# O meta BRUTO lido do WP (a fonte do `before`) — nao o `<title>` renderizado.
+LIVE = "Titulo atual bruto"
+
+
+def _acao(title="Titulo reescrito pelo motor", before=LIVE,
           post_id=4242, conf=0.71):
     """SafeAction no formato REAL que `decision_to_action` monta."""
     return {"rule_id": "title_engine", "url": URL,
@@ -685,7 +692,8 @@ def test_7a2_writes_allowed_e_a_chave_do_contrato_real():
 
 def test_7a2_acao_vira_decisao_com_o_before_observado():
     """`before` = titulo observado: e' ele que o gate 4 confere no WordPress."""
-    d = TD.decision_from_action(_acao(), contract=_contrato())
+    d = TD.decision_from_action(_acao(), contract=_contrato(),
+                                live_title=LIVE)
     assert d.post_id == 4242
     assert d.before == "Titulo atual bruto", "before exato, sem normalizar"
     assert d.after == "Titulo reescrito pelo motor"
@@ -713,7 +721,8 @@ def test_7a2_o_contrato_real_gera_decisao_executavel(tmp_path):
     db = str(tmp_path / "7a2.db")
     with Storage(db) as store:
         r = TD.persist_actions(store, [_acao()],
-                               contracts_by_url={URL: _contrato()})
+                               contracts_by_url={URL: _contrato()},
+                               live_titles={URL: LIVE})
         assert r["counts"] == {"criadas": 1, "executaveis": 1,
                                "sem_execucao": 0, "erros": 0}
         assert TD.stats(store)["sem_execucao_recuperavel"] == 0
@@ -729,7 +738,8 @@ def test_7a2_rollout_negado_registra_sem_enfileirar(tmp_path):
     with Storage(db) as store:
         c = _contrato(rollout={"mode": "observe", "writes_allowed": False,
                                "approval_required": True})
-        r = TD.persist_actions(store, [_acao()], contracts_by_url={URL: c})
+        r = TD.persist_actions(store, [_acao()], contracts_by_url={URL: c},
+                               live_titles={URL: LIVE})
         assert r["counts"]["criadas"] == 1
         assert r["counts"]["executaveis"] == 0
         assert r["sem_execucao"][0]["motivo"] == TD.NOT_EXEC_ROLLOUT
@@ -741,7 +751,8 @@ def test_7a2_uma_url_estranha_nao_derruba_o_lote(tmp_path):
     db = str(tmp_path / "7a2c.db")
     with Storage(db) as store:
         r = TD.persist_actions(store, [_acao(), "nao-e-dict", _acao()],
-                               contracts_by_url={URL: _contrato()})
+                               contracts_by_url={URL: _contrato()},
+                               live_titles={URL: LIVE})
         assert r["counts"]["criadas"] == 2, "as validas entram"
         assert r["counts"]["erros"] == 1
         assert "AttributeError" in r["erros"][0]["erro"] or r["erros"]
@@ -761,7 +772,7 @@ def test_7a21_rotulo_de_confidence_nao_vira_score():
     c = _contrato(confidence_detail={"score": 0.62, "label": "medium"})
     a = _acao()
     a["confidence"] = "high"  # ROTULO, como o motor grava
-    d = TD.decision_from_action(a, contract=c)
+    d = TD.decision_from_action(a, contract=c, live_title=LIVE)
     assert d.confidence == 0.62, "tem de usar o score NUMERICO"
     assert d.evidence.get("confidence_label") == "high", "o rotulo vai p/ evidence"
     ok, motivo = TD.production_ready(d)
@@ -772,7 +783,8 @@ def test_7a21_rotulo_sem_score_vira_missing_confidence():
     """Sem numero, fail-closed — nunca `float("high")`."""
     a = _acao()
     a["confidence"] = "high"
-    d = TD.decision_from_action(a, contract=_contrato(confidence="high"))
+    d = TD.decision_from_action(a, contract=_contrato(confidence="high"),
+                                live_title=LIVE)
     assert d.confidence is None
     ok, motivo = TD.production_ready(d)
     assert ok is False and motivo == TD.NOT_EXEC_MISSING_CONFIDENCE
@@ -789,7 +801,7 @@ def test_7a21_score_real_medido_em_producao():
     """O contrato medido em producao traz `confidence_detail.score` = 0.388."""
     c = _contrato(confidence="low",
                   confidence_detail={"score": 0.388, "label": "low"})
-    d = TD.decision_from_action(_acao(), contract=c)
+    d = TD.decision_from_action(_acao(), contract=c, live_title=LIVE)
     assert isinstance(d.confidence, float)
     assert d.confidence == 0.388
     # 0.388 > MIN_CONFIDENCE (0.35): a confianca NAO seria a barreira aqui
@@ -802,3 +814,75 @@ def test_7a21_bool_nao_e_confianca():
     a["confidence"] = True
     d = TD.decision_from_action(a, contract=_contrato(confidence=True))
     assert d.confidence is None
+
+
+# ---------------------------------------------------------------------------
+# 7A.2.2 — `before_known`: meta vazio observado vs leitura que falhou
+# ---------------------------------------------------------------------------
+
+def test_7a22_meta_vazio_observado_e_aceito_e_executavel(tmp_path):
+    """`rank_math_title=""` observado e' ESTADO REAL: a decisao executa.
+
+    O codigo antigo descartava o vazio (`if _t:`) e caia no `<title>` renderizado
+    em silencio — a precondition passava a ser um valor que nunca esteve no banco.
+    """
+    db = str(tmp_path / "vazio.db")
+    with Storage(db) as store:
+        r = TD.persist_actions(store, [_acao(before="")],
+                               contracts_by_url={URL: _contrato()},
+                               live_titles={URL: ""})
+        assert r["counts"]["criadas"] == 1
+        assert r["counts"]["executaveis"] == 1, "meta vazio nao bloqueia"
+        assert r["counts"]["sem_execucao"] == 0
+        salva = store.title_decision(r["criadas"][0])
+        assert salva["before"] == "", "gravado EXATAMENTE como observado"
+        assert salva["before_known"] is True
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+
+
+def test_7a22_leitura_que_falhou_e_fail_closed(tmp_path):
+    """URL ausente de `live_titles` = leitura falhou: registra, mas NUNCA executa."""
+    db = str(tmp_path / "unknown.db")
+    with Storage(db) as store:
+        r = TD.persist_actions(store, [_acao()],
+                               contracts_by_url={URL: _contrato()})
+        assert r["counts"]["criadas"] == 1, "a decisao existe (observavel)"
+        assert r["counts"]["executaveis"] == 0, "mas nao executa"
+        assert r["sem_execucao"][0]["motivo"] == TD.NOT_EXEC_BEFORE_UNKNOWN
+        salva = store.title_decision(r["criadas"][0])
+        assert salva["before_known"] is False
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
+
+
+def test_7a22_before_known_sobrevive_ao_banco(tmp_path):
+    """O `reconcile` le do banco: o flag tem de voltar pelo dict."""
+    db = str(tmp_path / "flag.db")
+    with Storage(db) as store:
+        ok_d = TD.make_decision(url=URL, post_id=4242, before="",
+                                after="Novo titulo valido aqui",
+                                rollout={"writes_allowed": True}, confidence=0.6,
+                                before_known=True)
+        TD.persist_decision(store, ok_d)
+        dd = store.title_decision(ok_d.decision_id)
+        assert dd["before_known"] is True
+        assert TD.production_ready(dd) == (True, None), "vazio observado executa"
+
+        # Fail-closed ja' na CRIACAO: `make_decision` recusa `before=""` quando a
+        # leitura nao aconteceu (o valor nao existe em lugar nenhum).
+        with pytest.raises(ValueError, match="before desconhecido"):
+            TD.make_decision(url=URL, post_id=4243, before="",
+                             after="Outro titulo valido aqui",
+                             rollout={"writes_allowed": True}, confidence=0.6,
+                             before_known=False)
+
+        # O round-trip do flag e' testado pelo caminho que o produtor usa: o dict
+        # vindo do BANCO tem de devolver `before_known=False` e barrar a execucao.
+        fid = "x" * 32
+        store.record_title_decision(
+            decision_id=TD.decision_id_for(fid), url=URL, post_id=4243,
+            field=TD.DEFAULT_FIELD, before="", after="Outro titulo valido aqui",
+            action_fingerprint=fid, rollout={"writes_allowed": True},
+            confidence=0.6, before_known=False)
+        dd2 = store.title_decision(TD.decision_id_for(fid))
+        assert dd2["before_known"] is False
+        assert TD.production_ready(dd2)[1] == TD.NOT_EXEC_BEFORE_UNKNOWN

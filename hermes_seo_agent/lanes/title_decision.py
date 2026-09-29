@@ -78,6 +78,7 @@ NOT_EXEC_EMPTY_AFTER = "after_vazio"
 NOT_EXEC_SAME_AS_BEFORE = "after_igual_ao_before"
 NOT_EXEC_TOO_LONG = "after_acima_do_limite"
 NOT_EXEC_NO_POST_ID = "sem_post_id"
+NOT_EXEC_BEFORE_UNKNOWN = "before_desconhecido"
 
 
 class NotExecutable(Exception):
@@ -99,6 +100,9 @@ class TitleDecision:
     rollout: dict[str, Any] = _dc_field(default_factory=dict)
     confidence: float | None = None
     requires_review: bool = False
+    # Distingue "observei o meta e ele estava VAZIO" (estado real, pode executar) de
+    # "nao consegui ler o meta" (sem precondicao possivel => nunca executa).
+    before_known: bool = True
     decided_at: str = ""
 
     @property
@@ -112,7 +116,8 @@ class TitleDecision:
             "field": self.field, "action_fingerprint": self.action_fingerprint,
             "decision_version": self.decision_version, "evidence": self.evidence,
             "rollout": self.rollout, "confidence": self.confidence,
-            "requires_review": self.requires_review, "decided_at": self.decided_at,
+            "requires_review": self.requires_review,
+            "before_known": self.before_known, "decided_at": self.decided_at,
         }
 
 
@@ -152,6 +157,7 @@ def make_decision(*, url: str, post_id: int | None, before: str, after: str,
                   rollout: dict[str, Any] | None = None,
                   confidence: float | None = None,
                   requires_review: bool = False,
+                  before_known: bool = True,
                   field: str = DEFAULT_FIELD,
                   decision_version: int = DECISION_VERSION,
                   decided_at: str | None = None) -> TitleDecision:
@@ -161,8 +167,11 @@ def make_decision(*, url: str, post_id: int | None, before: str, after: str,
     contra o WordPress na execucao (gate 4). Normalizar faria a conferencia
     comparar um valor que nunca existiu no banco.
     """
-    if not str(before or "").strip():
-        raise ValueError("before vazio: a precondicao da execucao ficaria indefinida")
+    if not before_known and not str(before or "").strip():
+        # Sem leitura confiavel do meta nao ha precondicao. A decisao ate' pode
+        # existir (observabilidade), mas nunca executa: `production_ready` barra.
+        raise ValueError(
+            "before desconhecido: sem leitura confiavel do meta nao ha precondicao")
     if post_id is None:
         raise ValueError("post_id obrigatorio: sem ele nao ha alvo para escrever")
     fp = title_action_fingerprint(post_id=post_id, before=before, after=after,
@@ -172,7 +181,7 @@ def make_decision(*, url: str, post_id: int | None, before: str, after: str,
         action_fingerprint=fp, decision_version=int(decision_version),
         evidence=dict(evidence or {}), rollout=dict(rollout or {}),
         confidence=confidence, requires_review=bool(requires_review),
-        decided_at=decided_at or _now())
+        before_known=bool(before_known), decided_at=decided_at or _now())
 
 
 def production_ready(d: TitleDecision | dict[str, Any]) -> tuple[bool, str | None]:
@@ -188,10 +197,12 @@ def production_ready(d: TitleDecision | dict[str, Any]) -> tuple[bool, str | Non
     if isinstance(d, TitleDecision):
         after, before, conf = d.after, d.before, d.confidence
         review, rollout, post_id = d.requires_review, d.rollout, d.post_id
+        bknown = d.before_known
     else:
         after, before, conf = d.get("after"), d.get("before"), d.get("confidence")
         review, rollout, post_id = (bool(d.get("requires_review")),
                                     d.get("rollout") or {}, d.get("post_id"))
+        bknown = bool(d.get("before_known", True))
 
     if not str(after or "").strip():
         return False, NOT_EXEC_EMPTY_AFTER
@@ -201,6 +212,11 @@ def production_ready(d: TitleDecision | dict[str, Any]) -> tuple[bool, str | Non
         return False, NOT_EXEC_TOO_LONG
     if post_id is None:
         return False, NOT_EXEC_NO_POST_ID
+    if not bknown:
+        # FAIL-CLOSED: sem o valor bruto observado nao ha como conferir a
+        # precondicao — executar seria escrever sobre um estado desconhecido.
+        # `before=""` COM leitura confiavel passa: meta vazio e' estado real.
+        return False, NOT_EXEC_BEFORE_UNKNOWN
     if review:
         return False, NOT_EXEC_REVIEW
     if conf is None:
@@ -253,6 +269,7 @@ def persist_decision(store: Any, d: TitleDecision) -> dict[str, Any]:
         decision_version=d.decision_version, evidence=d.evidence,
         rollout=d.rollout, confidence=d.confidence,
         requires_review=d.requires_review,
+        before_known=d.before_known,
         not_executable_reason=(None if ok else motivo),
         status="decided", decided_at=d.decided_at)
     return {"decision_id": d.decision_id, "acao": res["acao"],
@@ -410,6 +427,12 @@ def decision_from_action(action: dict[str, Any], *,
     post_id = fix.get("post_id")
     if post_id is None:
         post_id = contract.get("post_id")
+    # `live_title` e' o meta BRUTO lido do WP: `""` significa OBSERVADO VAZIO (estado
+    # real, o post nao tem `rank_math_title` definido) e `None` significa que a
+    # leitura NAO aconteceu. A distincao vira `before_known` e e' ela que decide se a
+    # decisao pode executar — sem isso, um fallback silencioso para o `<title>`
+    # renderizado passaria como se fosse o meta real.
+    before_known = live_title is not None
     before = live_title
     if before is None:
         before = (action.get("before") or {}).get("rank_math_title")
@@ -432,7 +455,7 @@ def decision_from_action(action: dict[str, Any], *,
         post_id=(int(post_id) if post_id is not None else None),
         before=str(before or ""), after=str(after),
         confidence=conf, rollout=contract.get("rollout") or {},
-        requires_review=review,
+        requires_review=review, before_known=before_known,
         evidence={"decision": contract.get("decision"),
                   "confidence_label": rotulo,
                   "page": contract.get("page"),

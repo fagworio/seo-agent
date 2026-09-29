@@ -127,13 +127,32 @@ def test_titulo_igual_ao_atual_nao_escreve():
 
 # --- E2E 8: STALE ----------------------------------------------------------
 
-def test_stale_quando_o_titulo_vivo_mudou():
+def test_meta_bruto_e_o_before_nao_o_titulo_renderizado():
+    """7A.2.2 — `rank_math_title` e `<title>` sao superficies DIFERENTES.
+
+    Comparar as duas produzia STALE falso: o `<title>` do portal carrega sufixo
+    ("... — UnicornioHater") que o meta bruto nao tem. Antes desta correcao, essa
+    comparacao bloqueava justamente o PRIMEIRO `review_title` real — o erro so'
+    apareceria no caminho positivo.
+    """
     out = decision_to_action(
         _contract(),
         live_title="Outro título qualquer escrito por outro agente")
-    assert out["ok"] is False
-    assert out["skip"] == SKIP_STALE
-    assert out["before"].startswith("Cole Young agora")
+    assert out["ok"] is True, "superficies diferentes NAO sao STALE"
+    action = out["action"]
+    assert action["before"]["rank_math_title"] == (
+        "Outro título qualquer escrito por outro agente")
+    assert action["fix"]["precondition"]["meta"]["rank_math_title"] == (
+        "Outro título qualquer escrito por outro agente")
+
+
+def test_meta_bruto_vazio_e_estado_real():
+    """Meta vazio e' observado como vazio e vira precondition vazia explicita."""
+    out = decision_to_action(_contract(), live_title="")
+    assert out["ok"] is True
+    assert out["action"]["before"]["rank_math_title"] == ""
+    assert out["action"]["fix"]["precondition"] == {
+        "meta": {"rank_math_title": ""}}
 
 
 def test_nao_e_stale_quando_o_titulo_vivo_bate_com_o_before():
@@ -253,7 +272,11 @@ def test_acao_carrega_precondicao_do_titulo_atual():
     assert pre["meta"]["rank_math_title"].startswith("Cole Young agora")
     # sem `before` conhecido nao se inventa precondicao
     out2 = decision_to_action(_contract(current_title={}))
-    assert out2["action"]["fix"]["precondition"] == {}
+    # A precondition e' SEMPRE explicita, mesmo com `before` vazio: meta vazio e'
+    # ESTADO REAL que a escrita precisa conferir. `{}` significaria "sem
+    # precondicao", que e' justamente o furo que o 7C nao pode ter.
+    assert out2["action"]["fix"]["precondition"] == {
+        "meta": {"rank_math_title": ""}}
 
 
 # --- P0.2 no Executor: STALE real, perto da escrita -----------------------
