@@ -18,6 +18,8 @@ from hermes_seo_agent.report.title_action import (
     SKIP_NO_CANDIDATE,
     SKIP_NO_POST_ID,
     SKIP_NOOP,
+    SKIP_OVER_MAX_LEN,
+    SKIP_ROLLOUT,
     SKIP_STALE,
     decision_to_action,
     decisions_to_actions,
@@ -30,6 +32,10 @@ def _contract(**over):
         "decision": "review_title",
         "confidence": "medium",
         "post_id": 32373,
+        # P0.1 (Sprint 1.1): sem writes_allowed=true NENHUMA acao eh criada.
+        # `observe` e `approval` carregam writes_allowed=false.
+        "rollout": {"mode": "auto", "writes_allowed": True,
+                    "approval_required": False},
         "current_title": {"title": "Cole Young agora é Scorpion? Explicado — UnicornioHater"},
         "suggested_titles": ["Cole Young e Scorpion: qual a relação? Explicado"],
     }
@@ -181,10 +187,166 @@ def test_propostas_diferentes_geram_fingerprints_diferentes():
         _contract(suggested_titles=["Título proposto A"])))
 
 
-def test_titulo_longo_e_cortado_no_limite():
-    out = decision_to_action(_contract(suggested_titles=["x" * 120]))
+# --- P0.4: titulo acima do limite NAO e truncado -------------------------
+
+def test_titulo_acima_do_limite_e_recusado_sem_truncar():
+    """Antes o modulo cortava o candidato (`title[:max_len]`), publicando um
+    texto que NUNCA passou pela validacao do motor. Agora recusa."""
+    longo = "Dragon Ball: idade dos personagens e quando cada um apareceu na série"
+    out = decision_to_action(_contract(suggested_titles=[longo]), max_len=60)
+    assert out["ok"] is False
+    assert out["skip"] == SKIP_OVER_MAX_LEN
+    assert out["refused_titles"][0].startswith("Dragon Ball")
+
+
+def test_titulo_longo_tenta_o_proximo_candidato_valido():
+    """Recusa o invalido e usa o proximo — sem modificar nenhum dos dois."""
+    longo = "x" * 90
+    bom = "Castlevania: o Conselho das Irmas explicado"
+    out = decision_to_action(_contract(suggested_titles=[longo, bom]), max_len=60)
     assert out["ok"] is True
-    assert len(out["action"]["fix"]["meta"]["rank_math_title"]) <= 65
+    assert out["action"]["fix"]["meta"]["rank_math_title"] == bom
+
+
+# --- P0.1: o rollout manda (observe/approval NUNCA geram acao) ------------
+
+def test_observe_nunca_gera_acao():
+    out = decision_to_action(_contract(
+        rollout={"mode": "observe", "writes_allowed": False,
+                 "approval_required": False}))
+    assert out["ok"] is False
+    assert out["skip"] == SKIP_ROLLOUT
+    assert out["rollout_mode"] == "observe"
+
+
+def test_approval_nunca_gera_acao_mesmo_com_confianca_high():
+    """O bug do Sprint 1: `approval` escrevia automaticamente. Agora nao."""
+    out = decision_to_action(_contract(
+        confidence="high",
+        rollout={"mode": "approval", "writes_allowed": False,
+                 "approval_required": True}))
+    assert out["ok"] is False
+    assert out["skip"] == SKIP_ROLLOUT
+    assert out["rollout_mode"] == "approval"
+
+
+def test_auto_gera_acao():
+    out = decision_to_action(_contract(
+        rollout={"mode": "auto", "writes_allowed": True,
+                 "approval_required": False}))
+    assert out["ok"] is True
+
+
+def test_contrato_sem_rollout_nao_escreve():
+    """Fail-safe: contrato ausente/antigo NAO autoriza escrita."""
+    contrato = _contract()
+    contrato.pop("rollout")
+    out = decision_to_action(contrato)
+    assert out["ok"] is False and out["skip"] == SKIP_ROLLOUT
+
+
+# --- P0.2: a acao carrega a precondicao para o Executor -------------------
+
+def test_acao_carrega_precondicao_do_titulo_atual():
+    out = decision_to_action(_contract())
+    pre = out["action"]["fix"]["precondition"]
+    assert pre["meta"]["rank_math_title"].startswith("Cole Young agora")
+    # sem `before` conhecido nao se inventa precondicao
+    out2 = decision_to_action(_contract(current_title={}))
+    assert out2["action"]["fix"]["precondition"] == {}
+
+
+# --- P0.2 no Executor: STALE real, perto da escrita -----------------------
+
+def _fake_wp(current_title_value: str):
+    """WordPressClient minimo: get_post devolve o meta atual; o update registra."""
+    class _WP:
+        def __init__(self, atual):
+            self.atual = atual
+            self.updates: list[dict] = []
+
+        def get_post(self, post_id):  # noqa: ANN001
+            return {"id": post_id, "meta": {"rank_math_title": self.atual}}
+
+        def update_post_meta(self, post_id, meta):  # noqa: ANN001
+            self.updates.append(meta)
+            self.atual = (meta or {}).get("rank_math_title", self.atual)
+
+    return _WP(current_title_value)
+
+
+def _executor_with(wp):
+    from dataclasses import replace
+
+    from hermes_seo_agent.config import load_config
+    from hermes_seo_agent.executor.executor import Executor
+
+    class _Store:
+        def action_executed(self, fingerprint):  # noqa: ANN001
+            return False
+
+        def record_action(self, **kw):  # noqa: ANN003
+            return 1
+
+        def log_audit(self, **kw):  # noqa: ANN003
+            return 1
+
+    # dry_run=False explicito: o teste exercita o caminho de ESCRITA e nao deve
+    # depender do .env da maquina.
+    cfg = replace(load_config(), dry_run=False)
+    return Executor(cfg, wp, _Store())  # type: ignore[arg-type]
+
+
+def _title_action_for(before: str, new: str, post_id: int = 32373) -> dict:
+    return {
+        "rule_id": "title_engine",
+        "url": "https://www.unicorniohater.com.br/x/",
+        "detail": "title_engine: titulo reescrito",
+        "before": {"rank_math_title": before},
+        "fix": {"type": "wp_post_meta", "post_id": post_id,
+                "meta": {"rank_math_title": new},
+                "precondition": {"meta": {"rank_math_title": before}}},
+    }
+
+
+def test_executor_stale_nao_escreve_quando_o_titulo_mudou():
+    """P0.2: editor humano alterou entre a decisao e a escrita -> STALE + sem write."""
+    wp = _fake_wp("Título C (alterado por humano)")
+    res = _executor_with(wp).apply_safe_actions(
+        [_title_action_for("Título A", "Título B")], cycle_id="c1")
+    assert res["executed"] == []
+    assert wp.updates == []                     # NENHUMA escrita
+    assert len(res["stale"]) == 1
+    assert "stale:" in res["stale"][0]["reason"]
+
+
+def test_executor_escreve_quando_a_precondicao_bate():
+    wp = _fake_wp("Título A")
+    res = _executor_with(wp).apply_safe_actions(
+        [_title_action_for("Título A", "Título B")], cycle_id="c2")
+    assert [a["url"] for a in res["executed"]] == [
+        "https://www.unicorniohater.com.br/x/"]
+    assert wp.updates == [{"rank_math_title": "Título B"}]
+    assert res["stale"] == []
+
+
+def test_executor_stale_nao_impede_a_proxima_url():
+    """Regra principal: uma URL STALE nunca para as outras."""
+    wp = _fake_wp("mudou")
+    ok = _title_action_for("Título A", "Título B", post_id=1)
+    ok["fix"]["precondition"] = {}              # sem precondicao: escreve
+    res = _executor_with(wp).apply_safe_actions(
+        [_title_action_for("Título A", "Título B", post_id=2), ok], cycle_id="c3")
+    assert len(res["stale"]) == 1
+    assert len(res["executed"]) == 1
+
+
+def test_executor_sem_precondicao_escreve_como_antes():
+    wp = _fake_wp("qualquer coisa")
+    acao = _title_action_for("Título A", "Título B")
+    acao["fix"].pop("precondition")
+    res = _executor_with(wp).apply_safe_actions([acao], cycle_id="c4")
+    assert len(res["executed"]) == 1 and res["stale"] == []
 
 
 # --- E2E do deadlock: a pendencia nao pode bloquear para sempre -----------

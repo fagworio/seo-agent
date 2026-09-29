@@ -1580,16 +1580,21 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     # Antes: mode="observe", shadow=True, write=False HARDCODED,
                     # entao o motor decidia e nada era aplicado (a ultima acao
                     # automatica de titulo foi 16/09; o trabalho saia todo a mao).
-                    #   observe  -> shadow=on,  write=off  (so observa/telemetria)
-                    #   approval -> shadow=off, write=on   (monta a acao; execucao
-                    #                       segue o gate de confianca high/medium)
-                    #   auto     -> shadow=off, write=on   (escreve o decidido)
+                    #   observe  -> shadow=on, write=off  (so observa/telemetria)
+                    #   approval -> shadow=off, write=on   (produz/atualiza a
+                    #       Caixa; o rollout do contrato barra a escrita, entao
+                    #       o executor NAO aplica nada automaticamente)
+                    #   auto     -> shadow=off, write=on   (unico que escreve)
                     engine_mode = str(
                         getattr(config, "title_engine_mode", "observe") or "observe"
                     ).strip().lower()
                     if engine_mode not in ("observe", "approval", "auto"):
                         engine_mode = "observe"
-                    escreve = engine_mode in ("approval", "auto")
+                    # P0.1 (Sprint 1.1): SOMENTE `auto` aciona o executor.
+                    # `approval` continua passando write=True para atualizar a
+                    # Caixa, mas `decision_to_action` exige
+                    # `rollout.writes_allowed=true` — que so existe em `auto`.
+                    escreve = engine_mode == "auto"
                     run_silently(_cmd_title_engine,
                                  args=_ns(limit=10, min_impressions=100.0,
                                           query_min_impressions=10.0, top_families=0,
@@ -2642,7 +2647,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         # O motor continua puro: quem monta a acao eh decisions_to_actions.
         from .report.title_action import decisions_to_actions
         review_contracts = [c for c in contracts if c.get("decision") == "review_title"]
-        built = decisions_to_actions(review_contracts)
+        built = decisions_to_actions(
+            review_contracts,
+            max_len=int(getattr(config, "title_max_len", 60) or 60))
         write_summary: dict[str, Any] = {
             "built": built["counts"]["built"],
             "refused": built["counts"]["skipped"],
@@ -2650,9 +2657,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             "executor": None,
         }
         if built["actions"]:
-            # Fase 7 (backpressure) — teto por ciclo no executor de titulos.
+            # P0.5 (Sprint 1.1) — politica PROPRIA do executor de titulos. Antes
+            # reutilizava MAX_SAFE_FIX_PER_CYCLE e depois ignorava valores >10 no
+            # `min(10, teto)` — configuracao enganosa. Agora o teto e explicito
+            # (TITLE_MAX_WRITES_PER_CYCLE) e respeitado como esta.
             try:
-                teto = int(config.max_safe_fix_per_cycle or 10)
+                teto = int(getattr(config, "title_max_writes_per_cycle", 10) or 10)
             except (TypeError, ValueError):
                 teto = 10
             from .executor.executor import Executor
@@ -2675,16 +2685,20 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 try:
                     outcome = executor_client.apply_safe_actions(
                         built["actions"], cycle_id=cycle_id,
-                        max_actions=min(10, teto), verify=_verify_title_persisted)
+                        max_actions=teto, verify=_verify_title_persisted)
                     write_summary["executor"] = {
                         "executed": len(outcome.get("executed") or []),
                         "previewed": len(outcome.get("previewed") or []),
                         "skipped": len(outcome.get("skipped") or []),
                         "unverified": len(outcome.get("unverified") or []),
                         "dry_run": outcome.get("dry_run"),
-                        # as URLs saem daqui para fechar a Caixa (Fase 10)
+                        # As URLs saem daqui para fechar a Caixa (Fase 10) e as
+                        # ACOES para criar o outcome medivel (P0.3) — sem elas o
+                        # feedback loop do Google nunca fecha.
                         "executed_urls": [a.get("url") for a in
                                           (outcome.get("executed") or [])],
+                        "executed_actions": list(outcome.get("executed") or []),
+                        "stale": len(outcome.get("stale") or []),
                     }
                     published_count = len(outcome.get("executed") or [])
                 except Exception as exc:
@@ -2707,16 +2721,47 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             executadas = [str(u) for u in
                           ((write_summary.get("executor") or {}).get("executed_urls")
                            or []) if u]
+            acoes_executadas = list(
+                (write_summary.get("executor") or {}).get("executed_actions") or [])
             sem_mudanca = [c.get("url") for c in contracts
                            if c.get("decision") == "no_title_change" and c.get("url")]
             fechados = {"done": 0, "superseded": 0}
+            outcomes_criados = 0
             if executadas or sem_mudanca:
                 agora = _dt_life.datetime.now(_dt_life.timezone.utc).isoformat()
                 with Storage(config.sqlite_path) as store_life:
+                    # P0.3 (Sprint 1.1) — FEEDBACK LOOP. SOMENTE `executed`
+                    # (escrita confirmada pela verificacao REST) gera outcome
+                    # medivel; `unverified` NAO gera. O caminho antigo
+                    # (`_cmd_apply`) registrava isto; o novo nao registrava, e a
+                    # cadeia decidia/aplicava/fechava a Caixa sem que o Google
+                    # pudesse medir. Cria o opportunity_outcome com baseline
+                    # (before/after) + implemented_at, que e o que o
+                    # `revalidate-due` consome nas janelas 7/28/56/90d.
+                    for acao in acoes_executadas:
+                        url_acao = acao.get("url")
+                        if not url_acao:
+                            continue
+                        fix_acao = acao.get("fix") or {}
+                        try:
+                            store_life.record_implemented_outcome(
+                                url=str(url_acao),
+                                action_type=str(acao.get("rule_id") or "title_engine"),
+                                implemented_action=str(acao.get("detail") or "fix"),
+                                before=acao.get("before"),
+                                after=(fix_acao.get("meta")
+                                       or fix_acao.get("alt_text") or fix_acao),
+                                implemented_at=agora,
+                            )
+                            outcomes_criados += 1
+                        except Exception:
+                            # um outcome que falha nao impede a medicao dos outros
+                            pass
                     fechados["done"] = store_life.close_title_checklist(
                         executadas, status="done", when=agora)
                     fechados["superseded"] = store_life.close_title_checklist(
                         sem_mudanca, status="superseded", when=agora)
+            write_summary["outcomes_implemented"] = outcomes_criados
             write_summary["closed_checklist"] = fechados
         except Exception as exc:
             # Regra principal: o lifecycle nao derruba o ciclo.

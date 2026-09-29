@@ -34,6 +34,8 @@ SKIP_NO_CANDIDATE = "sem_candidato_valido"
 SKIP_NO_POST_ID = "post_id_ausente"
 SKIP_STALE = "stale_titulo_mudou_apos_decisao"
 SKIP_NOOP = "titulo_proposto_igual_ao_atual"
+SKIP_ROLLOUT = "rollout_write_not_allowed"
+SKIP_OVER_MAX_LEN = "title_over_max_length"
 
 _REASON_TEXT: dict[str, str] = {
     SKIP_DECISION: "a decisao do motor nao eh review_title",
@@ -42,34 +44,47 @@ _REASON_TEXT: dict[str, str] = {
     SKIP_NO_POST_ID: "contrato sem post_id: impossivel montar a acao",
     SKIP_STALE: "o titulo vivo mudou depois da decisao: acao descartada (STALE)",
     SKIP_NOOP: "o titulo proposto eh igual ao atual: nada a escrever",
+    SKIP_ROLLOUT: ("o rollout do contrato nao permite escrita "
+                   "(modo observe/approval): nenhuma acao eh criada"),
+    SKIP_OVER_MAX_LEN: ("todos os candidatos passam do limite de tamanho: "
+                        "recusado sem truncar (candidato validado nao se altera)"),
 }
 
 
-def _candidate_title(contract: dict[str, Any]) -> str:
-    """Melhor candidato valido do contrato, na ordem de preferencia do motor.
+def _all_candidates(contract: dict[str, Any]) -> list[str]:
+    """Todos os candidatos validos do contrato, na ordem de preferencia do motor.
 
-    Aceita as formas que o motor ja produz hoje (`suggested_titles` no caminho
-    antigo, `candidates[]`/`candidate.title` no caminho novo) para nao acoplar
-    este modulo ao formato interno do engine.
+    O motor ja validou cada um (semantica/estrutura). Por isso NUNCA se
+    modifica um candidato aqui: se o primeiro estourar o limite de tamanho,
+    tenta-se o proximo valido (P0.4) — truncar produziria um titulo que passou
+    pela validacao sob outra forma.
     """
+    out: list[str] = []
     for key in ("suggested_titles", "candidates"):
         for item in contract.get(key) or []:
-            if isinstance(item, str) and item.strip():
-                return item.strip()
-            if isinstance(item, dict):
+            value = ""
+            if isinstance(item, str):
+                value = item.strip()
+            elif isinstance(item, dict):
                 if item.get("discarded"):
                     continue
                 for field in ("title", "phrase", "text", "suggested_title"):
                     value = str(item.get(field) or "").strip()
                     if value:
-                        return value
+                        break
+            if value and value not in out:
+                out.append(value)
     candidate = contract.get("candidate") or {}
     if isinstance(candidate, dict):
         for field in ("title", "suggested_title", "phrase", "text"):
             value = str(candidate.get(field) or "").strip()
-            if value:
-                return value
-    return str(contract.get("proposed_title") or "").strip()
+            if value and value not in out:
+                out.append(value)
+                break
+    proposed = str(contract.get("proposed_title") or "").strip()
+    if proposed and proposed not in out:
+        out.append(proposed)
+    return out
 
 
 def _current_title(contract: dict[str, Any]) -> str:
@@ -102,17 +117,33 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
         return {"ok": False, "skip": SKIP_DECISION,
                 "detail": _REASON_TEXT[SKIP_DECISION], "decision": decision}
 
+    # P0.1 (Sprint 1.1) — o ROLLOUT manda. `observe` e `approval` NAO escrevem:
+    # sem `writes_allowed` nenhuma acao eh criada, por mais alta que seja a
+    # confianca. Antes esta checagem nao existia e o modo `approval` escrevia
+    # automaticamente — o scheduler passava write=True nele e nada aqui barrava.
+    rollout = contract.get("rollout") or {}
+    if not rollout.get("writes_allowed"):
+        return {"ok": False, "skip": SKIP_ROLLOUT,
+                "detail": _REASON_TEXT[SKIP_ROLLOUT],
+                "rollout_mode": rollout.get("mode")}
+
     confidence = str(contract.get("confidence") or "low").strip().lower()
     if confidence not in AUTO_CONFIDENCES:
         return {"ok": False, "skip": SKIP_CONFIDENCE,
                 "detail": _REASON_TEXT[SKIP_CONFIDENCE], "confidence": confidence}
 
-    title = _candidate_title(contract)
-    if not title:
+    # P0.4 (Sprint 1.1) — candidato acima do limite eh RECUSADO, nunca truncado:
+    # truncar publicaria um texto que nunca passou pela validacao do motor.
+    # Tenta-se o proximo candidato valido.
+    candidates = _all_candidates(contract)
+    if not candidates:
         return {"ok": False, "skip": SKIP_NO_CANDIDATE,
                 "detail": _REASON_TEXT[SKIP_NO_CANDIDATE]}
-    if len(title) > max_len:
-        title = title[:max_len].rstrip()
+    title = next((c for c in candidates if len(c) <= max_len), "")
+    if not title:
+        return {"ok": False, "skip": SKIP_OVER_MAX_LEN,
+                "detail": _REASON_TEXT[SKIP_OVER_MAX_LEN],
+                "refused_titles": [c[:80] for c in candidates[:5]]}
 
     post_id = contract.get("post_id") or (contract.get("page") or {}).get("post_id")
     try:
@@ -148,6 +179,12 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
             "type": "wp_post_meta",
             "post_id": post_id,
             "meta": {"rank_math_title": title},
+            # P0.2 (Sprint 1.1) — precondicao atomica: o Executor rele o post
+            # IMEDIATAMENTE antes do update e aborta se o valor atual divergir do
+            # `before` desta decisao (editor humano, outro agente). A garantia
+            # fica no executor (perto da escrita), valendo para QUALQUER usuario
+            # dele — nao so o title-engine.
+            "precondition": ({"meta": {"rank_math_title": before}} if before else {}),
         },
         "confidence": confidence,
         "source": "title_engine",

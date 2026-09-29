@@ -22,6 +22,25 @@ from ..storage.db import Storage
 SUPPORTED_FIX_TYPES = ("wp_media_alt", "wp_post_meta", "wp_post_content_patch")
 
 
+class StaleActionError(Exception):
+    """P0.2 (Sprint 1.1) — a precondicao da acao nao bate com o estado vindouro.
+
+    O executor rele o recurso IMEDIATAMENTE antes de escrever; se o valor atual
+    divergir do esperado (editor humano alterou, outro agente escreveu), a acao
+    e classificada como STALE e NENHUMA escrita acontece. Nao aborta o lote: o
+    chamador segue para a proxima URL.
+    """
+
+
+def _norm(value: Any) -> str:
+    """Normaliza para comparacao: None e string vazia sao o MESMO estado.
+
+    O WordPress devolve None para meta ausente enquanto o motor pode carregar
+    "", e sem esta normalizacao a precondicao dispararia STALE falso.
+    """
+    return "" if value is None else str(value).strip()
+
+
 class Executor:
     def __init__(self, config: Config, wp: WordPressClient, storage: Storage):
         self.config = config
@@ -50,6 +69,7 @@ class Executor:
         skipped: list[dict[str, Any]] = []
         previewed: list[dict[str, Any]] = []
         unverified: list[dict[str, Any]] = []
+        stale: list[dict[str, Any]] = []
 
         for action in actions:
             rule_id = action.get("rule_id", "")
@@ -78,6 +98,13 @@ class Executor:
 
             try:
                 result = self._execute(fix)
+            except StaleActionError as exc:
+                # P0.2 (Sprint 1.1): o recurso mudou entre a decisao e a
+                # escrita (editor humano, outro agente). NAO escreve, NAO
+                # aborta o lote: registra STALE classificado e segue.
+                stale.append({**action, "reason": f"stale: {exc}",
+                              "fingerprint": fingerprint})
+                continue
             except Exception as exc:  # a failing fix must not kill the cycle
                 skipped.append({**action, "reason": f"failed: {exc}"})
                 continue
@@ -136,6 +163,7 @@ class Executor:
             "previewed": previewed,
             "skipped": skipped,
             "unverified": unverified,
+            "stale": stale,
             "dry_run": self.config.dry_run,
         }
 
@@ -146,7 +174,8 @@ class Executor:
         if fix_type == "wp_media_alt":
             return self._fix_media_alt(int(fix["media_id"]), str(fix["alt_text"]))
         if fix_type == "wp_post_meta":
-            return self._fix_post_meta(int(fix["post_id"]), dict(fix["meta"]))
+            return self._fix_post_meta(int(fix["post_id"]), dict(fix["meta"]),
+                                       precondition=fix.get("precondition") or {})
         if fix_type == "wp_post_content_patch":
             return self._fix_post_content_patch(fix)
         raise ValueError(f"unsupported fix type: {fix_type}")
@@ -159,9 +188,24 @@ class Executor:
         self.wp.update_media_alt(media_id, alt_text)
         return before, after, rollback
 
-    def _fix_post_meta(self, post_id: int, meta: dict[str, Any]) -> tuple[Any, Any, Any]:
+    def _fix_post_meta(self, post_id: int, meta: dict[str, Any],
+                       precondition: dict[str, Any] | None = None
+                       ) -> tuple[Any, Any, Any]:
+        """Escreve meta do post com precondicao opcional (P0.2 do Sprint 1.1).
+
+        O post e relido aqui, IMEDIATAMENTE antes do update: se algum valor
+        esperado em `precondition.meta` divergir do estado atual, levanta
+        `StaleActionError` e NADA e escrito. Mesmo padrao ja usado em
+        `_fix_post_content_patch` (`expected_content_hash`).
+        """
         post = self.wp.get_post(post_id)
         existing_meta = dict(post.get("meta") or {})
+        expected = dict((precondition or {}).get("meta") or {})
+        for key, want in expected.items():
+            have = existing_meta.get(key)
+            if _norm(have) != _norm(want):
+                raise StaleActionError(
+                    f"{key}: esperado {_norm(want)!r}, encontrado {_norm(have)!r}")
         before = {k: existing_meta.get(k) for k in meta}
         after = dict(meta)
         rollback = {"type": "wp_post_meta", "post_id": post_id,

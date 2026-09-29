@@ -61,6 +61,10 @@ class Config:
     # Roda o shadow mode do motor de título dentro do `schedule` (F21/F22):
     # observa, compara com o motor atual e persiste — nunca publica.
     title_engine_in_schedule: bool = True
+    # P0.5 (Sprint 1.1): teto PROPRIO de escritas do motor de titulos por ciclo.
+    # Antes o caminho novo reutilizava MAX_SAFE_FIX_PER_CYCLE e ainda ignorava
+    # valores acima de 10 (min(10, teto)) — configuracao enganosa.
+    title_max_writes_per_cycle: int = 10
 
     # M0 — limites operacionais (URLs, queries, chunks, quota e custo por execução)
     max_queries_per_source: int = 500        # queries por fonte por execução
@@ -263,6 +267,7 @@ def load_config() -> Config:
         title_top_families=_int("TITLE_TOP_FAMILIES", 5, 1, 20),
         title_max_len=_int("TITLE_MAX_LEN", 60, 20, 200),
         title_engine_in_schedule=_bool("TITLE_ENGINE_IN_SCHEDULE", True),
+        title_max_writes_per_cycle=_int("TITLE_MAX_WRITES_PER_CYCLE", 10, 0, 100),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),
         max_chunks_per_doc=_int("MAX_CHUNKS_PER_DOC", 200, 1, 10_000),
         max_external_calls=_int("MAX_EXTERNAL_CALLS", 0, 0, 100_000),
