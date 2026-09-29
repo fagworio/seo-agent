@@ -777,14 +777,70 @@ def test_p07_lifecycle_nao_commita_escondido_na_transacao(tmp_path):
         assert store.conn.execute(
             "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
             (url,)).fetchone()[0] == 0
-        # se a tabela de work items existir, o lifecycle também foi desfeito
-        try:
-            n = store.conn.execute(
-                "SELECT COUNT(*) FROM work_items WHERE work_item_id = 'wi-1'"
-            ).fetchone()[0]
-            assert n == 0
-        except Exception:
-            pass
+        # a tabela REAL é `work_item_lifecycle` (antes o teste consultava
+        # `work_items` e, com o try/except, passava sem verificar nada)
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM work_item_lifecycle "
+            "WHERE work_item_id = 'wi-1'").fetchone()[0] == 0
+
+
+def test_p08_retry_concorrente_nao_commita_escondido(tmp_path):
+    """P0.8 — a recursão do retry tem de herdar `commit=False`.
+
+    Força a corrida de verdade: o estado muda entre o SELECT e o UPDATE (o que
+    outra conexão/runner faz), o UPDATE otimista devolve rowcount 0 e o branch de
+    retry é exercitado. Antes do P0.8 a chamada recursiva caía no default
+    `commit=True` e commitava NO MEIO da transação do chamador.
+    """
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "p08.db")) as store:
+        store.set_work_item_lifecycle("wi-race", "new", source="seed")
+        real = store.conn
+
+        class _RaceConn:
+            """Proxy que simula a outra conexão e conta os commits."""
+
+            def __init__(self, conn):
+                self._real = conn
+                self.commits = 0
+                self.raced = 0
+
+            def commit(self):
+                self.commits += 1
+                return self._real.commit()
+
+            def rollback(self):
+                return self._real.rollback()
+
+            def execute(self, sql, *args, **kwargs):
+                if (isinstance(sql, str)
+                        and "UPDATE work_item_lifecycle SET canonical_status" in sql
+                        and not self.raced):
+                    self.raced += 1
+                    # a corrida: o estado muda entre o SELECT e o UPDATE
+                    self._real.execute(
+                        "UPDATE work_item_lifecycle SET canonical_status = 'delegated' "
+                        "WHERE work_item_id = 'wi-race'")
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        proxy = _RaceConn(real)
+        store.conn = proxy            # type: ignore[assignment]
+
+        with store.transaction():
+            store.set_work_item_lifecycle(
+                "wi-race", "implemented", source="race", commit=False)
+            assert proxy.raced == 1, "o branch de retry concorrente nao foi exercitado"
+            assert proxy.commits == 0, "commit ESCONDIDO dentro da transacao"
+
+        # só o commit legítimo do `transaction()` no fim
+        assert proxy.commits == 1
+        assert real.execute(
+            "SELECT canonical_status FROM work_item_lifecycle "
+            "WHERE work_item_id = 'wi-race'").fetchone()[0] == "implemented"
 
 
 def _url(sub: str) -> str:

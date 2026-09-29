@@ -1137,11 +1137,15 @@ class Storage:
             if cur2.rowcount == 0 and _retry:
                 # Corrida: o estado mudou entre o SELECT e o UPDATE. Reavalia uma
                 # vez com o estado atual (aplica o gate correto).
+                # P0.8 — `commit=commit` OBRIGATORIO: sem isto a recursao usa o
+                # default True e faz COMMIT ESCONDIDO dentro de
+                # Storage.transaction(), quebrando a atomicidade exatamente na
+                # corrida — o cenario que o claim/lease do Sprint 2 torna comum.
                 self.set_work_item_lifecycle(
                     work_item_id, canonical_status, source=source, url=url,
                     action_fingerprint=action_fingerprint, campaign_id=campaign_id,
                     campaign_item_id=campaign_item_id, outcome_id=outcome_id,
-                    _retry=False)
+                    commit=commit, _retry=False)
             return
         # INSERT idempotente: se outra conexão (API/cron/runner) criou a linha
         # entre o SELECT e o INSERT, ON CONFLICT não falha; reavaliamos o estado.
@@ -1157,11 +1161,13 @@ class Storage:
             self.conn.commit()
         if cur3.rowcount == 0 and _retry:
             # corrida no primeiro INSERT: reavalia o gate sobre o estado criado.
+            # P0.8 — idem: a recursao precisa herdar `commit` (default True
+            # commitava escondido dentro da transacao do chamador).
             self.set_work_item_lifecycle(
                 work_item_id, canonical_status, source=source, url=url,
                 action_fingerprint=action_fingerprint, campaign_id=campaign_id,
                 campaign_item_id=campaign_item_id, outcome_id=outcome_id,
-                _retry=False)
+                commit=commit, _retry=False)
 
     def get_work_item_lifecycle(self, work_item_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
