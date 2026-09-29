@@ -68,6 +68,37 @@ class LaneQueue:
 
     # -- enfileirar ----------------------------------------------------------
 
+    def get_by_work_item(self, lane: str, work_item_id: str) -> dict[str, Any] | None:
+        """Estado atual do item, sem exigir posse (leitura pura).
+
+        Existe para quem precisa saber se um item JA' finalizou antes de decidir
+        algo sobre ele — ex.: confirmar `enqueued` numa decisao sem regredir o
+        estado de uma execucao que terminou.
+        """
+        row = self.conn.execute(
+            "SELECT lane, work_item_id, status, attempt_count, max_attempts, "
+            "last_error, error_class, lease_version, recoveries FROM lane_queue "
+            "WHERE lane = ? AND work_item_id = ?",
+            (lane, work_item_id)).fetchone()
+        if row is None:
+            return None
+        return {"lane": row[0], "work_item_id": row[1], "status": row[2],
+                "attempt_count": int(row[3] or 0), "max_attempts": int(row[4] or 0),
+                "last_error": row[5], "error_class": row[6],
+                "lease_version": int(row[7] or 0), "recoveries": int(row[8] or 0)}
+
+    # Status em que o item ainda PODE progredir (nao terminou).
+    LIVE_STATUSES = ("pending", "claimed", "executing")
+    # Status terminais: o item ja' teve o desfecho dele. Nada pode "reabrir".
+    TERMINAL_STATUSES = ("done", "stale", "manual", "failed")
+
+    def is_terminal(self, lane: str, work_item_id: str) -> bool:
+        """True se o item existe e ja' terminou (done/stale/manual/failed)."""
+        item = self.get_by_work_item(lane, work_item_id)
+        if item is None:
+            return False
+        return item["status"] in self.TERMINAL_STATUSES
+
     def enqueue(self, lane: str, work_item_id: str | None = None, *,
                 url: str | None = None, payload: Any = None,
                 priority: int = 100, max_attempts: int = 3,

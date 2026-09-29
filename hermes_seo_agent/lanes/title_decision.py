@@ -71,6 +71,7 @@ MIN_CONFIDENCE = 0.35
 
 # Motivos de nao-executabilidade (rastreaveis, nunca genericos).
 NOT_EXEC_LOW_CONFIDENCE = "low_confidence"
+NOT_EXEC_MISSING_CONFIDENCE = "missing_confidence"
 NOT_EXEC_REVIEW = "requires_review"
 NOT_EXEC_ROLLOUT = "rollout_blocks_write"
 NOT_EXEC_EMPTY_AFTER = "after_vazio"
@@ -123,9 +124,15 @@ def title_action_fingerprint(*, post_id: int | None, before: str, after: str,
     `post_id + field + before + after + versao da acao`. A URL fica de fora de
     proposito: ela nao muda a acao. Ja' os titulos mudam — trocar o `after` e'
     outra acao e precisa gerar outro item.
+
+    SEM `strip()` nos titulos: o `before` e' a PRECONDITION conferida contra o
+    WordPress (gate 4), entao `"Titulo"` e `" Titulo "` sao estados diferentes.
+    Normalizar aqui faria duas decisoes distintas colidirem no mesmo `decision_id`,
+    e o UPSERT sobrescreveria o `before` da tabela enquanto o item ja' enfileirado
+    continuava com o payload antigo — fila e decisao divergindo em silencio.
     """
     parts = [str(post_id if post_id is not None else ""), str(field),
-             (before or "").strip(), (after or "").strip(), str(action_version)]
+             before or "", after or "", str(action_version)]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
@@ -196,7 +203,12 @@ def production_ready(d: TitleDecision | dict[str, Any]) -> tuple[bool, str | Non
         return False, NOT_EXEC_NO_POST_ID
     if review:
         return False, NOT_EXEC_REVIEW
-    if conf is not None and float(conf) < MIN_CONFIDENCE:
+    if conf is None:
+        # FAIL-CLOSED: confianca ausente NAO libera escrita automatica. A integracao
+        # com o motor ainda nao existe — exatamente onde um mapeamento faltando
+        # produziria None e passaria batido para producao.
+        return False, NOT_EXEC_MISSING_CONFIDENCE
+    if float(conf) < MIN_CONFIDENCE:
         return False, NOT_EXEC_LOW_CONFIDENCE
     if not _rollout_allows_write(rollout):
         return False, NOT_EXEC_ROLLOUT
@@ -289,11 +301,26 @@ def enqueue_execution(store: Any, d: TitleDecision | dict[str, Any], *,
     q = LaneQueue(store)
     criado = q.enqueue("title_execution", dd["decision_id"], url=dd["url"],
                        payload=payload, priority=priority)
-    store.mark_title_decision_enqueued(dd["decision_id"],
-                                       status="enqueued")
-    return {"enfileirado": bool(criado), "motivo": None,
-            "decision_id": dd["decision_id"],
-            "ja_existia": not criado}
+    if criado:
+        store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
+        return {"enfileirado": True, "motivo": None, "ja_existia": False,
+                "decision_id": dd["decision_id"]}
+
+    # O item JA' existia. `enqueue` e' no-op tambem para item finalizado, entao
+    # marcar `enqueued` as cegas faria a decisao REGREDIR de `executed` para
+    # `enqueued` — a maquina de estados passaria a mentir depois do 7B. So'
+    # confirmamos enquanto o item ainda pode progredir.
+    item = q.get_by_work_item("title_execution", dd["decision_id"])
+    st = (item or {}).get("status")
+    if st in LaneQueue.LIVE_STATUSES:
+        store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
+        return {"enfileirado": False, "motivo": None, "ja_existia": True,
+                "decision_id": dd["decision_id"], "item_status": st,
+                "status_confirmado": True}
+    return {"enfileirado": False, "motivo": None, "ja_existia": True,
+            "decision_id": dd["decision_id"], "item_status": st,
+            "status_confirmado": False, "nao_regrediu": True,
+            "detalhe": f"item terminal ({st}): status da decisao preservado"}
 
 
 def reconcile_pending_enqueue(store: Any, *, limit: int = 50) -> dict[str, Any]:

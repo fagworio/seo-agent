@@ -3704,6 +3704,7 @@ class Storage:
         criada". A reconciliacao le' daqui e cria o item que falta.
         """
         sql = ("SELECT decision_id FROM title_decision WHERE enqueued_at IS NULL "
+               "AND not_executable_reason IS NULL "
                "AND status IN ('decided', 'enqueue_failed') "
                "ORDER BY decided_at ASC")
         params: tuple = ()
@@ -3726,24 +3727,50 @@ class Storage:
         import datetime as _dt
 
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        # Defesa em profundidade: mesmo que alguem chame com `enqueued`, um estado
+        # TERMINAL nao regride. A regra principal esta' em `enqueue_execution`, mas
+        # o guard tambem fica aqui porque e' aqui que o estado muda.
         cur = self.conn.execute(
             "UPDATE title_decision SET enqueued_at = COALESCE(enqueued_at, ?), "
-            "status = ?, updated_at = ? WHERE decision_id = ?",
+            "status = CASE WHEN status IN ('executed', 'stale', 'rejected', "
+            "'superseded') THEN status ELSE ? END, updated_at = ? "
+            "WHERE decision_id = ?",
             (enqueued_at or now, status, now, decision_id))
         if commit:
             self.conn.commit()
         return bool(cur.rowcount)
 
     def title_decision_stats(self) -> dict[str, Any]:
-        """Contagem por status + quantas estao sem execucao (o buraco do gate 8)."""
+        """Observabilidade do 7A, SEPARANDO o que pode executar do que nao pode.
+
+        `sem_execucao` sozinho mistura duas coisas muito diferentes: decisao que
+        ficou sem item por crash (buraco do gate 8, recuperavel) e decisao
+        deliberadamente barrada por gate (que nunca deve executar). Somadas, o
+        numero nao diz se ha' trabalho parado ou se esta' tudo certo.
+        """
         por_status: dict[str, int] = {}
         for st, n in self.conn.execute(
                 "SELECT status, COUNT(*) FROM title_decision GROUP BY status"):
             por_status[str(st)] = int(n)
         pend = self.conn.execute(
             "SELECT COUNT(*) FROM title_decision WHERE enqueued_at IS NULL").fetchone()
+        rec = self.conn.execute(
+            "SELECT COUNT(*) FROM title_decision WHERE enqueued_at IS NULL "
+            "AND not_executable_reason IS NULL").fetchone()
+        blq = self.conn.execute(
+            "SELECT COUNT(*) FROM title_decision WHERE enqueued_at IS NULL "
+            "AND not_executable_reason IS NOT NULL").fetchone()
+        por_motivo: dict[str, int] = {}
+        for m, n in self.conn.execute(
+                "SELECT not_executable_reason, COUNT(*) FROM title_decision "
+                "WHERE enqueued_at IS NULL AND not_executable_reason IS NOT NULL "
+                "GROUP BY not_executable_reason"):
+            por_motivo[str(m)] = int(n)
         return {"total": sum(por_status.values()), "por_status": por_status,
-                "sem_execucao": int(pend[0] or 0)}
+                "sem_execucao": int(pend[0] or 0),
+                "sem_execucao_recuperavel": int(rec[0] or 0),
+                "bloqueadas": int(blq[0] or 0),
+                "bloqueadas_por_motivo": por_motivo}
 
     # -- Sprint 2, item 6: isolamento de dead URL ---------------------------
 

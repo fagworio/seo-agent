@@ -336,24 +336,24 @@ def test_gate8_reconciliacao_repetida_nao_duplica(tmp_path):
 
 
 def test_gate8_reconciliacao_respeita_os_gates(tmp_path):
-    """Decisao nao-executavel e' barrada na reconciliacao COM o motivo."""
+    """Decisao barrada por gate NAO entra no conjunto reconciliável.
+
+    Depois do fix de starvation (P1.2), o filtro `not_executable_reason IS NULL`
+    impede que a bloqueada ocupe vaga no lote da reconciliacao. Ela continua
+    registrada, com o motivo — o que muda e' nao ser mais candidata.
+    """
     db = str(tmp_path / "g8c.db")
     with Storage(db) as store:
         d = _decisao(rollout={})               # rollout barra
         TD.persist_decision(store, d)
         res = TD.reconcile_pending_enqueue(store)
+        assert res["pendentes"] == 0, "bloqueada nao pode ocupar o lote da reconciliacao"
         assert res["reconciliados"] == 0
-        assert res["barrados"] == [{"decision_id": d.decision_id,
-                                    "motivo": TD.NOT_EXEC_ROLLOUT}]
+        assert res["barrados"] == []
         assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
-
-        # decisao DIFERENTE (outro `after`), tambem barrada pelo rollout
-        d2 = _decisao(after="Terceiro titulo valido e bem diferente", rollout={})
-        TD.persist_decision(store, d2)
-        res2 = TD.reconcile_pending_enqueue(store)
-        assert res2["reconciliados"] == 0
-        assert {b["decision_id"] for b in res2["barrados"]} == {
-            d.decision_id, d2.decision_id}
+        assert store.title_decision(d.decision_id)["not_executable_reason"] == (
+            TD.NOT_EXEC_ROLLOUT), "a decisao segue registrada com o motivo"
+        assert TD.stats(store)["bloqueadas"] == 1
 
 
 def test_gate8_rollout_muda_sem_mudar_a_decisao(tmp_path):
@@ -446,3 +446,189 @@ def test_modulo_nao_importa_analise(tmp_path):
                  or "title_generator" in m or "title_opportunities" in m]
     assert proibidos == [], f"7A nao pode importar analise: {proibidos}"
     assert sys.modules is not None
+
+
+# ---------------------------------------------------------------------------
+# 7A.1 — os 3 P1 e o hardening da revisao (antes de ligar o motor)
+# ---------------------------------------------------------------------------
+
+def test_p1_1_fingerprint_usa_os_titulos_exatos():
+    """`"Titulo"` e `" Titulo "` sao ESTADOS DIFERENTES para a precondition.
+
+    Com `strip()` no fingerprint as duas decisoes colidiam no mesmo `decision_id`:
+    o UPSERT sobrescrevia o `before` da tabela enquanto o item ja' enfileirado
+    continuava com o payload antigo — fila e decisao divergindo em silencio.
+    """
+    a = TD.title_action_fingerprint(post_id=7, before="Titulo", after="Novo titulo")
+    b = TD.title_action_fingerprint(post_id=7, before=" Titulo ", after="Novo titulo")
+    assert a != b, "before com espacos nao pode colidir com before sem espacos"
+    c = TD.title_action_fingerprint(post_id=7, before="Titulo", after="Novo titulo ")
+    assert a != c, "espaco no after tambem muda a acao"
+
+    d1 = _decisao(before="Titulo")
+    d2 = _decisao(before=" Titulo ")
+    assert d1.decision_id != d2.decision_id
+
+
+def test_p1_1_upsert_nao_sobrescreve_a_decisao_enfileirada(tmp_path):
+    """O cenario do report: 1o enfileira, depois chega o `before` com espacos."""
+    import json
+
+    db = str(tmp_path / "colisao.db")
+    with Storage(db) as store:
+        d1 = _decisao(before="Titulo")
+        TD.persist_decision(store, d1)
+        TD.enqueue_execution(store, d1)
+        payload1 = json.loads(store.conn.execute(
+            "SELECT payload_json FROM lane_queue WHERE lane='title_execution'"
+        ).fetchone()[0])
+
+        d2 = _decisao(before=" Titulo ")
+        assert d2.decision_id != d1.decision_id
+        TD.persist_decision(store, d2)
+
+        salva1 = store.title_decision(d1.decision_id)
+        assert salva1["before"] == "Titulo", "o UPSERT nao pode tocar a decisao 1"
+        assert payload1["before"] == "Titulo"
+        assert salva1["before"] == payload1["before"], (
+            "fila e decisao nao podem divergir")
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM title_decision").fetchone()[0] == 2
+
+
+def test_p1_2_reconciliacao_nao_sofre_starvation(tmp_path):
+    """50 bloqueadas antigas + 1 executavel nova com `limit=50`.
+
+    Antes, `ORDER BY decided_at ASC LIMIT 50` fazia as 50 bloqueadas ocuparem o
+    lote em TODA passada e a executavel nunca ser alcancada — o title_execution
+    travaria no dia em que o cron fosse ligado.
+    """
+    base = "https://www.unicorniohater.com.br"
+    db = str(tmp_path / "starve.db")
+    with Storage(db) as store:
+        for i in range(50):
+            d = TD.make_decision(
+                url=f"{base}/antiga-{i}/", post_id=1000 + i,
+                before=f"Titulo antigo {i}", after=f"Titulo novo {i}",
+                rollout={}, confidence=0.9,               # rollout barra
+                decided_at=f"2026-01-{i + 1:02d}T00:00:00+00:00")
+            TD.persist_decision(store, d)
+        nova = TD.make_decision(url=f"{base}/nova/", post_id=9999,
+                                before="Titulo velho", after="Titulo novo valido",
+                                rollout={"write_allowed": True}, confidence=0.9,
+                                decided_at="2026-09-29T00:00:00+00:00")
+        TD.persist_decision(store, nova)
+
+        res = TD.reconcile_pending_enqueue(store, limit=50)
+        assert res["reconciliados"] == 1, "a executavel TEM de ser alcancada"
+        assert res["criados"] == [nova.decision_id]
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+
+
+def test_p1_2_observabilidade_separada(tmp_path):
+    """`sem_execucao` nao pode somar recuperavel com deliberadamente bloqueada."""
+    db = str(tmp_path / "obs.db")
+    with Storage(db) as store:
+        TD.persist_decision(store, _decisao())                        # recuperavel
+        TD.persist_decision(store, _decisao(after="Outro titulo valido aqui",
+                                            rollout={}))               # bloqueada
+        TD.persist_decision(store, _decisao(after="Terceiro titulo valido aqui",
+                                            confidence=0.05))          # bloqueada
+        st = TD.stats(store)
+        assert st["total"] == 3
+        assert st["sem_execucao"] == 3, "todas estao sem item de execucao"
+        assert st["sem_execucao_recuperavel"] == 1, "so' 1 e' trabalho parado"
+        assert st["bloqueadas"] == 2
+        assert st["bloqueadas_por_motivo"] == {
+            TD.NOT_EXEC_ROLLOUT: 1, TD.NOT_EXEC_LOW_CONFIDENCE: 1}
+
+        TD.reconcile_pending_enqueue(store)
+        st2 = TD.stats(store)
+        assert st2["sem_execucao_recuperavel"] == 0
+        assert st2["bloqueadas"] == 2, "bloqueada nao vira item de execucao"
+
+
+def test_p1_3_decisao_finalizada_nao_regride(tmp_path):
+    """Item `done` + decision `executed`: o motor reencontra a decisao e ela fica."""
+    db = str(tmp_path / "regress.db")
+    with Storage(db) as store:
+        d = _decisao()
+        TD.persist_decision(store, d)
+        TD.enqueue_execution(store, d)
+        store.mark_title_decision_enqueued(d.decision_id, status="executed")
+        store.conn.execute(
+            "UPDATE lane_queue SET status='done' WHERE work_item_id = ?",
+            (d.decision_id,))
+        store.conn.commit()
+
+        res = TD.enqueue_execution(store, d)
+        assert res["enfileirado"] is False
+        assert res["nao_regrediu"] is True
+        assert res["item_status"] == "done"
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
+        assert LaneQueue(store).stats(lane="title_execution")["done"] == 1
+        assert store.title_decision(d.decision_id)["status"] == "executed", (
+            "estado terminal nao pode regredir para `enqueued`")
+
+
+def test_p1_3_item_vivo_confirma_enqueued(tmp_path):
+    """Item ainda `pending`: confirmar `enqueued` e' correto, sem duplicar item."""
+    db = str(tmp_path / "vivo.db")
+    with Storage(db) as store:
+        d = _decisao()
+        TD.persist_decision(store, d)
+        TD.enqueue_execution(store, d)
+        store.mark_title_decision_enqueued(d.decision_id, status="decided")
+        res = TD.enqueue_execution(store, d)
+        assert res["enfileirado"] is False
+        assert res["item_status"] == "pending"
+        assert res["status_confirmado"] is True
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+        assert store.title_decision(d.decision_id)["status"] == "enqueued"
+
+
+def test_p1_3_guard_do_storage_impede_regressao_direta(tmp_path):
+    """Defesa em profundidade: `mark_..._enqueued` nao regride estado terminal."""
+    db = str(tmp_path / "guard.db")
+    with Storage(db) as store:
+        d = _decisao()
+        TD.persist_decision(store, d)
+        store.mark_title_decision_enqueued(d.decision_id, status="executed")
+        store.mark_title_decision_enqueued(d.decision_id, status="enqueued")
+        assert store.title_decision(d.decision_id)["status"] == "executed"
+
+
+def test_hardening_confidence_ausente_e_fail_closed(tmp_path):
+    """Confianca ausente NAO pode liberar escrita automatica (fail-closed)."""
+    db = str(tmp_path / "conf.db")
+    with Storage(db) as store:
+        d = _decisao(confidence=None)
+        assert TD.production_ready(d) == (False, TD.NOT_EXEC_MISSING_CONFIDENCE)
+        assert TD.persist_decision(store, d)["executavel"] is False
+        res = TD.enqueue_execution(store, d)
+        assert res["enfileirado"] is False
+        assert res["motivo"] == TD.NOT_EXEC_MISSING_CONFIDENCE
+        salva = store.title_decision(d.decision_id)
+        assert salva is not None, "a decisao continua persistida"
+        assert salva["not_executable_reason"] == TD.NOT_EXEC_MISSING_CONFIDENCE
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
+
+
+def test_hardening_limpar_o_motivo_devolve_ao_reconciliavel(tmp_path):
+    """Decisao que passa a satisfazer os gates volta sozinha ao fluxo."""
+    db = str(tmp_path / "limpa.db")
+    with Storage(db) as store:
+        sem_conf = _decisao(confidence=None)
+        TD.persist_decision(store, sem_conf)
+        assert TD.stats(store)["bloqueadas"] == 1
+        assert TD.reconcile_pending_enqueue(store)["reconciliados"] == 0
+
+        com_conf = _decisao(confidence=0.8)          # MESMA acao, agora confiavel
+        assert com_conf.decision_id == sem_conf.decision_id, (
+            "confidence nao faz parte da acao")
+        TD.persist_decision(store, com_conf)
+        assert store.title_decision(com_conf.decision_id)[
+            "not_executable_reason"] is None, "o motivo tem de ser limpo"
+        assert TD.stats(store)["bloqueadas"] == 0
+        assert TD.reconcile_pending_enqueue(store)["reconciliados"] == 1
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
