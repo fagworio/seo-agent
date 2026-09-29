@@ -89,21 +89,42 @@ def test_etapa_b_exige_caixa_humana():
 
 
 def test_etapa_c_automatiza_apenas_caso_seguro():
+    """Etapa C: em `auto` o motor escreve o caso que ELE decidiu.
+
+    DIRETRIZ 2026-09-28 (dono): "o ciclo e incremental de 200 em 200 ... nunca
+    parar e bloquear a fila. Mesmo se o titulo nao tiver uma boa selecao. O
+    objetivo e sempre continuar o fluxo". O gate de DECISAO (`review_title`)
+    continua obrigatorio; o que saiu daqui foi a exigencia de
+    `historical_success.sufficient` (nunca verdadeiro com weights_version=0) e o
+    `risk == low` (dependia de coverage_gain >= 0.15, inalcancavel) — juntos,
+    travavam 100% das escritas mesmo em modo `auto`.
+    """
     seguro = _new_contract()
     policy = rollout_policy(seguro, mode=MODE_AUTO,
                             historical_success={"sufficient": True})
-    assert policy["writes_allowed"] is True and policy["risk"] == "low"
+    assert policy["writes_allowed"] is True
 
+    # historico insuficiente deixou de bloquear (com weights_version=0 ele
+    # nunca fica suficiente: era uma trava morta, nao uma protecao).
     sem_historico = rollout_policy(seguro, mode=MODE_AUTO,
                                   historical_success={"sufficient": False})
-    assert sem_historico["writes_allowed"] is False
-    assert sem_historico["approval_required"] is True
+    assert sem_historico["writes_allowed"] is True
 
+    # confianca media tambem escreve: a decisao ja passou pela cadeia completa
+    # de evidencia e pelo _covered.
     confianca_media = rollout_policy(_new_contract(confidence="medium"),
                                      mode=MODE_AUTO,
                                      historical_success={"sufficient": True})
-    assert confianca_media["writes_allowed"] is False
+    assert confianca_media["writes_allowed"] is True
 
+    # confianca BAIXA continua caindo na caixa humana (revisao do dono).
+    confianca_baixa = rollout_policy(_new_contract(confidence="low"),
+                                     mode=MODE_AUTO,
+                                     historical_success={"sufficient": True})
+    assert confianca_baixa["writes_allowed"] is False
+    assert confianca_baixa["approval_required"] is True
+
+    # o gate de DECISAO segue valendo: sem review_title nao ha escrita.
     sem_decisao = rollout_policy(_new_contract(decision="no_title_change"),
                                  mode=MODE_AUTO,
                                  historical_success={"sufficient": True})

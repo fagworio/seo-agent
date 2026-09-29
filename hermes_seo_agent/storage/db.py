@@ -3306,8 +3306,20 @@ class Storage:
         # antiga usava `dirty = 1` puro e ignorava `next_audit_at`: uma URL que
         # falhou voltava a cada ciclo (2h) e martelava o servidor, ainda que o
         # backoff 1h/6h/24h/3d estivesse gravado.
+        #
+        # DIRETRIZ DE FLUXO (2026-09-28, dono): "o ciclo e incremental de 200 em
+        # 200 ... nunca parar e bloquear a fila". O P2 sem teto consumia TODAS as
+        # vagas: medido no ciclo cycle-9c66eda1f7ae, `incremental: 200 /
+        # sweep: 0` — as ~1.9k URLs que falham SEMPRE (as /post-N/ legadas em
+        # HTTP 404) reocupavam a janela inteira a cada ciclo e o rodizio nunca
+        # rodava (o `fresh` caiu 13.016 -> 11.121 no mesmo dia, sem uma unica
+        # pagina sa ser reauditada). Agora o trilho de falhas tem teto de metade
+        # do lote: as mudancas reais (P0/P1) seguem com precedencia TOTAL e
+        # rodizio ganha vaga garantida — a fila anda nos dois trilhos sem parar.
+        teto_expresso = max(1, limit // 2)
         p2 = _rows("dirty = 1 AND dirty_reason = 'previous_failure' "
-                   "AND (next_audit_at IS NULL OR next_audit_at <= ?)", (now,), vagas)
+                   "AND (next_audit_at IS NULL OR next_audit_at <= ?)", (now,),
+                   min(vagas, teto_expresso))
         vagas -= len(p2)
         if vagas <= 0:
             return p0 + p1 + p2
