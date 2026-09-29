@@ -34,20 +34,24 @@ def _db_path() -> str:
     return load_config().sqlite_path
 
 
-def handler_technical(item: dict[str, Any]) -> dict[str, Any]:
+def handler_technical(item: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """Fecha o loop de ações executadas sem outcome (idempotente, sem WordPress).
 
     O item carrega o teto em `payload["limit"]` (default 50). O que importa não é
     o item isolado — é o tick: cada rodada recupera até `limit` ações executadas
     que ficaram sem medição e fecha a Caixa delas.
+
+    Usa o `ctx.db_path` quando disponível: o efeito tem de cair no MESMO banco que
+    o worker claimou. Só cai no `load_config()` para chamadas fora do worker.
     """
     from hermes_seo_agent.storage.db import Storage
 
     payload = item.get("payload") or {}
     limite = int(payload.get("limit", 50)) if isinstance(payload, dict) else 50
     limite = P.normalize_limit(limite) or 50
+    db_path = getattr(ctx, "db_path", None) or _db_path()
 
-    with Storage(_db_path()) as store:
+    with Storage(db_path) as store:
         pendentes_antes = len(store.executed_without_outcome(limit=limite))
         if pendentes_antes == 0:
             # Nada a reconciliar: trabalho cumprido, sem efeito (vira `done`).

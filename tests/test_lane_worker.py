@@ -218,12 +218,29 @@ def test_max_items_respeita_o_teto(tmp_path):
     db = str(tmp_path / "teto.db")
     _povoar(db, LANE, 10)
     with Storage(db) as store:
+        # limit=0 (ilimitado) + max_items=5: o teto do chamador manda
         run = LaneWorker(store, LANE, worker_id="w", handler=lambda i: {"ok": 1},
                          heartbeat=False, recover_first=False,
-                         limit=3, max_items=5).run()
+                         limit=0, max_items=5).run()
     assert run.claimed == 5
     with Storage(db) as store:
         assert LaneQueue(store).stats(lane=LANE)["pending"] == 5
+
+
+def test_teto_da_lane_limita_a_rodada(tmp_path):
+    """O teto da lane e o "por ciclo" do backpressure: limita a RODADA inteira.
+
+    Se fosse por lote, o worker em loop levaria a lane toda e o teto nao valeria.
+    """
+    db = str(tmp_path / "tetolane.db")
+    _povoar(db, LANE, 10)
+    with Storage(db) as store:
+        run = LaneWorker(store, LANE, worker_id="w", handler=lambda i: {"ok": 1},
+                         heartbeat=False, recover_first=False,
+                         limit=3).run()
+        st = LaneQueue(store).stats(lane=LANE)
+    assert run.claimed == 3, "10 itens com teto 3 => apenas 3 nesta rodada"
+    assert st["pending"] == 7
 
 
 def test_recover_first_devolve_lease_abandonado(tmp_path):
@@ -260,3 +277,172 @@ def test_run_lane_conveniencia_e_telemetria(tmp_path):
     assert "oldest_pending_age_seconds" in out["stats"], (
         "observabilidade obrigatoria: oldest_pending_age na telemetria")
     assert LANE in registered_lanes()
+
+
+# ---------------------------------------------------------------------------
+# 5. correcoes da revisao (P1.1, P1.2, P1.3, P1.4, P2)
+# ---------------------------------------------------------------------------
+
+class _Cfg:
+    """Config minima: o worker le `lane_limits` / `lane_limit_<lane>`."""
+    def __init__(self, **kw):
+        self.lane_limits = kw.pop("lane_limits", {})
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def test_p11_lane_limit_vem_da_config(tmp_path):
+    """P1.1 — o teto por lane tem de sair da CONFIG, nao do default do mapa."""
+    db = str(tmp_path / "cfg.db")
+    _povoar(db, LANE, 5)
+    with Storage(db) as store:
+        # default do mapa para `technical` e 50
+        w_default = LaneWorker(store, LANE, handler=lambda i: None)
+        assert w_default.limit == 50, "sem config, cai no default do mapa"
+
+        # `lane_limits[lane]` tem precedencia
+        cfg = _Cfg(lane_limits={LANE: 2})
+        assert LaneWorker(store, LANE, handler=lambda i: None,
+                          config=cfg).limit == 2
+
+        # `lane_limit_<lane>` tambem e respeitado
+        cfg2 = _Cfg(lane_limit_technical=7)
+        assert LaneWorker(store, LANE, handler=lambda i: None,
+                          config=cfg2).limit == 7
+
+        # limite explicito continua mandando sobre a config
+        assert LaneWorker(store, LANE, handler=lambda i: None, limit=3,
+                          config=cfg).limit == 3
+
+        # e o teto da config LIMITA o claim de verdade
+        w = LaneWorker(store, LANE, handler=lambda i: {"ok": 1}, config=cfg,
+                       heartbeat=False, recover_first=False)
+        run = w.run()
+        assert run.claimed == 2, "o teto da config tem de valer no claim"
+        assert LaneQueue(store).stats(lane=LANE)["pending"] == 3
+
+
+def test_p12_limit_zero_com_max_items_respeita_o_teto(tmp_path):
+    """P1.2 — `limit=0` (ilimitado) + `max_items=5` nao pode levar a fila inteira.
+
+    `min(0, 5) = 0` -> normalizado vira "sem LIMIT" -> levaria os 20.
+    """
+    db = str(tmp_path / "tetozero.db")
+    _povoar(db, LANE, 20)
+    with Storage(db) as store:
+        run = LaneWorker(store, LANE, worker_id="w", handler=lambda i: {"ok": 1},
+                         heartbeat=False, recover_first=False,
+                         limit=0, max_items=5).run()
+        st = LaneQueue(store).stats(lane=LANE)
+    assert run.claimed == 5, "max_items tem de vencer o ilimitado"
+    assert st["pending"] == 15, "15 tem de continuar na fila"
+    assert st["done"] == 5
+
+
+def test_p12_teto_composto(tmp_path):
+    """O helper `teto()` cobre a composicao sem precisar de banco."""
+    db = str(tmp_path / "lote2.db")
+    with Storage(db) as store:
+        w = LaneWorker(store, LANE, handler=lambda i: None, limit=0)
+        assert w.teto(0) is None, "0 = ilimitado quando nao ha max_items"
+        w1 = LaneWorker(store, LANE, handler=lambda i: None, limit=0, max_items=5)
+        assert w1.teto(0) == 5, "sem limite de lane, max_items manda"
+        assert w1.teto(3) == 2, "ja claimados descontam do teto"
+        assert w1.teto(5) == 0, "atingiu o teto: nada a fazer"
+        assert w1.teto(9) == 0, "nunca negativo"
+        w2 = LaneWorker(store, LANE, handler=lambda i: None, limit=3)
+        assert w2.teto(0) == 3
+        assert w2.teto(1) == 2
+        assert w2.teto(3) == 0
+        w3 = LaneWorker(store, LANE, handler=lambda i: None, limit=10, max_items=4)
+        assert w3.teto(0) == 4, "o menor teto vence"
+
+
+def test_p13_primeira_renovacao_e_sincronizada(tmp_path):
+    """P1.3 — `start()` so libera o handler apos a 1a renovacao CONFIRMADA."""
+    from hermes_seo_agent.lanes.worker import _Heartbeat
+
+    # banco inalcancavel: a thread nao consegue renovar -> start() tem de recusar
+    hb = _Heartbeat("/proc/nao-existe-dir/x.db", "wi", "w", 1, 2)
+    assert hb.start() is False, "sem 1a renovacao confirmada, nao pode liberar"
+    assert hb.first_ok is False
+    assert hb.error, "o motivo tem de ficar visivel (nao engolido)"
+    hb.stop()
+
+
+def test_p13_handler_nao_roda_sem_posse_confirmada(tmp_path):
+    """Se a 1a renovacao falha, o handler NAO e executado e o item fica recuperavel."""
+    db = str(tmp_path / "hb_nega.db")
+    _povoar(db, LANE, 1)
+    efeitos: list[int] = []
+    with Storage(db) as store:
+        w = LaneWorker(store, LANE, worker_id="w", handler=lambda i: efeitos.append(1),
+                       heartbeat=True, recover_first=False, lease_seconds=1)
+        # aponta o heartbeat para um banco impossivel, mantendo o do worker
+        original = w.store.path
+        w.store.path = "/proc/nao-existe-dir/x.db"
+        run = w.run()
+        w.store.path = original
+        st = LaneQueue(store).stats(lane=LANE)
+    assert efeitos == [], "handler nao pode rodar sem posse confirmada"
+    assert run.lost_lease == 1
+    assert run.heartbeat_error, "erro do heartbeat tem de aparecer na telemetria"
+    assert st["claimed"] + st["executing"] == 1, (
+        "o item NAO pode ficar done: seguiu sob lease para recuperacao bounded")
+
+
+def test_p14_erro_nao_transitorio_nao_tem_retry():
+    """P1.4 — so contencao de SQLite justifica retry; o resto nao se engole."""
+    import sqlite3
+
+    from hermes_seo_agent.lanes.worker import _transitorio
+
+    assert _transitorio(sqlite3.OperationalError("database is locked")) is True
+    assert _transitorio(sqlite3.OperationalError("database table is busy")) is True
+    assert _transitorio(sqlite3.OperationalError("no such table: lane_queue")) is False
+    assert _transitorio(sqlite3.DatabaseError("file is not a database")) is False
+    assert _transitorio(ValueError("programming error")) is False
+    assert _transitorio(RuntimeError("erro interno do LaneQueue")) is False
+
+
+def test_p2_handler_recebe_ctx_com_o_db_path_do_worker(tmp_path):
+    """P2 — o handler age no MESMO banco do worker, nunca em outro."""
+    db = str(tmp_path / "ctx.db")
+    _povoar(db, LANE, 1)
+    visto: dict[str, object] = {}
+
+    def handler(item, ctx):
+        visto["db_path"] = ctx.db_path
+        visto["lane"] = ctx.lane
+        visto["work_item_id"] = ctx.work_item_id
+        visto["lease_version"] = ctx.lease_version
+        return {"ok": True}
+
+    with Storage(db) as store:
+        run = LaneWorker(store, LANE, worker_id="w", handler=handler,
+                         heartbeat=False, recover_first=False).run()
+        assert run.completed == 1
+        assert visto["db_path"] == str(store.path), "ctx tem de carregar o db do worker"
+    assert visto["lane"] == LANE
+    assert visto["work_item_id"] == "wi-0"
+    assert visto["lease_version"] == 1
+
+
+def test_p2_handler_technical_usa_o_ctx(tmp_path, monkeypatch):
+    """O handler real honra o ctx (e nao cai no load_config quando ha ctx)."""
+    from hermes_seo_agent.lanes.handlers import handler_technical
+
+    db = str(tmp_path / "tech_ctx.db")
+    with Storage(db) as store:                      # cria o schema
+        LaneQueue(store).stats(lane=LANE)
+
+    class Ctx:
+        db_path = db
+
+    # aponte o env para OUTRO banco: se o handler ignorasse o ctx, iria para la
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "outro_banco.db"))
+    out = handler_technical({"work_item_id": "t-1", "payload": {"limit": 5}}, Ctx())
+    assert out.get("skip") is True, "banco vazio: nada a reconciliar"
+    from pathlib import Path
+    assert not Path(tmp_path / "outro_banco.db").exists(), (
+        "handler nao pode abrir banco diferente do ctx do worker")

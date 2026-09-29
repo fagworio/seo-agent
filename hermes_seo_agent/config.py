@@ -110,6 +110,19 @@ class Config:
     # State
     sqlite_path: str = "./state/seo_agent.db"
 
+    # Sprint 2 (item 5) — backpressure por lane: teto PRÓPRIO de cada lane.
+    # Precedência em `policy.lane_limit`: `lane_limits[lane]` > `lane_limit_<lane>`
+    # > default do mapa. `0` = ILIMITADO (nunca um `LIMIT 0`). Existe porque
+    # ajustar o teto de uma lane não pode mexer nas outras — e porque um teto que
+    # não é config não é backpressure configurável.
+    lane_limits: dict[str, int] = field(default_factory=dict)
+    lane_limit_audit: int | None = None
+    lane_limit_title_decision: int | None = None
+    lane_limit_title_execution: int | None = None
+    lane_limit_measurement: int | None = None
+    lane_limit_dead_url: int | None = None
+    lane_limit_technical: int | None = None
+
     # Control plane auth (sessão server-side, cookie HttpOnly)
     session_idle_seconds: int = 8 * 3600        # idle timeout
     session_absolute_seconds: int = 7 * 24 * 3600  # absolute timeout
@@ -150,6 +163,47 @@ def _bool(name: str, default: bool) -> bool:
     if value.lower() in {"0", "false", "no", "off"}:
         return False
     raise ConfigError(f"{name} must be a boolean")
+
+
+def _int_opt(name: str) -> int | None:
+    """Inteiro OPCIONAL: ausente/vazio => None, para a precedência decidir.
+
+    Diferente de `_int`, não impõe default: `None` permite que
+    `policy.lane_limit` caia no mapa de defaults em vez de congelar um número.
+    """
+    value = _env(name)
+    if not value:
+        return None
+    try:
+        return max(0, int(value))
+    except ValueError:
+        raise ConfigError(f"{name} must be an integer") from None
+
+
+def _lane_limits() -> dict[str, int]:
+    """`LANE_LIMITS="audit=200,title_execution=10"` -> `{"audit": 200, ...}`.
+
+    Formato `lane=valor` separado por vírgula (não JSON) porque é o que se escreve
+    à mão no `.env`. Valor inválido é ERRO, não silêncio: teto de lane errado é
+    backpressure errada, e backpressure errada é o que este sprint existe para
+    evitar.
+    """
+    raw = _env("LANE_LIMITS")
+    if not raw:
+        return {}
+    out: dict[str, int] = {}
+    for parte in raw.split(","):
+        parte = parte.strip()
+        if not parte:
+            continue
+        if "=" not in parte:
+            raise ConfigError(f'LANE_LIMITS: "{parte}" deve ser lane=valor')
+        lane, _, valor = parte.partition("=")
+        try:
+            out[lane.strip()] = max(0, int(valor.strip()))
+        except ValueError:
+            raise ConfigError(f'LANE_LIMITS: valor invalido em "{parte}"') from None
+    return out
 
 
 def _int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -289,6 +343,14 @@ def load_config() -> Config:
         coverage_sweep_per_run=_int("COVERAGE_SWEEP_PER_RUN", 100, 0, 100_000),
         max_safe_fix_per_cycle=_int("MAX_SAFE_FIX_PER_CYCLE", 10, 0, 1000),
         sqlite_path=_env("SQLITE_PATH", "./state/seo_agent.db"),
+        # Sprint 2 (item 5): backpressure por lane, configurável de verdade.
+        lane_limits=_lane_limits(),
+        lane_limit_audit=_int_opt("LANE_LIMIT_AUDIT"),
+        lane_limit_title_decision=_int_opt("LANE_LIMIT_TITLE_DECISION"),
+        lane_limit_title_execution=_int_opt("LANE_LIMIT_TITLE_EXECUTION"),
+        lane_limit_measurement=_int_opt("LANE_LIMIT_MEASUREMENT"),
+        lane_limit_dead_url=_int_opt("LANE_LIMIT_DEAD_URL"),
+        lane_limit_technical=_int_opt("LANE_LIMIT_TECHNICAL"),
         session_idle_seconds=_int("SESSION_IDLE_SECONDS", 8 * 3600, 60, 30 * 24 * 3600),
         session_absolute_seconds=_int(
             "SESSION_ABSOLUTE_SECONDS", 7 * 24 * 3600, 60, 365 * 24 * 3600

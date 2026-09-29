@@ -21,8 +21,8 @@ from hermes_seo_agent.lanes.policy import (  # noqa: F401  (reexport de conveni√
 )
 from hermes_seo_agent.lanes.queue import MAX_RECOVERIES, LaneQueue  # noqa: F401
 from hermes_seo_agent.lanes.worker import (  # noqa: F401  (item 5: workers)
-    HANDLERS, LaneRun, LaneWorker, SkipItem, get_handler, register_handler,
-    registered_lanes, run_lane,
+    HANDLERS, HandlerContext, LaneRun, LaneWorker, SkipItem, get_handler,
+    register_handler, registered_lanes, run_lane,
 )
 
 __all__ = [

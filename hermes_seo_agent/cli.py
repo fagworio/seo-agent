@@ -702,7 +702,7 @@ def _cmd_lanes_run(args: argparse.Namespace, config: Any) -> int:
     Recusa rodar lane sem handler: o handler e o EFEITO, e so entra quando for
     seguro sem humano. Sem isso, 'worker' viraria improviso.
     """
-    from hermes_seo_agent.lanes import registered_lanes, run_lane
+    from hermes_seo_agent.lanes import lane_limit, registered_lanes, run_lane
     from hermes_seo_agent.lanes.handlers import register_default_handlers
 
     register_default_handlers()
@@ -717,10 +717,15 @@ def _cmd_lanes_run(args: argparse.Namespace, config: Any) -> int:
         }, indent=2, ensure_ascii=False))
         return 2
 
+    # `--limit` explícito manda; sem ele o teto vem da CONFIG por lane. O worker
+    # não pode decidir isso sozinho: `lane_limit(lane)` sem config sempre caía no
+    # default do mapa, e o backpressure configurável por lane não existia.
+    effective_limit = (args.limit if args.limit is not None
+                       else lane_limit(lane, config))
     out = run_lane(config.sqlite_path, lane, worker_id=args.worker_id,
-                   lease_seconds=args.lease_seconds, limit=args.limit,
+                   lease_seconds=args.lease_seconds, limit=effective_limit,
                    max_items=args.max_items,
-                   heartbeat=not args.no_heartbeat)
+                   heartbeat=not args.no_heartbeat, config=config)
     if getattr(args, "json", False):
         print(json.dumps(out, indent=2, ensure_ascii=False, default=str))
     else:
