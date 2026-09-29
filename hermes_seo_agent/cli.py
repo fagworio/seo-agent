@@ -2682,6 +2682,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                         "skipped": len(outcome.get("skipped") or []),
                         "unverified": len(outcome.get("unverified") or []),
                         "dry_run": outcome.get("dry_run"),
+                        # as URLs saem daqui para fechar a Caixa (Fase 10)
+                        "executed_urls": [a.get("url") for a in
+                                          (outcome.get("executed") or [])],
                     }
                     published_count = len(outcome.get("executed") or [])
                 except Exception as exc:
@@ -2691,6 +2694,34 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                         "error": f"{type(exc).__name__}: {exc}"}
                     warnings.append(
                         f"executor de titulos falhou: {type(exc).__name__}: {exc}")
+        # FASE 10 (roadmap) — LIFECYCLE: o item resolvido sai da Caixa.
+        # Sem isto a URL ficava 'pending' para sempre: o motor a re-analisava a
+        # cada ciclo (o skip por pendencia existia para conter esse churn) e a
+        # fila so crescia (+377 num unico dia). Agora:
+        #   - executado no WordPress  -> status 'done'
+        #   - motor analisou e nao ha mudanca a fazer -> 'superseded'
+        #   - gather_more_data / confianca low -> continua 'pending' (dados/humano)
+        try:
+            import datetime as _dt_life
+
+            executadas = [str(u) for u in
+                          ((write_summary.get("executor") or {}).get("executed_urls")
+                           or []) if u]
+            sem_mudanca = [c.get("url") for c in contracts
+                           if c.get("decision") == "no_title_change" and c.get("url")]
+            fechados = {"done": 0, "superseded": 0}
+            if executadas or sem_mudanca:
+                agora = _dt_life.datetime.now(_dt_life.timezone.utc).isoformat()
+                with Storage(config.sqlite_path) as store_life:
+                    fechados["done"] = store_life.close_title_checklist(
+                        executadas, status="done", when=agora)
+                    fechados["superseded"] = store_life.close_title_checklist(
+                        sem_mudanca, status="superseded", when=agora)
+            write_summary["closed_checklist"] = fechados
+        except Exception as exc:
+            # Regra principal: o lifecycle nao derruba o ciclo.
+            warnings.append(
+                f"lifecycle da Caixa falhou: {type(exc).__name__}: {exc}")
         write_result = write_summary
 
     result = {

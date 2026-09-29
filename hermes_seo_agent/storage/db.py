@@ -1557,6 +1557,37 @@ class Storage:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def close_title_checklist(self, urls: list[str], *, status: str,
+                              when: str) -> int:
+        """FASE 10 (roadmap) — lifecycle: o item resolvido SAI da Caixa.
+
+        Sem isto a URL ficava 'pending' para sempre: o motor a re-analisava a cada
+        ciclo (o skip por pendencia existia justamente para conter esse churn) e
+        nada saia da fila — a Caixa so crescia (+377 num unico dia).
+
+        `status`:
+          - 'done'       -> decisao executada no WordPress
+          - 'superseded' -> motor analisou e NAO ha mudanca a fazer
+
+        Nunca toca em 'title_regression': esse item e a RETRIAGEM (o titulo
+        aplicado piorou) e precisa continuar pendente para reabrir a URL.
+        Devolve quantos itens foram fechados.
+        """
+        if not urls or status not in ("done", "superseded"):
+            return 0
+        total = 0
+        for url in urls:
+            cur = self.conn.execute(
+                "UPDATE improvement_checklist SET status = ?, done_at = ?, "
+                "responsible = COALESCE(responsible, 'title_engine') "
+                "WHERE url = ? AND status = 'pending' "
+                "AND (item LIKE '%title%' OR item = 'title_opportunity') "
+                "AND item <> 'title_regression'",
+                (status, when, url))
+            total += cur.rowcount or 0
+        self.conn.commit()
+        return total
+
     def title_review_skippable(self, url: str, *, measurement_days: int,
                                ignore_pending_review: bool = False) -> tuple[bool, str]:
         """Uma URL NÃO deve ser re-analisada para título se já está em revisão ou

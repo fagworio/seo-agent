@@ -243,3 +243,62 @@ def test_medicao_em_andamento_continua_bloqueando(tmp_path):
             "https://www.unicorniohater.com.br/medindo/", measurement_days=28,
             ignore_pending_review=True)
         assert skip is True and "tratado" in reason
+
+
+# --- FASE 10: lifecycle (o item resolvido sai da Caixa) -------------------
+
+def test_lifecycle_fecha_executado_e_supersede_sem_mudanca(tmp_path):
+    """FASE 10: executado vira 'done'; sem mudanca a fazer vira 'superseded'.
+
+    Antes o item ficava 'pending' para sempre: o motor re-analisava a mesma URL
+    a cada ciclo e a Caixa so crescia.
+    """
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "life.db")) as store:
+        for url in ("https://x.com/executado/", "https://x.com/sem-mudanca/"):
+            store.conn.execute(
+                "INSERT INTO improvement_checklist (url, item, status, created_at) "
+                "VALUES (?, 'title_meta', 'pending', '2026-09-01')", (url,))
+        store.conn.commit()
+
+        assert store.close_title_checklist(
+            ["https://x.com/executado/"], status="done",
+            when="2026-09-29T00:00:00+00:00") == 1
+        assert store.close_title_checklist(
+            ["https://x.com/sem-mudanca/"], status="superseded",
+            when="2026-09-29T00:00:00+00:00") == 1
+
+        rows = dict(store.conn.execute(
+            "SELECT url, status FROM improvement_checklist").fetchall())
+        assert rows["https://x.com/executado/"] == "done"
+        assert rows["https://x.com/sem-mudanca/"] == "superseded"
+
+
+def test_lifecycle_nunca_fecha_a_retriagem(tmp_path):
+    """'title_regression' (retriagem) fica pendente: e o que reabre a URL."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "reg.db")) as store:
+        store.conn.execute(
+            "INSERT INTO improvement_checklist (url, item, status, created_at) "
+            "VALUES (?, 'title_regression', 'pending', '2026-09-01')",
+            ("https://x.com/piorou/",))
+        store.conn.commit()
+        assert store.close_title_checklist(
+            ["https://x.com/piorou/"], status="superseded",
+            when="2026-09-29T00:00:00+00:00") == 0
+        status = store.conn.execute(
+            "SELECT status FROM improvement_checklist WHERE url = ?",
+            ("https://x.com/piorou/",)).fetchone()[0]
+        assert status == "pending"
+
+
+def test_lifecycle_ignora_status_invalido(tmp_path):
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "inv.db")) as store:
+        assert store.close_title_checklist(["https://x.com/a/"], status="pending",
+                                           when="2026-09-29T00:00:00+00:00") == 0
+        assert store.close_title_checklist([], status="done",
+                                           when="2026-09-29T00:00:00+00:00") == 0
