@@ -2400,11 +2400,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     # recusou". Sao hipoteses opostas sobre onde esta' o gargalo, e o
     # `candidate_failed_reason` sozinho nao separa as duas.
     funil: dict[str, Any] = {
-        "combinacoes": 0, "titulos_gerados": 0, "titulos_validos": 0,
+        "evaluator_calls": 0, "titulos_gerados": 0, "titulos_validos": 0,
         "titulos_descartados": 0, "violacoes": {}, "finalizer_com_best": 0,
-        "finalizer_sem_best": 0,
-        "semantica": {"scopes": {}, "familias": 0,
-                      "familias_com_semantica": 0, "campos_nao_nulos": 0},
+        "finalizer_sem_best": 0, "invariantes_quebradas": {},
+        # 7A.2.3 (A/B/C) — o agregado global NAO permite correlacionar "houve 15
+        # best" com "esta URL ficou sem suggested_titles": sao paginas diferentes.
+        # `por_url` guarda o rastro de cada URL para a correlacao ser verificavel.
+        "por_url": [],
+        "semantica_geral": {"scopes": {}, "familias": 0, "com_semantica": 0,
+                            "campos_nao_nulos": 0, "erros": {}},
     }
     from .tools.title_opportunities import empirical_title_case, entity_of, strategic_title
 
@@ -2608,6 +2612,45 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             shares = {f["family"]: f["share"] for f in demand["families"]}
             coverage = title_coverage(current, demand["families"], shares=shares)
             relevant = relevant_families(demand, top_n=top_n)
+            # 7A.2.3 (A) — diagnostico UPSTREAM por URL. O agregado global nao separa
+            # "poucas combinacoes" de "muitas URLs sem familia relevante":
+            # `_evaluate_title` so' e' chamado para o `best` JA' escolhido, entao o
+            # contador conta PAGINAS que chegaram ao evaluator, nao combinacoes.
+            # `relevant_empty_reason` separa classificacao de intencao, share e
+            # combinatorio — a hipotese a testar e' que o alvo esta' em
+            # `relevant_families`, nao em `combination_candidates`.
+            _fam_all = demand["families"] or []
+            _especificas = [f for f in _fam_all
+                            if str(f.get("intent") or "").strip().lower() != "geral"]
+            _genericas = [f for f in _fam_all if f not in _especificas]
+            if relevant:
+                _motivo_vazio = None
+            elif not _fam_all:
+                _motivo_vazio = "no_families"
+            elif not _especificas:
+                _motivo_vazio = "only_generic"
+            else:
+                _motivo_vazio = "all_specific_below_min_share"
+            diag: dict[str, Any] = {
+                "url": url,
+                "families_total": len(_fam_all),
+                "generic_families": len(_genericas),
+                "specific_families": len(_especificas),
+                "specific_above_3pct": sum(
+                    1 for f in _especificas
+                    if f.get("share") is not None
+                    and float(f.get("share") or 0) >= 0.03),
+                "relevant_count": len(relevant),
+                "relevant_empty_reason": _motivo_vazio,
+                "semantic": [],
+                "candidates_total": None, "candidates_valid": None,
+                "candidates_discarded": None,
+                "evaluator_called": False,
+                "finalizer_best": None, "finalizer_titles_count": None,
+                "candidate_exists": None, "candidate_title_options_count": None,
+                "suggested_titles_count": None,
+                "decision": None, "failed_checks": None,
+            }
             entity_meta = resolve_title_entity_detail(page_entity, canonical_entity,
                                                       demand["families"])
             entity = str(entity_meta["value"])
@@ -2638,11 +2681,53 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                         real_signals = build_family_query_signals(
                             store, cluster_signals, family, target_url=url,
                             window_start=signal_ws, window_end=signal_we)
-                        if any(v is not None
-                               for v in (real_signals.get("semantic") or {}).values()):
+                        _sem = real_signals.get("semantic") or {}
+                        _nn = [k for k, v in _sem.items() if v is not None]
+                        if _nn:
                             semantic_measured += 1
-                    except Exception:  # noqa: BLE001
+                        # 7A.2.3 (C) — medido no PONTO REAL, logo apos a chamada. O
+                        # `query_families` do contrato e' uma PROJECAO deliberada
+                        # (family/intent/entity/impressions/share/queries) que nao
+                        # carrega `semantic_scope` nem `semantic`: medir por ali da'
+                        # zero por construcao e nao diz nada sobre o que o builder
+                        # devolveu. `semantic_measured` (que alimenta
+                        # `semantic_evidence`) e' calculado AQUI, antes do contrato.
+                        _sg = funil["semantica_geral"]
+                        _sg["familias"] += 1
+                        _scope = real_signals.get("semantic_scope")
+                        if _scope:
+                            _sg["scopes"][str(_scope)] = _sg["scopes"].get(
+                                str(_scope), 0) + 1
+                        if _nn:
+                            _sg["com_semantica"] += 1
+                        _sg["campos_nao_nulos"] += len(_nn)
+                        diag["semantic"].append({
+                            "family": family.get("family"),
+                            "semantic_scope": _scope,
+                            "semantic_match": real_signals.get("semantic_match"),
+                            "semantic_url": real_signals.get("semantic_url"),
+                            "non_null_fields": len(_nn),
+                            "non_null_names": _nn[:10],
+                            "semantic_note": real_signals.get("semantic_note"),
+                            "semantic_error_type": None,
+                            "semantic_error_message": None})
+                    except Exception as _exc:  # noqa: BLE001
                         real_signals = None
+                        # 7A.2.3 (C) — este `except` engolia a causa: sem registrar o
+                        # erro, "semantica devolveu tudo None" e "o builder levantou"
+                        # ficam indistinguiveis no relatorio — e o caso da excecao e'
+                        # justamente o perigoso, porque produz
+                        # `semantic_evidence=0.0` sem deixar rastro.
+                        _et = type(_exc).__name__
+                        _sg = funil["semantica_geral"]
+                        _sg["erros"][_et] = _sg["erros"].get(_et, 0) + 1
+                        diag["semantic"].append({
+                            "family": family.get("family"),
+                            "semantic_scope": None, "semantic_match": None,
+                            "semantic_url": None, "non_null_fields": 0,
+                            "non_null_names": [], "semantic_note": None,
+                            "semantic_error_type": _et,
+                            "semantic_error_message": str(_exc)[:200]})
                 rankability[family["family"]] = family_rankability(
                     family,
                     query_signals=real_signals or {
@@ -2666,6 +2751,13 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             candidates = combination_candidates(
                 relevant, entity=entity, max_len=max_len,
                 title_terms=_tokens(current))
+            # 7A.2.3 (A) — a fronteira relevant_families -> combinatorio: quantos
+            # candidatos foram produzidos e quantos ja' nasceram descartados.
+            diag["candidates_total"] = len(candidates)
+            diag["candidates_valid"] = sum(
+                1 for _c in candidates if not _c.get("discarded"))
+            diag["candidates_discarded"] = sum(
+                1 for _c in candidates if _c.get("discarded"))
             q_numbers = {n for f in demand["families"]
                          for q in (f.get("queries") or [])
                          for n in _re.findall(r"\d+", q)}
@@ -2694,7 +2786,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 # 7A.2.2 (E) — agrega o funil: quantos titulos o GERADOR produziu,
                 # quantos sao validos e por que os outros cairam. `generate_candidates`
                 # ja' preserva o motivo em `discarded[i]["validation"]["violations"]`.
-                funil["combinacoes"] += 1
+                funil["evaluator_calls"] += 1
+                diag["evaluator_called"] = True
                 _validos = len(generated_titles.get("candidates") or [])
                 _descartados = len(generated_titles.get("discarded") or [])
                 funil["titulos_validos"] += _validos
@@ -2706,6 +2799,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     for _v in ((_d.get("validation") or {}).get("violations") or []):
                         _k = str(_v)
                         funil["violacoes"][_k] = funil["violacoes"].get(_k, 0) + 1
+                diag["finalizer_best"] = bool(outcome.get("best"))
+                diag["finalizer_titles_count"] = len(
+                    outcome.get("titles") or outcome.get("title_options") or [])
                 if outcome.get("best"):
                     funil["finalizer_com_best"] += 1
                 else:
@@ -2758,6 +2854,33 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if candidate_contract.get("title_options"):
                 contract["generation"]["validated"] = len(candidate_contract["title_options"])
                 contract["generation"]["rejected"] = len(candidate_contract.get("titles_rejected") or [])
+            # 7A.2.3 (B) — a invariável `best -> chosen`, por URL. O agregado global
+            # provou "houve 15 best" e "estas URLs ficaram sem suggested_titles", mas
+            # NAO provou que sao as MESMAS URLs. Aqui a correlacao e' verificavel: se o
+            # finalizer escolheu `best`, o contrato tem de carregar candidate,
+            # title_options E suggested_titles. Quebrar aqui e' bug de TRANSPORTE
+            # concreto; nao quebrar significa que o diagnostico anterior correlacionava
+            # paginas diferentes.
+            diag["decision"] = contract.get("decision")
+            _chk = contract.get("checks")
+            _chk = (_chk.get("checks") if isinstance(_chk, dict)
+                    and isinstance(_chk.get("checks"), dict) else _chk)
+            if isinstance(_chk, dict):
+                diag["failed_checks"] = sorted(
+                    str(k) for k, v in _chk.items()
+                    if isinstance(v, dict) and v.get("passed") is False)
+            _viol = None
+            if diag.get("finalizer_best"):
+                if not candidate_contract:
+                    _viol = "candidate_ausente_com_best"
+                elif not (candidate_contract.get("title_options") or []):
+                    _viol = "title_options_vazio_com_best"
+                elif not contract["suggested_titles"]:
+                    _viol = "suggested_titles_vazio_com_best"
+            if _viol:
+                _iq = funil["invariantes_quebradas"]
+                _iq[_viol] = _iq.get(_viol, 0) + 1
+            funil["por_url"].append(diag)
             contracts.append(contract)
 
             if args.shadow:
@@ -2881,28 +3004,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 "source": "title_engine_contract",
             }
             return snap
-
-        # 7A.2.2 (F) — semantica por FAMILIA. Separa "o cluster existe mas a pagina
-        # alvo nao e' mensuravel" (`target_url_unavailable`) de "a pagina e'
-        # mensuravel e os campos voltam vazios" (extracao/corpus). Sem essa medicao,
-        # baixar o EVIDENCE_CONFIDENCE_FLOOR esconderia o problema em vez de
-        # resolve-lo — `corpus_available=1` so' diz que o cluster existe.
-        for _c in (contracts or []):
-            if not isinstance(_c, dict):
-                continue
-            for _fam in (_c.get("query_families") or []):
-                if not isinstance(_fam, dict):
-                    continue
-                _sem = funil["semantica"]
-                _sem["familias"] += 1
-                _sc = _fam.get("semantic_scope")
-                if _sc:
-                    _sem["scopes"][str(_sc)] = _sem["scopes"].get(str(_sc), 0) + 1
-                _campos = [k for k, v in (_fam.get("semantic") or {}).items()
-                           if v is not None]
-                if _campos:
-                    _sem["familias_com_semantica"] += 1
-                _sem["campos_nao_nulos"] += len(_campos)
 
         write_summary: dict[str, Any] = {
             "funil": funil,
