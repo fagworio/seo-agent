@@ -2393,6 +2393,19 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                                       relevant_families,
                                       resolve_title_entity_detail)
     from .report.title_generator import generate_candidates
+
+    # 7A.2.2 (E/F) — instrumentacao do funil. O `generation` que `_evaluate_title`
+    # monta morre dentro do motor, entao o relatorio nao distingue "combinacao
+    # aceita que nao virou titulo valido" de "titulo valido que o finalizer
+    # recusou". Sao hipoteses opostas sobre onde esta' o gargalo, e o
+    # `candidate_failed_reason` sozinho nao separa as duas.
+    funil: dict[str, Any] = {
+        "combinacoes": 0, "titulos_gerados": 0, "titulos_validos": 0,
+        "titulos_descartados": 0, "violacoes": {}, "finalizer_com_best": 0,
+        "finalizer_sem_best": 0,
+        "semantica": {"scopes": {}, "familias": 0,
+                      "familias_com_semantica": 0, "campos_nao_nulos": 0},
+    }
     from .tools.title_opportunities import empirical_title_case, entity_of, strategic_title
 
     import re as _re
@@ -2678,6 +2691,25 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 outcome["generation"] = {"mode": gen_mode, "llm_used": False,
                                          "validated": len(generated_titles["candidates"]),
                                          "discarded": len(generated_titles["discarded"])}
+                # 7A.2.2 (E) — agrega o funil: quantos titulos o GERADOR produziu,
+                # quantos sao validos e por que os outros cairam. `generate_candidates`
+                # ja' preserva o motivo em `discarded[i]["validation"]["violations"]`.
+                funil["combinacoes"] += 1
+                _validos = len(generated_titles.get("candidates") or [])
+                _descartados = len(generated_titles.get("discarded") or [])
+                funil["titulos_validos"] += _validos
+                funil["titulos_descartados"] += _descartados
+                funil["titulos_gerados"] += _validos + _descartados
+                for _d in (generated_titles.get("discarded") or []):
+                    if not isinstance(_d, dict):
+                        continue
+                    for _v in ((_d.get("validation") or {}).get("violations") or []):
+                        _k = str(_v)
+                        funil["violacoes"][_k] = funil["violacoes"].get(_k, 0) + 1
+                if outcome.get("best"):
+                    funil["finalizer_com_best"] += 1
+                else:
+                    funil["finalizer_sem_best"] += 1
                 return outcome
 
             contract = decide_title(
@@ -2850,7 +2882,30 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             }
             return snap
 
+        # 7A.2.2 (F) — semantica por FAMILIA. Separa "o cluster existe mas a pagina
+        # alvo nao e' mensuravel" (`target_url_unavailable`) de "a pagina e'
+        # mensuravel e os campos voltam vazios" (extracao/corpus). Sem essa medicao,
+        # baixar o EVIDENCE_CONFIDENCE_FLOOR esconderia o problema em vez de
+        # resolve-lo — `corpus_available=1` so' diz que o cluster existe.
+        for _c in (contracts or []):
+            if not isinstance(_c, dict):
+                continue
+            for _fam in (_c.get("query_families") or []):
+                if not isinstance(_fam, dict):
+                    continue
+                _sem = funil["semantica"]
+                _sem["familias"] += 1
+                _sc = _fam.get("semantic_scope")
+                if _sc:
+                    _sem["scopes"][str(_sc)] = _sem["scopes"].get(str(_sc), 0) + 1
+                _campos = [k for k, v in (_fam.get("semantic") or {}).items()
+                           if v is not None]
+                if _campos:
+                    _sem["familias_com_semantica"] += 1
+                _sem["campos_nao_nulos"] += len(_campos)
+
         write_summary: dict[str, Any] = {
+            "funil": funil,
             "built": built["counts"]["built"],
             "refused": built["counts"]["skipped"],
             "refused_detail": built["skipped"][:20],
