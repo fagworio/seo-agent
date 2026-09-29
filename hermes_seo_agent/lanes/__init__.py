@@ -20,6 +20,10 @@ from hermes_seo_agent.lanes.policy import (  # noqa: F401  (reexport de conveniÃ
     backoff_seconds, classify_error, lane_limit, normalize_limit, work_item_key,
 )
 from hermes_seo_agent.lanes.queue import MAX_RECOVERIES, LaneQueue  # noqa: F401
+from hermes_seo_agent.lanes.worker import (  # noqa: F401  (item 5: workers)
+    HANDLERS, LaneRun, LaneWorker, SkipItem, get_handler, register_handler,
+    registered_lanes, run_lane,
+)
 
 __all__ = [
     "lanes", "LaneQueue", "MAX_RECOVERIES",
@@ -27,4 +31,7 @@ __all__ = [
     "LANE_MEASUREMENT", "LANE_TECHNICAL", "LANE_TITLE_DECISION",
     "LANE_TITLE_EXECUTION", "backoff_seconds", "classify_error", "lane_limit",
     "work_item_key",
+    # item 5 â€” workers reais por lane
+    "LaneWorker", "LaneRun", "SkipItem", "HANDLERS", "register_handler",
+    "get_handler", "registered_lanes", "run_lane",
 ]

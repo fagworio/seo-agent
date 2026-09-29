@@ -531,6 +531,35 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="force JSON output")
     p.set_defaults(func=_cmd_reconcile_work_items)
 
+    p = sub.add_parser("lanes-status",
+                       help="Sprint 2: estado por lane (pending/claimed/executing/oldest_pending_age)")
+    p.add_argument("--lane", default=None, help="lane especifica (default: todas)")
+    p.add_argument("--json", action="store_true", help="force JSON output")
+    p.set_defaults(func=_cmd_lanes_status)
+
+    p = sub.add_parser("lanes-run",
+                       help="Sprint 2: worker real de UMA lane (claim -> handler -> complete)")
+    p.add_argument("--lane", required=True, help="lane a consumir")
+    p.add_argument("--limit", type=int, default=None,
+                   help="teto por claim (0=ilimitado)")
+    p.add_argument("--max-items", type=int, default=None,
+                   help="teto de itens nesta rodada")
+    p.add_argument("--lease-seconds", type=int, default=300,
+                   help="duracao do lease (o heartbeat renova em lease/3)")
+    p.add_argument("--worker-id", default=None)
+    p.add_argument("--no-heartbeat", action="store_true",
+                   help="NAO recomendado: sem renovar, o lease vence e o item volta")
+    p.add_argument("--json", action="store_true", help="force JSON output")
+    p.set_defaults(func=_cmd_lanes_run)
+
+    p = sub.add_parser("lanes-recover",
+                       help="Sprint 2: devolve a fila os leases expirados (worker morto)")
+    p.add_argument("--lane", default=None, help="lane especifica (default: todas)")
+    p.add_argument("--limit", type=int, default=200,
+                   help="teto da mutacao (0=ilimitado)")
+    p.add_argument("--json", action="store_true", help="force JSON output")
+    p.set_defaults(func=_cmd_lanes_recover)
+
     parser.add_argument("--dry-run", action="store_true", help="no-op; safety posture (default)")
     return parser
 
@@ -637,6 +666,88 @@ def _audit_content_fingerprint(sitemap_entries: list[tuple[str, str]],
         if link:
             parts.append(f"post|{link}|{mod}")
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def _cmd_lanes_status(args: argparse.Namespace, config: Any) -> int:
+    """Sprint 2 (item 5) — observabilidade por lane.
+
+    `oldest_pending_age_seconds` e a metrica principal: uma lane com `pending`
+    alto e idade alta e a assinatura de um deadlock.
+    """
+    from hermes_seo_agent.lanes import LaneQueue
+
+    with Storage(config.sqlite_path) as storage:
+        q = LaneQueue(storage)
+        lane = getattr(args, "lane", None)
+        dados = {lane: q.stats(lane=lane)} if lane else q.stats_all()
+
+    if getattr(args, "json", False):
+        print(json.dumps(dados, indent=2, ensure_ascii=False, default=str))
+        return 0
+    print(f"{'lane':<16} {'pend':>5} {'claim':>5} {'exec':>5} {'retry':>5} "
+          f"{'done':>6} {'stale':>5} {'manual':>6} {'oldest_pending_age':>19}")
+    for nome, s in sorted(dados.items()):
+        idade = s.get("oldest_pending_age_seconds")
+        print(f"{nome:<16} {s.get('pending', 0):>5} {s.get('claimed', 0):>5} "
+              f"{s.get('executing', 0):>5} {s.get('retry', 0):>5} "
+              f"{s.get('done', 0):>6} {s.get('stale', 0):>5} "
+              f"{s.get('manual_review', 0):>6} "
+              f"{idade if idade is not None else '-':>19}")
+    return 0
+
+
+def _cmd_lanes_run(args: argparse.Namespace, config: Any) -> int:
+    """Sprint 2 (item 5) — worker real de UMA lane.
+
+    Recusa rodar lane sem handler: o handler e o EFEITO, e so entra quando for
+    seguro sem humano. Sem isso, 'worker' viraria improviso.
+    """
+    from hermes_seo_agent.lanes import registered_lanes, run_lane
+    from hermes_seo_agent.lanes.handlers import register_default_handlers
+
+    register_default_handlers()
+    lane = args.lane
+    if lane not in registered_lanes():
+        print(json.dumps({
+            "erro": f"lane '{lane}' sem handler registrado",
+            "motivo": ("um handler so entra quando o efeito for seguro sem "
+                       "humano; os proximos sao dos itens 6/7 (dead_url, "
+                       "title_decision, title_execution)"),
+            "lanes_com_handler": registered_lanes(),
+        }, indent=2, ensure_ascii=False))
+        return 2
+
+    out = run_lane(config.sqlite_path, lane, worker_id=args.worker_id,
+                   lease_seconds=args.lease_seconds, limit=args.limit,
+                   max_items=args.max_items,
+                   heartbeat=not args.no_heartbeat)
+    if getattr(args, "json", False):
+        print(json.dumps(out, indent=2, ensure_ascii=False, default=str))
+    else:
+        print(f"lane={out['lane']} worker={out['worker_id']} "
+              f"claimed={out['claimed']} completed={out['completed']} "
+              f"skipped={out['skipped']} failed={out['failed']} "
+              f"lost_lease={out['lost_lease']} recovered={out['recovered']} "
+              f"duration={out['duration_s']}s")
+        for err in out.get("items_com_erro", []):
+            print(f"  ! {err}")
+    return 0 if out["failed"] == 0 and out["lost_lease"] == 0 else 1
+
+
+def _cmd_lanes_recover(args: argparse.Namespace, config: Any) -> int:
+    """Sprint 2 (item 5) — devolve a fila os leases expirados (worker morto)."""
+    from hermes_seo_agent.lanes import LaneQueue
+
+    with Storage(config.sqlite_path) as storage:
+        rec = LaneQueue(storage).recover_expired(lane=getattr(args, "lane", None),
+                                                 limit=args.limit)
+    itens = [str(r.get("work_item_id")) for r in rec if r.get("work_item_id")]
+    if getattr(args, "json", False):
+        print(json.dumps({"total": len(itens), "recuperados": itens},
+                         indent=2, ensure_ascii=False, default=str))
+    else:
+        print(f"recuperados={len(itens)}: {', '.join(itens[:20]) or '(nada)'}")
+    return 0
 
 
 def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
