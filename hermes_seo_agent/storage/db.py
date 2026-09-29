@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -658,6 +658,27 @@ CREATE INDEX IF NOT EXISTS idx_url_audit_last_audited ON url_audit_state(last_au
 --     reanalisar a URL (substitui o `ignore_pending_review=True`).
 --   `next_attempt_at` + `error_class`: retry com backoff classificado
 --     (retryable|terminal|stale|manual_review) — nunca "falhou, tenta de novo ja".
+-- Sprint 2, item 6: estado das URLs mortas (404/410). Persiste a CLASSIFICACAO e o
+-- motivo, para o audit poder exclui-las e para a decisao ser reconstruivel depois.
+-- `action_fingerprint` e' do mesmo padrao do closed loop (identidade da ACAO).
+CREATE TABLE IF NOT EXISTS dead_url_state (
+    url TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    status_code INTEGER,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    in_sitemap INTEGER NOT NULL DEFAULT 0,
+    redirect_target TEXT,
+    action_fingerprint TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    next_check_at TEXT,
+    reviewed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dead_url_category ON dead_url_state(category);
+CREATE INDEX IF NOT EXISTS idx_dead_url_fingerprint ON dead_url_state(action_fingerprint);
+
 CREATE TABLE IF NOT EXISTS lane_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lane TEXT NOT NULL,
@@ -3562,6 +3583,168 @@ class Storage:
         if commit:
             self.conn.commit()
 
+    # -- Sprint 2, item 6: isolamento de dead URL ---------------------------
+
+    def dead_url_candidates(self, *, limit: int = 200,
+                            url: str | None = None) -> list[dict[str, Any]]:
+        """URLs com 404/410 confirmado que ainda NAO foram classificadas (ou cujo
+        `transient` venceu o backoff).
+
+        Nao devolve URL ja' resolvida: sem isso o produtor reclassificaria as
+        mesmas 1.900 todo ciclo (o bug que o item 6 fecha, um andar acima).
+        """
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        sql = (
+            "SELECT a.url, a.last_status_code, a.failure_count, a.sitemap_lastmod, "
+            "a.last_success_at FROM url_audit_state a "
+            "LEFT JOIN dead_url_state d ON d.url = a.url "
+            "WHERE a.last_status_code IN (404, 410) AND a.dirty = 1 "
+            "AND (d.url IS NULL OR (d.category = 'transient' "
+            "     AND (d.next_check_at IS NULL OR d.next_check_at <= ?)))")
+        params: list[Any] = [now]
+        if url:
+            sql += " AND a.url = ?"
+            params.append(url)
+        sql += " ORDER BY a.failure_count DESC, a.url ASC"
+        # `0`/negativo/None = ILIMITADO (mesma semantica de `policy.normalize_limit`):
+        # `LIMIT 0` devolveria zero itens e `max(1, 0)` transformaria "ilimitado" em 1.
+        if limit is not None and int(limit) > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [{"url": r[0], "last_status_code": r[1], "failure_count": r[2],
+                 "sitemap_lastmod": r[3] or "", "last_success_at": r[4] or ""}
+                for r in rows]
+
+    def wp_post_state_url_by_path(self, path: str) -> str | None:
+        """URL canonica no WP atual para um caminho normalizado (ou None).
+
+        Compara por caminho em Python, nao em SQL: os hosts divergem (`www.` no
+        `url_audit_state`, `prod.` no `wp_post_state`) e slugs tem percent-encoding
+        (`%e2%80%8b`). JOIN cego diria "nao existe no WP" para pagina viva.
+        """
+        from hermes_seo_agent.lanes.dead_url import _path_key
+
+        alvo = (path or "").strip("/").lower()
+        if not alvo:
+            return None
+        # Indice lazy em memoria: 19k linhas varridas POR url seria ~36M
+        # comparacoes para as 1.900 mortas (medido como gargalo antes do cache).
+        cache = getattr(self, "_wp_by_path", None)
+        if cache is None:
+            cache = {}
+            for (u,) in self.conn.execute(
+                    "SELECT url FROM wp_post_state WHERE url IS NOT NULL"):
+                k = _path_key(str(u))
+                if k and k not in cache:
+                    cache[k] = str(u)
+            self._wp_by_path = cache
+        return cache.get(alvo)
+
+    def record_dead_url(self, *, url: str, category: str, reason: str,
+                        evidence: dict[str, Any] | None = None,
+                        status_code: int | None = None, failure_count: int = 0,
+                        in_sitemap: bool = False,
+                        redirect_target: str | None = None,
+                        action_fingerprint: str = "",
+                        next_check_at: str | None = None,
+                        commit: bool = True) -> dict[str, Any]:
+        """UPSERT da classificacao. Idempotente: a mesma URL e' a MESMA linha.
+
+        Devolve `criado`/`atualizado`/`inalterado` para a evidencia de
+        idempotencia exigida no `sitemap_cleanup`.
+        """
+        import datetime as _dt
+        import json as _json
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        fp = action_fingerprint or f"dead_url:{category}:{url}"
+        antes = self.dead_url_state(url)
+        self.conn.execute(
+            "INSERT INTO dead_url_state (url, category, reason, evidence_json, "
+            "status_code, failure_count, in_sitemap, redirect_target, "
+            "action_fingerprint, decided_at, next_check_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET category=excluded.category, "
+            "reason=excluded.reason, evidence_json=excluded.evidence_json, "
+            "status_code=excluded.status_code, failure_count=excluded.failure_count, "
+            "in_sitemap=excluded.in_sitemap, redirect_target=excluded.redirect_target, "
+            "action_fingerprint=excluded.action_fingerprint, "
+            "next_check_at=excluded.next_check_at, updated_at=excluded.updated_at",
+            (url, category, reason, _json.dumps(evidence or {}, ensure_ascii=False),
+             status_code, int(failure_count), 1 if in_sitemap else 0,
+             redirect_target, fp, now, next_check_at, now))
+        if commit:
+            self.conn.commit()
+        depois = self.dead_url_state(url)
+        acao = "criado" if antes is None else (
+            "inalterado" if antes.get("action_fingerprint") == fp else "atualizado")
+        return {"url": url, "category": category, "acao": acao,
+                "action_fingerprint": fp, "row": depois}
+
+    def dead_url_state(self, url: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT url, category, reason, evidence_json, status_code, failure_count, "
+            "in_sitemap, redirect_target, action_fingerprint, decided_at, "
+            "next_check_at, reviewed_at FROM dead_url_state WHERE url = ?",
+            (url,)).fetchone()
+        if row is None:
+            return None
+        return {"url": row[0], "category": row[1], "reason": row[2],
+                "evidence_json": row[3], "status_code": row[4],
+                "failure_count": int(row[5] or 0), "in_sitemap": bool(row[6]),
+                "redirect_target": row[7], "action_fingerprint": row[8],
+                "decided_at": row[9], "next_check_at": row[10],
+                "reviewed_at": row[11]}
+
+    def apply_dead_url_outcome(self, *, url: str, category: str,
+                               failure_count: int = 0,
+                               commit: bool = True) -> str:
+        """Aplica o efeito NO AUDIT conforme a categoria. Devolve o novo estado.
+
+        - `transient`: mantem `dirty` e empurra `next_audit_at` (backoff). E' a
+          UNICA categoria que volta ao audit.
+        - `gone`/`sitemap_cleanup`/`redirect_candidate`/`investigate`: sai do ciclo
+          (`dirty=0`, sem `next_audit_at`). Em `investigate` a revisao humana e' o
+          caminho de volta; em `redirect_candidate` falta evidencia de destino.
+        """
+        import datetime as _dt
+
+        from hermes_seo_agent.lanes.dead_url import backoff_seconds
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        if category == "transient":
+            nxt = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(
+                seconds=backoff_seconds(failure_count))).isoformat()
+            self.conn.execute(
+                "UPDATE url_audit_state SET dirty = 1, "
+                "dirty_reason = 'previous_failure', next_audit_at = ?, "
+                "updated_at = ? WHERE url = ?", (nxt, now, url))
+            novo = "transient_backoff"
+        else:
+            self.conn.execute(
+                "UPDATE url_audit_state SET dirty = 0, dirty_reason = ?, "
+                "next_audit_at = NULL, updated_at = ? WHERE url = ?",
+                (f"dead_url:{category}", now, url))
+            novo = f"out_of_cycle:{category}"
+        if commit:
+            self.conn.commit()
+        return novo
+
+    def dead_url_stats(self) -> dict[str, Any]:
+        """Contagem por categoria e quantas sairam do ciclo (evidencia do ciclo)."""
+        cats = ("transient", "redirect_candidate", "gone", "sitemap_cleanup",
+                "investigate")
+        por_cat = {c: 0 for c in cats}
+        for cat, n in self.conn.execute(
+                "SELECT category, COUNT(*) FROM dead_url_state GROUP BY category"):
+            por_cat[str(cat)] = int(n)
+        fora = sum(por_cat[c] for c in cats if c != "transient")
+        return {"total": sum(por_cat.values()), "por_categoria": por_cat,
+                "fora_do_ciclo": fora, "voltam_ao_audit": por_cat["transient"]}
+
     def get_urls_for_audit(self, *, limit=500, sweep_limit=None):
         """Fila de auditoria em dois trilhos (SEO-INC-004/011).
 
@@ -3577,6 +3760,13 @@ class Storage:
 
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         _cols = "url, wp_post_id, dirty_reason, failure_count, last_audited_at"
+        # Sprint 2, item 6: URL classificada como morta sai do ciclo em TODOS os
+        # trilhos. Sem isso o `gone` retorna pelo rodizio (P3/P4 exige `dirty=0`,
+        # que e' exatamente como o item 6 marca a URL morta) e a fila volta a ser
+        # drenada por URL morta — o bug que o item 6 fecha.
+        _EXCLUDE_DEAD = ("AND url NOT IN (SELECT url FROM dead_url_state WHERE "
+                         "category IN ('gone', 'sitemap_cleanup', 'investigate', "
+                         "'redirect_candidate'))")
         _order = ("ORDER BY CASE dirty_reason "
                   "  WHEN 'new_url' THEN 1 WHEN 'wordpress_modified' THEN 2 "
                   "  WHEN 'sitemap_modified' THEN 3 "
@@ -3587,8 +3777,8 @@ class Storage:
 
         def _rows(where: str, params: tuple, n: int) -> list[dict[str, Any]]:
             res = self.conn.execute(
-                f"SELECT {_cols} FROM url_audit_state WHERE {where} {_order} LIMIT ?",
-                (*params, n)).fetchall()
+                f"SELECT {_cols} FROM url_audit_state WHERE {where} {_EXCLUDE_DEAD} "
+                f"{_order} LIMIT ?", (*params, n)).fetchall()
             return [{"url": r[0], "wp_post_id": r[1], "dirty_reason": r[2] or "",
                      "failure_count": int(r[3] or 0), "last_audited_at": r[4] or ""}
                     for r in res]

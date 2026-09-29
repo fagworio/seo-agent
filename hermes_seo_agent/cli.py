@@ -537,6 +537,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="force JSON output")
     p.set_defaults(func=_cmd_lanes_status)
 
+    p = sub.add_parser("dead-url-scan",
+                       help="classifica 404/410 confirmados e enfileira na lane dead_url")
+    p.add_argument("--limit", type=int, default=None,
+                   help="teto do ciclo (default: lane_limit_dead_url)")
+    p.add_argument("--url", default=None, help="classifica apenas uma URL")
+    p.add_argument("--json", action="store_true", help="saida JSON (default)")
+    p.set_defaults(func=_cmd_dead_url_scan)
+
     p = sub.add_parser("lanes-run",
                        help="Sprint 2: worker real de UMA lane (claim -> handler -> complete)")
     p.add_argument("--lane", required=True, help="lane a consumir")
@@ -666,6 +674,28 @@ def _audit_content_fingerprint(sitemap_entries: list[tuple[str, str]],
         if link:
             parts.append(f"post|{link}|{mod}")
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def _cmd_dead_url_scan(args: argparse.Namespace, config: Any) -> int:
+    """Item 6 — produtor: classifica os 404/410 e enfileira na lane `dead_url`.
+
+    Separa DETECCAO de APLICACAO: aqui so' se classifica e enfileira; o efeito no
+    `url_audit_state` e' do worker (`lanes-run --lane dead_url`). Assim um erro na
+    classificacao nao derruba o ciclo de auditoria.
+
+    Nao reclassifica URL ja' resolvida: o que volta e' so' `transient` vencido.
+    """
+    from hermes_seo_agent.lanes import lane_limit
+    from hermes_seo_agent.lanes.dead_url import enqueue_dead_urls
+    from hermes_seo_agent.storage.db import Storage
+
+    limit = args.limit if args.limit is not None else lane_limit("dead_url", config)
+    with Storage(config.sqlite_path) as store:
+        out = enqueue_dead_urls(store, limit=limit, url=args.url)
+        out["stats"] = store.dead_url_stats()
+        out["limit"] = limit
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
 
 
 def _cmd_lanes_status(args: argparse.Namespace, config: Any) -> int:

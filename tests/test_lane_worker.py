@@ -260,11 +260,18 @@ def test_recover_first_devolve_lease_abandonado(tmp_path):
 
 
 def test_worker_sem_handler_recusa(tmp_path):
+    """Lane sem handler registrado: o worker RECUSA rodar (nao improvisa).
+
+    Usa uma lane que nunca e' registrada, de proposito: o registry e' global e
+    outros testes registram handlers, entao uma lane real faria o teste depender
+    da ordem de execucao da suite.
+    """
     db = str(tmp_path / "nohandler.db")
-    _povoar(db, LANE, 1)
+    lane = "lane_nunca_registrada"
+    _povoar(db, lane, 1)
     with Storage(db) as store:
         with pytest.raises(RuntimeError, match="sem handler registrado"):
-            LaneWorker(store, LANE, worker_id="w").run()
+            LaneWorker(store, lane, worker_id="w").run()
 
 
 def test_run_lane_conveniencia_e_telemetria(tmp_path):
