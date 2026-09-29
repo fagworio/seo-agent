@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -647,6 +647,43 @@ CREATE TABLE IF NOT EXISTS url_audit_state (
 );
 CREATE INDEX IF NOT EXISTS idx_url_audit_dirty ON url_audit_state(dirty, next_audit_at);
 CREATE INDEX IF NOT EXISTS idx_url_audit_last_audited ON url_audit_state(last_audited_at);
+-- Sprint 2 — lanes independentes com claim/lease/fencing token.
+-- Uma lane por tipo de trabalho; NENHUMA lane espera outra terminar e nenhum
+-- item ruim segura o lote (o lote e o resultado de um claim, nao de um iterador).
+--   `work_item_id`: identidade ESTAVEL e deterministica do item (nao autoincrement)
+--     — enfileirar o mesmo item duas vezes e no-op.
+--   `lease_version`: FENCING TOKEN. Quem nao possui a versao atual nao conclui
+--     nem escreve; um worker que voltou de um crash nao sobrescreve o sucessor.
+--   `payload_json`: a DECISAO PRONTA, para a fila de execucao consumir sem
+--     reanalisar a URL (substitui o `ignore_pending_review=True`).
+--   `next_attempt_at` + `error_class`: retry com backoff classificado
+--     (retryable|terminal|stale|manual_review) — nunca "falhou, tenta de novo ja".
+CREATE TABLE IF NOT EXISTS lane_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lane TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    url TEXT,
+    payload_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    priority INTEGER NOT NULL DEFAULT 100,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    error_class TEXT,
+    next_attempt_at TEXT,
+    worker_id TEXT,
+    leased_at TEXT,
+    lease_until TEXT,
+    lease_version INTEGER NOT NULL DEFAULT 0,
+    recoveries INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(lane, work_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lane_claim
+    ON lane_queue(lane, status, next_attempt_at, priority, id);
+CREATE INDEX IF NOT EXISTS idx_lane_lease ON lane_queue(status, lease_until);
+CREATE INDEX IF NOT EXISTS idx_lane_work_item ON lane_queue(work_item_id);
 """
 
 
