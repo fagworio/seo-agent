@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -661,6 +661,38 @@ CREATE INDEX IF NOT EXISTS idx_url_audit_last_audited ON url_audit_state(last_au
 -- Sprint 2, item 6: estado das URLs mortas (404/410). Persiste a CLASSIFICACAO e o
 -- motivo, para o audit poder exclui-las e para a decisao ser reconstruivel depois.
 -- `action_fingerprint` e' do mesmo padrao do closed loop (identidade da ACAO).
+-- Sprint 2, item 7A: a DECISAO de titulo persistida. Ultimo lugar onde a analise
+-- SEO acontece; `title_execution` (7B) le' daqui e nunca reanalisa.
+-- `decision_id` e' determinístico (derivado do `action_fingerprint`), entao a
+-- mesma decisao repetida e' a MESMA linha e o mesmo item de fila.
+-- `enqueued_at IS NULL` e' o buraco que a reconciliacao (gate 8) fecha: decisao
+-- persistida com processo morto antes do enqueue nunca fica orfa.
+CREATE TABLE IF NOT EXISTS title_decision (
+    decision_id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    post_id INTEGER,
+    field TEXT NOT NULL DEFAULT 'rank_math_title',
+    before TEXT NOT NULL,
+    after TEXT NOT NULL,
+    action_fingerprint TEXT NOT NULL,
+    decision_version INTEGER NOT NULL DEFAULT 1,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    rollout_json TEXT NOT NULL DEFAULT '{}',
+    confidence REAL,
+    requires_review INTEGER NOT NULL DEFAULT 0,
+    -- decided | enqueued | executed | stale | rejected | superseded
+    status TEXT NOT NULL DEFAULT 'decided',
+    not_executable_reason TEXT,
+    decided_at TEXT NOT NULL,
+    enqueued_at TEXT,
+    executed_at TEXT,
+    outcome_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_title_decision_url ON title_decision(url);
+CREATE INDEX IF NOT EXISTS idx_title_decision_fp ON title_decision(action_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_title_decision_pending ON title_decision(enqueued_at, status);
+
 CREATE TABLE IF NOT EXISTS dead_url_state (
     url TEXT PRIMARY KEY,
     category TEXT NOT NULL,
@@ -3582,6 +3614,136 @@ class Storage:
         )
         if commit:
             self.conn.commit()
+
+    # -- Sprint 2, item 7A: decisao de titulo persistida ---------------------
+
+    def record_title_decision(self, *, decision_id: str, url: str,
+                              post_id: int | None, field: str, before: str,
+                              after: str, action_fingerprint: str,
+                              decision_version: int = 1,
+                              evidence: dict[str, Any] | None = None,
+                              rollout: dict[str, Any] | None = None,
+                              confidence: float | None = None,
+                              requires_review: bool = False,
+                              not_executable_reason: str | None = None,
+                              status: str = "decided",
+                              decided_at: str | None = None,
+                              commit: bool = True) -> dict[str, Any]:
+        """UPSERT da decisao de titulo. Idempotente pela `decision_id`.
+
+        Reexibir a mesma decisao NAO cria linha nova e NAO deve reenfileirar: e' o
+        que torna "mesma decisao repetida = mesmo fingerprint" verificavel.
+        """
+        import datetime as _dt
+        import json as _json
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        antes = self.title_decision(decision_id)
+        self.conn.execute(
+            "INSERT INTO title_decision (decision_id, url, post_id, field, before, "
+            "after, action_fingerprint, decision_version, evidence_json, "
+            "rollout_json, confidence, requires_review, status, "
+            "not_executable_reason, decided_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(decision_id) DO UPDATE SET before=excluded.before, "
+            "after=excluded.after, evidence_json=excluded.evidence_json, "
+            "rollout_json=excluded.rollout_json, confidence=excluded.confidence, "
+            "requires_review=excluded.requires_review, "
+            "not_executable_reason=excluded.not_executable_reason, "
+            "updated_at=excluded.updated_at",
+            (decision_id, url, post_id, field, before, after, action_fingerprint,
+             int(decision_version),
+             _json.dumps(evidence or {}, ensure_ascii=False),
+             _json.dumps(rollout or {}, ensure_ascii=False), confidence,
+             1 if requires_review else 0, status, not_executable_reason,
+             decided_at or now, now))
+        if commit:
+            self.conn.commit()
+        return {"decision_id": decision_id, "url": url,
+                "acao": "criado" if antes is None else "existente",
+                "status": status, "existing": antes}
+
+    def title_decision(self, decision_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT decision_id, url, post_id, field, before, after, "
+            "action_fingerprint, decision_version, evidence_json, rollout_json, "
+            "confidence, requires_review, status, not_executable_reason, "
+            "decided_at, enqueued_at, executed_at, outcome_id "
+            "FROM title_decision WHERE decision_id = ?",
+            (decision_id,)).fetchone()
+        if row is None:
+            return None
+        import json as _json
+
+        return {"decision_id": row[0], "url": row[1], "post_id": row[2],
+                "field": row[3], "before": row[4], "after": row[5],
+                "action_fingerprint": row[6], "decision_version": int(row[7] or 1),
+                "evidence": _json.loads(row[8] or "{}"),
+                "rollout": _json.loads(row[9] or "{}"),
+                "confidence": row[10], "requires_review": bool(row[11]),
+                "status": row[12], "not_executable_reason": row[13],
+                "decided_at": row[14], "enqueued_at": row[15],
+                "executed_at": row[16], "outcome_id": row[17]}
+
+    def title_decision_by_url(self, url: str, after: str | None = None) -> dict[str, Any] | None:
+        """Decisao mais recente da URL (opcionalmente de um `after` especifico)."""
+        if after is None:
+            row = self.conn.execute(
+                "SELECT decision_id FROM title_decision WHERE url = ? "
+                "ORDER BY decided_at DESC LIMIT 1", (url,)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT decision_id FROM title_decision WHERE url = ? AND after = ? "
+                "ORDER BY decided_at DESC LIMIT 1", (url, after)).fetchone()
+        return self.title_decision(row[0]) if row else None
+
+    def title_decisions_pending_enqueue(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """GATE 8 — decisao persistida que ficou SEM item de fila.
+
+        O buraco do crash "decisao salva -> processo morre -> execution nunca
+        criada". A reconciliacao le' daqui e cria o item que falta.
+        """
+        sql = ("SELECT decision_id FROM title_decision WHERE enqueued_at IS NULL "
+               "AND status IN ('decided', 'enqueue_failed') "
+               "ORDER BY decided_at ASC")
+        params: tuple = ()
+        if limit is not None and int(limit) > 0:
+            sql += " LIMIT ?"
+            params = (int(limit),)
+        rows = self.conn.execute(sql, params).fetchall()
+        out = []
+        for (did,) in rows:
+            d = self.title_decision(did)
+            if d is not None:
+                out.append(d)
+        return out
+
+    def mark_title_decision_enqueued(self, decision_id: str, *,
+                                     status: str = "enqueued",
+                                     enqueued_at: str | None = None,
+                                     commit: bool = True) -> bool:
+        """Marca que o item de execucao EXISTE para esta decisao."""
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET enqueued_at = COALESCE(enqueued_at, ?), "
+            "status = ?, updated_at = ? WHERE decision_id = ?",
+            (enqueued_at or now, status, now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
+    def title_decision_stats(self) -> dict[str, Any]:
+        """Contagem por status + quantas estao sem execucao (o buraco do gate 8)."""
+        por_status: dict[str, int] = {}
+        for st, n in self.conn.execute(
+                "SELECT status, COUNT(*) FROM title_decision GROUP BY status"):
+            por_status[str(st)] = int(n)
+        pend = self.conn.execute(
+            "SELECT COUNT(*) FROM title_decision WHERE enqueued_at IS NULL").fetchone()
+        return {"total": sum(por_status.values()), "por_status": por_status,
+                "sem_execucao": int(pend[0] or 0)}
 
     # -- Sprint 2, item 6: isolamento de dead URL ---------------------------
 
