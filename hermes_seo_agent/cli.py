@@ -2645,6 +2645,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 "semantic": [],
                 "candidates_total": None, "candidates_valid": None,
                 "candidates_discarded": None,
+                "candidate_discard_reasons": {},
+                "candidate_score": None, "candidate_factors": None,
+                "coverage_gain": None,
+                "checks_passed": None,
                 "evaluator_called": False,
                 "finalizer_best": None, "finalizer_titles_count": None,
                 "candidate_exists": None, "candidate_title_options_count": None,
@@ -2758,6 +2762,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 1 for _c in candidates if not _c.get("discarded"))
             diag["candidates_discarded"] = sum(
                 1 for _c in candidates if _c.get("discarded"))
+            from collections import Counter as _Counter
+            diag["candidate_discard_reasons"] = dict(_Counter(
+                str(_c.get("discard_reason") or "unknown")
+                for _c in candidates if _c.get("discarded")))
             q_numbers = {n for f in demand["families"]
                          for q in (f.get("queries") or [])
                          for n in _re.findall(r"\d+", q)}
@@ -2808,6 +2816,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     funil["finalizer_sem_best"] += 1
                 return outcome
 
+            _semantic_evidence_input = (
+                min(semantic_measured / max(len(relevant), 1), 1.0)
+                if relevant else 0.0)
+            diag["semantic_measured_count"] = semantic_measured
+            diag["semantic_relevant_count"] = len(relevant)
+            diag["semantic_evidence_input"] = _semantic_evidence_input
             contract = decide_title(
                 url=url, title=current,
                 page={"impressions": float(row.get("impressions", 0) or 0),
@@ -2824,8 +2838,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 # confiança honesta: corpus e evidência semântica medidos (não
                 # derivados de "existem famílias do GSC")
                 corpus_available=bool(cluster_signals),
-                semantic_evidence=min(semantic_measured / max(len(relevant), 1), 1.0)
-                if relevant else 0.0,
+                semantic_evidence=_semantic_evidence_input,
                 # gate de janela: rankability/cluster só valem se forem da MESMA
                 # janela das páginas/famílias/baseline da decisão
                 signal_window_aligned=bool(signal_window.get("aligned")),
@@ -2862,6 +2875,29 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             # concreto; nao quebrar significa que o diagnostico anterior correlacionava
             # paginas diferentes.
             diag["decision"] = contract.get("decision")
+            _checks_real = contract.get("checks") or {}
+            diag["checks_passed"] = bool(_checks_real.get("passed"))
+            diag["failed_checks"] = list(_checks_real.get("failed") or [])
+            _cand_score = candidate_contract.get("title_score") or {}
+            if isinstance(_cand_score, dict):
+                diag["candidate_score"] = _cand_score.get("score")
+                diag["candidate_factors"] = (_cand_score.get("factors")
+                                              or _cand_score.get("components"))
+            _ctx = _checks_real.get("_context") or {}
+            diag["coverage_gain"] = _ctx.get("coverage_gain")
+            _cd = contract.get("confidence_detail") or {}
+            _cd_checks = _cd.get("checks") if isinstance(_cd, dict) else {}
+            if not isinstance(_cd_checks, dict):
+                _cd_checks = {}
+            diag["semantic_evidence_contract"] = _cd_checks.get("semantic_evidence")
+            diag["semantic_evidence_equal"] = (
+                diag.get("semantic_evidence_input") ==
+                diag.get("semantic_evidence_contract"))
+            if (diag.get("semantic_evidence_contract") is not None and
+                    not diag["semantic_evidence_equal"]):
+                _iq = funil["invariantes_quebradas"]
+                _iq["semantic_evidence_transporte"] = (
+                    _iq.get("semantic_evidence_transporte", 0) + 1)
             # 7A.2.3 (B) — os 3 campos que provam a correlacao. Sem eles o `por_url`
             # nao distingue "ESTA URL ficou sem titulo" de "outra URL teve titulo" —
             # que e' exatamente o erro que o agregado global cometia. Ficavam no
