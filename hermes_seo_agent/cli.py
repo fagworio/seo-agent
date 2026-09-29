@@ -2862,6 +2862,14 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             # concreto; nao quebrar significa que o diagnostico anterior correlacionava
             # paginas diferentes.
             diag["decision"] = contract.get("decision")
+            # 7A.2.3 (B) — os 3 campos que provam a correlacao. Sem eles o `por_url`
+            # nao distingue "ESTA URL ficou sem titulo" de "outra URL teve titulo" —
+            # que e' exatamente o erro que o agregado global cometia. Ficavam no
+            # `None` do init e mascaravam a prova.
+            diag["candidate_exists"] = bool(candidate_contract)
+            diag["candidate_title_options_count"] = len(
+                candidate_contract.get("title_options") or [])
+            diag["suggested_titles_count"] = len(contract["suggested_titles"])
             _chk = contract.get("checks")
             _chk = (_chk.get("checks") if isinstance(_chk, dict)
                     and isinstance(_chk.get("checks"), dict) else _chk)
