@@ -1,0 +1,62 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "audit",
+    "cycle_id": "cycle-346848dd1726",
+    "wp_posts": 18892,
+    "sitemap_urls": 18952,
+    "static_urls": 0,
+    "in_sitemap": 18892,
+    "missing_from_sitemap": 0,
+    "orphan_in_sitemap": 60,
+    "wp_static_mismatch": 0,
+    "static_orphan": 0,
+    "audited_urls": 500,
+    "findings": 3
+  },
+  "findings": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/switch-2-deve-ter-desempenho-similar-ao-ps4-diz-relatorio/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/anunciada-a-terceira-temporada-de-kimi-no-todoke-para-2024/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-4/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-3/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-2/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx/",
+      "severity": "medium",
+      "detail": "4 pages share the same title"
+    }
+  ],
+  "safe_actions": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/switch-2-deve-ter-desempenho-similar-ao-ps4-diz-relatorio/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/anunciada-a-terceira-temporada-de-kimi-no-todoke-para-2024/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    }
+  ],
+  "approval_required": [
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-4/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-3/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-2/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx/",
+      "severity": "medium",
+      "detail": "4 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    }
+  ]
+}

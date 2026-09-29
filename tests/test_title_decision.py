@@ -632,3 +632,116 @@ def test_hardening_limpar_o_motivo_devolve_ao_reconciliavel(tmp_path):
         assert TD.stats(store)["bloqueadas"] == 0
         assert TD.reconcile_pending_enqueue(store)["reconciliados"] == 1
         assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 7A.2 — integracao com o motor de titulos
+# ---------------------------------------------------------------------------
+
+def _contrato(**kw):
+    """Contrato do motor no formato REAL (`report/shadow_mode.py`)."""
+    c = {"url": URL, "post_id": 4242, "decision": "review_title",
+         "confidence": 0.71,
+         "rollout": {"mode": "auto", "writes_allowed": True,
+                     "approval_required": False},
+         "page": {"impressions": 1200.0, "clicks": 8.0, "ctr": 0.0067},
+         "baseline": {"window_end": "2026-09-20"},
+         "signal_window": {"window_start": "2026-08-23"}}
+    c.update(kw)
+    return c
+
+
+def _acao(title="Titulo reescrito pelo motor", before="Titulo atual bruto",
+          post_id=4242, conf=0.71):
+    """SafeAction no formato REAL que `decision_to_action` monta."""
+    return {"rule_id": "title_engine", "url": URL,
+            "detail": "title_engine: titulo reescrito",
+            "before": {"rank_math_title": before},
+            "fix": {"type": "wp_post_meta", "post_id": post_id,
+                    "meta": {"rank_math_title": title},
+                    "precondition": {"meta": {"rank_math_title": before}}},
+            "confidence": conf, "source": "title_engine"}
+
+
+def test_7a2_writes_allowed_e_a_chave_do_contrato_real():
+    """O contrato real usa `writes_allowed`.
+
+    Sem essa chave na lista, TODA decisao vinda do motor cairia em
+    `rollout_blocks_write` — o gate funcionaria ao contrario e nada executaria,
+    em silencio. Por isso a chave canonica vem primeiro.
+    """
+    assert TD._rollout_allows_write({"writes_allowed": True}) is True
+    assert TD._rollout_allows_write({"writes_allowed": False}) is False
+    # retrocompatibilidade com as variantes antigas
+    assert TD._rollout_allows_write({"write_allowed": True}) is True
+    # modo sem chave booleana continua valendo
+    assert TD._rollout_allows_write({"mode": "auto"}) is True
+    assert TD._rollout_allows_write({"mode": "observe"}) is False
+    # e nao inventa permissao: ausencia/desconhecido = negado
+    assert TD._rollout_allows_write({"mode": "sei_la"}) is False
+    assert TD._rollout_allows_write({}) is False
+    assert TD._rollout_allows_write(None) is False
+
+
+def test_7a2_acao_vira_decisao_com_o_before_observado():
+    """`before` = titulo observado: e' ele que o gate 4 confere no WordPress."""
+    d = TD.decision_from_action(_acao(), contract=_contrato())
+    assert d.post_id == 4242
+    assert d.before == "Titulo atual bruto", "before exato, sem normalizar"
+    assert d.after == "Titulo reescrito pelo motor"
+    assert d.confidence == 0.71
+    assert d.url == URL
+    assert d.rollout.get("writes_allowed") is True
+    assert d.requires_review is False
+    assert d.action_fingerprint == TD.title_action_fingerprint(
+        post_id=4242, before="Titulo atual bruto",
+        after="Titulo reescrito pelo motor", field=TD.DEFAULT_FIELD)
+    ok, motivo = TD.production_ready(d)
+    assert ok is True and motivo is None
+
+
+def test_7a2_titulo_vivo_manda_no_before():
+    """Quando o titulo vivo foi lido, ELE e' o `before` (Fase 16 / STALE)."""
+    d = TD.decision_from_action(_acao(before="Titulo da acao"),
+                                contract=_contrato(),
+                                live_title="Titulo vivo no WP")
+    assert d.before == "Titulo vivo no WP"
+
+
+def test_7a2_o_contrato_real_gera_decisao_executavel(tmp_path):
+    """O caso exato que o bug do `writes_allowed` quebraria em producao."""
+    db = str(tmp_path / "7a2.db")
+    with Storage(db) as store:
+        r = TD.persist_actions(store, [_acao()],
+                               contracts_by_url={URL: _contrato()})
+        assert r["counts"] == {"criadas": 1, "executaveis": 1,
+                               "sem_execucao": 0, "erros": 0}
+        assert TD.stats(store)["sem_execucao_recuperavel"] == 0
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+        salva = store.title_decision(r["criadas"][0])
+        assert salva["before"] == "Titulo atual bruto"
+        assert salva["after"] == "Titulo reescrito pelo motor"
+
+
+def test_7a2_rollout_negado_registra_sem_enfileirar(tmp_path):
+    """Contrato em `observe`: a decisao existe, a execucao nao."""
+    db = str(tmp_path / "7a2b.db")
+    with Storage(db) as store:
+        c = _contrato(rollout={"mode": "observe", "writes_allowed": False,
+                               "approval_required": True})
+        r = TD.persist_actions(store, [_acao()], contracts_by_url={URL: c})
+        assert r["counts"]["criadas"] == 1
+        assert r["counts"]["executaveis"] == 0
+        assert r["sem_execucao"][0]["motivo"] == TD.NOT_EXEC_ROLLOUT
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
+
+
+def test_7a2_uma_url_estranha_nao_derruba_o_lote(tmp_path):
+    """Regra principal do roadmap: um item ruim nunca segura os outros."""
+    db = str(tmp_path / "7a2c.db")
+    with Storage(db) as store:
+        r = TD.persist_actions(store, [_acao(), "nao-e-dict", _acao()],
+                               contracts_by_url={URL: _contrato()})
+        assert r["counts"]["criadas"] == 2, "as validas entram"
+        assert r["counts"]["erros"] == 1
+        assert "AttributeError" in r["erros"][0]["erro"] or r["erros"]

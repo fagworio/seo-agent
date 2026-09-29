@@ -1,0 +1,14 @@
+[
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/the-boys-cada-super-confirmado-e-seus-poderes-explicados/",
+    "detail": "título ancorado na query 'onda de choque the boys'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 12294,
+      "meta": {
+        "rank_math_title": "The Boys: Onda Choque"
+      }
+    }
+  }
+]

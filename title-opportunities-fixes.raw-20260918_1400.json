@@ -1,0 +1,38 @@
+[
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/one-piece-como-os-personagens-principais-mudaram-ao-longo-dos-anos/",
+    "detail": "título ancorado na query 'one piece antes e depois do timeskip'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 19441,
+      "meta": {
+        "rank_math_title": "One Piece: Antes Depois Timeskip"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/voce-deveria-matar-o-gato-preto-em-lies-of-p/",
+    "detail": "título ancorado na query 'entregar a fruta da moeda de ouro gato preto'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 71095,
+      "meta": {
+        "rank_math_title": "Você deveria matar o gato preto em Lies Of P?: Entregar Fru…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/matlock-final-da-2a-temporada-explica-reviravoltas-e-deixa-pistas-para-a-3a/",
+    "detail": "título ancorado na query 'matlock quem é o culpado'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 101494,
+      "meta": {
+        "rank_math_title": "Matlock: Quem É Culpado"
+      }
+    }
+  }
+]

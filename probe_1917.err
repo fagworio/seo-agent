@@ -1,0 +1,1 @@
+.venv/bin/python: can't open file '/root/.hermes/skills/hermes-seo-agent/scripts/eligible_titles_probe.py': [Errno 13] Permission denied

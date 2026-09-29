@@ -1,0 +1,1307 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "title-opportunities",
+    "candidates": 30,
+    "window_days": 28,
+    "skipped": 0,
+    "fixes_written": 30
+  },
+  "findings": [],
+  "safe_actions": [],
+  "approval_required": [],
+  "candidates": [
+    {
+      "url": "https://www.unicorniohater.com.br/jujutsu-kaisen-idade-de-cada-personagem-principal/",
+      "current_title": "Jujutsu Kaisen: idade de Gojo e dos personagens — UnicornioHater",
+      "impressions": 5270.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 6.6392789373814045,
+      "top_query": "gojo",
+      "top_queries": [
+        {
+          "query": "a maki tem quantos anos",
+          "impressions": 6,
+          "position": 7.166666666666667,
+          "ctr": 0
+        },
+        {
+          "query": "aniversário do megumi",
+          "impressions": 2,
+          "position": 28,
+          "ctr": 0
+        },
+        {
+          "query": "aniversário dos personagens de jujutsu kaisen",
+          "impressions": 1,
+          "position": 29,
+          "ctr": 0
+        },
+        {
+          "query": "aoi todo idade",
+          "impressions": 2,
+          "position": 45.5,
+          "ctr": 0
+        },
+        {
+          "query": "choso idade",
+          "impressions": 1,
+          "position": 32,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Gojo",
+      "post_id": 29138
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/hughie-campbell-poderes-e-tudo-que-sabemos-ate-o-momento-sobre-esse-the-boys/",
+      "current_title": "Hughie Campbell: poderes e tudo sobre The Boys — UnicornioHater",
+      "impressions": 3200.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 2.0765625,
+      "top_query": "highie",
+      "top_queries": [
+        {
+          "query": "campbell hughie",
+          "impressions": 2,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "campbell the boys",
+          "impressions": 10,
+          "position": 2.1,
+          "ctr": 0
+        },
+        {
+          "query": "heue the boys",
+          "impressions": 1,
+          "position": 10,
+          "ctr": 0
+        },
+        {
+          "query": "hewie the boys",
+          "impressions": 1,
+          "position": 5,
+          "ctr": 0
+        },
+        {
+          "query": "highie",
+          "impressions": 3,
+          "position": 1,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Highie",
+      "post_id": 20530
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/he-man-os-10-viloes-mais-assustadores-do-desenho-animado-classico-que-nao-eram-o-esqueleto/",
+      "current_title": "He-Man: os 10 vilões mais assustadores — UnicornioHater",
+      "impressions": 3198.0,
+      "clicks": 15.0,
+      "ctr": 0.004690431519699813,
+      "position": 3.269230769230769,
+      "top_query": "fantasma amigo do he man",
+      "top_queries": [
+        {
+          "query": "inimigos do he man",
+          "impressions": 326,
+          "position": 2.438650306748466,
+          "ctr": 0.012269938650306749
+        },
+        {
+          "query": "vilões do he man",
+          "impressions": 537,
+          "position": 2.2029795158286776,
+          "ctr": 0.0074487895716946
+        },
+        {
+          "query": "os inimigos do he man",
+          "impressions": 11,
+          "position": 2.1818181818181817,
+          "ctr": 0.09090909090909091
+        },
+        {
+          "query": "todos os vilões do he man",
+          "impressions": 2,
+          "position": 4,
+          "ctr": 0.5
+        },
+        {
+          "query": "viloes do heman",
+          "impressions": 30,
+          "position": 2.2333333333333334,
+          "ctr": 0.03333333333333333
+        }
+      ],
+      "suggested_title": "Fantasma Amigo do He Man",
+      "post_id": 35136
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/sera-que-wolverine-e-dentes-de-sabre-sao-realmente-irmaos-em-x-men/",
+      "current_title": "Dentes de Sabre e Wolverine: irmãos em X-Men? — UnicornioHater",
+      "impressions": 3161.0,
+      "clicks": 1.0,
+      "ctr": 0.00031635558367605187,
+      "position": 5.220816197405885,
+      "top_query": "dente de sabre irmao wolverine",
+      "top_queries": [
+        {
+          "query": "dente de sabre x men é irmão do wolverine",
+          "impressions": 71,
+          "position": 4.633802816901408,
+          "ctr": 0.014084507042253521
+        },
+        {
+          "query": "dente de saber é irmão do wolverine",
+          "impressions": 24,
+          "position": 2.5,
+          "ctr": 0
+        },
+        {
+          "query": "dente de sabre e irmao do wolverine",
+          "impressions": 3,
+          "position": 5.666666666666667,
+          "ctr": 0
+        },
+        {
+          "query": "dente de sabre e wolverine sao irmaos",
+          "impressions": 200,
+          "position": 4.42,
+          "ctr": 0
+        },
+        {
+          "query": "dente de sabre irmao wolverine",
+          "impressions": 22,
+          "position": 1.9545454545454546,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Dente de Sabre Irmao Wolverine",
+      "post_id": 69189
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/rick-e-morty-o-que-aconteceu-com-a-esposa-de-rick/",
+      "current_title": "Rick e Morty: o que aconteceu à esposa de Rick? — UnicornioHater",
+      "impressions": 2374.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.332350463352991,
+      "top_query": "esposa de rick",
+      "top_queries": [
+        {
+          "query": "beth rick and morty morreu",
+          "impressions": 6,
+          "position": 11.166666666666666,
+          "ctr": 0
+        },
+        {
+          "query": "como a esposa do rick morreu",
+          "impressions": 2,
+          "position": 8.5,
+          "ctr": 0
+        },
+        {
+          "query": "como a esposa do rick morreu rick and morty",
+          "impressions": 37,
+          "position": 10.81081081081081,
+          "ctr": 0
+        },
+        {
+          "query": "dayane rick and morty",
+          "impressions": 2,
+          "position": 5,
+          "ctr": 0
+        },
+        {
+          "query": "diana sanchez rick and morty",
+          "impressions": 4,
+          "position": 3.75,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Esposa de Rick",
+      "post_id": 19196
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/quem-e-celeborn-quem-e-o-marido-de-galadriel-em-senhor-dos-aneis-e-onde-ele-esta-nos-aneis-de-poder/",
+      "current_title": "Celeborn: quem é o marido de Galadriel? — UnicornioHater",
+      "impressions": 2023.0,
+      "clicks": 4.0,
+      "ctr": 0.001977261492832427,
+      "position": 1.5640138408304498,
+      "top_query": "caleborn",
+      "top_queries": [
+        {
+          "query": "celeborn",
+          "impressions": 1414,
+          "position": 1.1025459688826025,
+          "ctr": 0.002828854314002829
+        },
+        {
+          "query": "aneis do poder celeborn",
+          "impressions": 5,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "caleborn",
+          "impressions": 15,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "celborn",
+          "impressions": 5,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "celebirn",
+          "impressions": 5,
+          "position": 1,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Caleborn",
+      "post_id": 57595
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/bleach-a-origem-oculta-e-vida-do-pai-de-ichigo-explicado/",
+      "current_title": "Bleach: a origem oculta do pai de Ichigo — UnicornioHater",
+      "impressions": 1556.0,
+      "clicks": 1.0,
+      "ctr": 0.0006426735218508997,
+      "position": 7.163239074550129,
+      "top_query": "bleach pai do ichigo",
+      "top_queries": [
+        {
+          "query": "ayah ichigo kurosaki",
+          "impressions": 1,
+          "position": 59,
+          "ctr": 0
+        },
+        {
+          "query": "bankai pai do ichigo",
+          "impressions": 2,
+          "position": 7.5,
+          "ctr": 0
+        },
+        {
+          "query": "bleach ichigo father",
+          "impressions": 1,
+          "position": 22,
+          "ctr": 0
+        },
+        {
+          "query": "bleach ichigo's dad",
+          "impressions": 1,
+          "position": 25,
+          "ctr": 0
+        },
+        {
+          "query": "bleach pai do ichigo",
+          "impressions": 3,
+          "position": 3,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Bleach Pai do Ichigo",
+      "post_id": 5386
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/37-filmes-de-comedia-das-decadas-de-80-que-definitivamente-devem-ser-relembrados/",
+      "current_title": "37 filmes de comédia dos anos 80 para relembrar — UnicornioHater",
+      "impressions": 1424.0,
+      "clicks": 6.0,
+      "ctr": 0.004213483146067416,
+      "position": 13.83497191011236,
+      "top_query": "filme de comédia anos 80",
+      "top_queries": [
+        {
+          "query": "filme comédia anos 80",
+          "impressions": 20,
+          "position": 11.8,
+          "ctr": 0.1
+        },
+        {
+          "query": "filmes de comédia antigos anos 80",
+          "impressions": 61,
+          "position": 7.426229508196721,
+          "ctr": 0.01639344262295082
+        },
+        {
+          "query": "antigo",
+          "impressions": 1,
+          "position": 5,
+          "ctr": 0
+        },
+        {
+          "query": "comedia anos 80",
+          "impressions": 26,
+          "position": 8.461538461538462,
+          "ctr": 0
+        },
+        {
+          "query": "comediantes americanos anos 80",
+          "impressions": 1,
+          "position": 2,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Filme de Comédia Anos 80",
+      "post_id": 6290
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/10-monstros-iconicos-em-o-senhor-dos-aneis-explicados/",
+      "current_title": "10 monstros icônicos de O Senhor dos Anéis — UnicornioHater",
+      "impressions": 1282.0,
+      "clicks": 5.0,
+      "ctr": 0.0039001560062402497,
+      "position": 4.538221528861154,
+      "top_query": "monstro do sr dos aneis",
+      "top_queries": [
+        {
+          "query": "monstro dos senhor dos aneis",
+          "impressions": 41,
+          "position": 5.951219512195122,
+          "ctr": 0.024390243902439025
+        },
+        {
+          "query": "senhor dos aneis monstro",
+          "impressions": 49,
+          "position": 2.0612244897959187,
+          "ctr": 0.02040816326530612
+        },
+        {
+          "query": "bichos do senhor dos aneis",
+          "impressions": 1,
+          "position": 40,
+          "ctr": 0
+        },
+        {
+          "query": "criaturas do senhor dos aneis",
+          "impressions": 5,
+          "position": 3.8,
+          "ctr": 0
+        },
+        {
+          "query": "hobbit monstro",
+          "impressions": 5,
+          "position": 10.4,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Monstro do Sr dos Aneis",
+      "post_id": 80191
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/os-10-melhores-animes-de-romance-escolar-e-com-muitos-beijos/",
+      "current_title": "10 melhores animes de romance escolar com beijo — UnicornioHater",
+      "impressions": 1111.0,
+      "clicks": 5.0,
+      "ctr": 0.004500450045004501,
+      "position": 7.252925292529253,
+      "top_query": "anime se beijando na boca",
+      "top_queries": [
+        {
+          "query": "animes de romance escolar com beijo",
+          "impressions": 60,
+          "position": 8.333333333333332,
+          "ctr": 0.03333333333333333
+        },
+        {
+          "query": "anime beijo",
+          "impressions": 2,
+          "position": 28,
+          "ctr": 0
+        },
+        {
+          "query": "anime beijo de lingua",
+          "impressions": 13,
+          "position": 1.0769230769230769,
+          "ctr": 0
+        },
+        {
+          "query": "anime beijo na boca",
+          "impressions": 13,
+          "position": 8.846153846153847,
+          "ctr": 0
+        },
+        {
+          "query": "anime de romance com beijo",
+          "impressions": 12,
+          "position": 5.166666666666667,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Anime Se Beijando na Boca",
+      "post_id": 48690
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/venom-os-10-simbiontes-mais-poderosos-ranqueados/",
+      "current_title": "Venom: os 10 simbiontes mais fortes — UnicornioHater",
+      "impressions": 962.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 10.6995841995842,
+      "top_query": "os simbiontes mais fortes",
+      "top_queries": [
+        {
+          "query": "imagens",
+          "impressions": 1,
+          "position": 6,
+          "ctr": 0
+        },
+        {
+          "query": "o que é simbionte",
+          "impressions": 1,
+          "position": 40,
+          "ctr": 0
+        },
+        {
+          "query": "o simbionte mais forte",
+          "impressions": 6,
+          "position": 10.333333333333334,
+          "ctr": 0
+        },
+        {
+          "query": "o venom é o simbionte mais fraco",
+          "impressions": 1,
+          "position": 8,
+          "ctr": 0
+        },
+        {
+          "query": "os simbiontes mais fortes",
+          "impressions": 2,
+          "position": 6.5,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Os Simbiontes Mais Fortes",
+      "post_id": 31098
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/o-pai-de-thanos-retorna-para-a-marvel-comics-em-uma-nova-variante/",
+      "current_title": "Pai de Thanos (Alars) retorna à Marvel — UnicornioHater",
+      "impressions": 955.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 4.69109947643979,
+      "top_query": "alars pai de thanos",
+      "top_queries": [
+        {
+          "query": "alars pai de thanos",
+          "impressions": 38,
+          "position": 3.6052631578947367,
+          "ctr": 0
+        },
+        {
+          "query": "pai de thanos",
+          "impressions": 205,
+          "position": 4.917073170731707,
+          "ctr": 0
+        },
+        {
+          "query": "pai do thanos",
+          "impressions": 179,
+          "position": 3.6983240223463687,
+          "ctr": 0
+        },
+        {
+          "query": "pai e mae de thanos",
+          "impressions": 1,
+          "position": 4,
+          "ctr": 0
+        },
+        {
+          "query": "pais de thanos",
+          "impressions": 4,
+          "position": 5.25,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Alars Pai de Thanos",
+      "post_id": 35632
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/rick-e-morty-revelam-os-poderes-divinos-dos-tempos-epicos-de-jessica/",
+      "current_title": "Rick e Morty: os poderes divinos de Jessica — UnicornioHater",
+      "impressions": 926.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.610151187904967,
+      "top_query": "jessica e morty",
+      "top_queries": [
+        {
+          "query": "jesica rick and morty",
+          "impressions": 3,
+          "position": 4,
+          "ctr": 0
+        },
+        {
+          "query": "jessica de rick and morty",
+          "impressions": 39,
+          "position": 3.41025641025641,
+          "ctr": 0
+        },
+        {
+          "query": "jessica e morty",
+          "impressions": 2,
+          "position": 3,
+          "ctr": 0
+        },
+        {
+          "query": "jessica morty",
+          "impressions": 3,
+          "position": 3.3333333333333335,
+          "ctr": 0
+        },
+        {
+          "query": "jessica rick & morty",
+          "impressions": 1,
+          "position": 4,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Jessica e Morty",
+      "post_id": 38892
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/top-8-membros-da-tripulacao-de-gol-d-roger-quem-eles-sao/",
+      "current_title": "One Piece: 8 membros do bando de Gol D. Roger — UnicornioHater",
+      "impressions": 853.0,
+      "clicks": 1.0,
+      "ctr": 0.0011723329425556857,
+      "position": 5.145369284876905,
+      "top_query": "bando do roger",
+      "top_queries": [
+        {
+          "query": "tripulação gol d roger",
+          "impressions": 59,
+          "position": 2.3728813559322033,
+          "ctr": 0.01694915254237288
+        },
+        {
+          "query": "bando do gold roger",
+          "impressions": 2,
+          "position": 3,
+          "ctr": 0
+        },
+        {
+          "query": "bando do roger",
+          "impressions": 2,
+          "position": 2,
+          "ctr": 0
+        },
+        {
+          "query": "braço direito do gold roger",
+          "impressions": 3,
+          "position": 2.333333333333333,
+          "ctr": 0
+        },
+        {
+          "query": "braço direito do roger",
+          "impressions": 1,
+          "position": 4,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Bando do Roger",
+      "post_id": 78154
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/piratas-do-caribe-os-poderes-e-a-historia-de-tia-dalma-explicados/",
+      "current_title": "Piratas do Caribe: quem é Tia Dalma, a bruxa? — UnicornioHater",
+      "impressions": 845.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 6.417751479289941,
+      "top_query": "bruxa dos piratas do caribe",
+      "top_queries": [
+        {
+          "query": "bruja de los piratas del caribe",
+          "impressions": 1,
+          "position": 26,
+          "ctr": 0
+        },
+        {
+          "query": "bruja de piratas del caribe",
+          "impressions": 2,
+          "position": 26.5,
+          "ctr": 0
+        },
+        {
+          "query": "bruja piratas del caribe",
+          "impressions": 4,
+          "position": 32.75,
+          "ctr": 0
+        },
+        {
+          "query": "bruxa de piratas do caribe",
+          "impressions": 2,
+          "position": 6.5,
+          "ctr": 0
+        },
+        {
+          "query": "bruxa do filme piratas do caribe",
+          "impressions": 3,
+          "position": 7,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Bruxa dos Piratas do Caribe",
+      "post_id": 26473
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/10-armas-de-fogo-famosas-em-animes/",
+      "current_title": "10 armas de fogo famosas dos animes — UnicornioHater",
+      "impressions": 780.0,
+      "clicks": 3.0,
+      "ctr": 0.0038461538461538464,
+      "position": 6.038461538461538,
+      "top_query": "anime armas",
+      "top_queries": [
+        {
+          "query": "anime de armas de fogo",
+          "impressions": 16,
+          "position": 4.8125,
+          "ctr": 0.0625
+        },
+        {
+          "query": "anime arma",
+          "impressions": 1,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "anime armas",
+          "impressions": 3,
+          "position": 2.333333333333333,
+          "ctr": 0
+        },
+        {
+          "query": "anime de armas",
+          "impressions": 3,
+          "position": 5.333333333333333,
+          "ctr": 0
+        },
+        {
+          "query": "anime pistolas",
+          "impressions": 1,
+          "position": 2,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Anime Armas",
+      "post_id": 38867
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/quantos-anos-tem-eri-em-my-hero-academia/",
+      "current_title": "Quantos anos tem Eri em My Hero Academia? — UnicornioHater",
+      "impressions": 777.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 10.862290862290862,
+      "top_query": "eri idade",
+      "top_queries": [
+        {
+          "query": "a eri tem quantos anos",
+          "impressions": 15,
+          "position": 7.066666666666666,
+          "ctr": 0
+        },
+        {
+          "query": "cuantos años tiene eri de my hero academia",
+          "impressions": 1,
+          "position": 11,
+          "ctr": 0
+        },
+        {
+          "query": "eri a",
+          "impressions": 1,
+          "position": 2,
+          "ctr": 0
+        },
+        {
+          "query": "eri age",
+          "impressions": 4,
+          "position": 57.25,
+          "ctr": 0
+        },
+        {
+          "query": "eri age mha",
+          "impressions": 2,
+          "position": 30.5,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Eri Idade",
+      "post_id": 46816
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/por-que-snape-matou-dumbledore-em-harry-potter/",
+      "current_title": "Por que Severo Snape matou Dumbledore? — UnicornioHater",
+      "impressions": 739.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 10.856562922868742,
+      "top_query": "porque severo snape matou dumbledore",
+      "top_queries": [
+        {
+          "query": "por que severo matou dumbledore",
+          "impressions": 1,
+          "position": 11,
+          "ctr": 0
+        },
+        {
+          "query": "por que snape mata dumbledore",
+          "impressions": 2,
+          "position": 11.5,
+          "ctr": 0
+        },
+        {
+          "query": "por que snape matou dumbledore",
+          "impressions": 11,
+          "position": 11.363636363636363,
+          "ctr": 0
+        },
+        {
+          "query": "porque dumbledore morreu",
+          "impressions": 1,
+          "position": 60,
+          "ctr": 0
+        },
+        {
+          "query": "porque o severo matou o dumbledore",
+          "impressions": 7,
+          "position": 10.857142857142858,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Porque Severo Snape Matou Dumbledore",
+      "post_id": 70198
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/os-simpsons-todas-as-namoradas-que-bart-teve-no-programa-ate-o-momento/",
+      "current_title": "Os Simpsons: todas as namoradas que Bart já teve — UnicornioHater",
+      "impressions": 736.0,
+      "clicks": 2.0,
+      "ctr": 0.002717391304347826,
+      "position": 7.747282608695652,
+      "top_query": "esposa de bart simpson",
+      "top_queries": [
+        {
+          "query": "all bart's girlfriends",
+          "impressions": 1,
+          "position": 52,
+          "ctr": 0
+        },
+        {
+          "query": "all of bart's girlfriends",
+          "impressions": 1,
+          "position": 71,
+          "ctr": 0
+        },
+        {
+          "query": "bart girlfriend",
+          "impressions": 1,
+          "position": 51,
+          "ctr": 0
+        },
+        {
+          "query": "bart girlfriends",
+          "impressions": 2,
+          "position": 39,
+          "ctr": 0
+        },
+        {
+          "query": "bart preso",
+          "impressions": 1,
+          "position": 3,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Esposa de Bart Simpson",
+      "post_id": 18270
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/methode-em-frieren-beyond-journeys-end-perfil-completo-poderes-e-curiosidades/",
+      "current_title": "Methode em Frieren: perfil completo e poderes — UnicornioHater",
+      "impressions": 689.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.031930333817126,
+      "top_query": "methode frieren altura",
+      "top_queries": [
+        {
+          "query": "frieren methode",
+          "impressions": 82,
+          "position": 4.182926829268293,
+          "ctr": 0
+        },
+        {
+          "query": "frieren methode age",
+          "impressions": 4,
+          "position": 7,
+          "ctr": 0
+        },
+        {
+          "query": "frieren metode",
+          "impressions": 2,
+          "position": 3.5,
+          "ctr": 0
+        },
+        {
+          "query": "frieren nome completo",
+          "impressions": 1,
+          "position": 5,
+          "ctr": 0
+        },
+        {
+          "query": "friren methode",
+          "impressions": 1,
+          "position": 4,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Methode Frieren Altura",
+      "post_id": 100138
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/como-e-quando-popeye-ganhou-superforca-comendo-espinafre-e-finalmente-revelado/",
+      "current_title": "Como Popeye ganhou superforça comendo espinafre — UnicornioHater",
+      "impressions": 682.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 7.505865102639296,
+      "top_query": "marinheiro popeye comendo espinafre",
+      "top_queries": [
+        {
+          "query": "comida do popeye",
+          "impressions": 1,
+          "position": 53,
+          "ctr": 0
+        },
+        {
+          "query": "espinafre popeye",
+          "impressions": 3,
+          "position": 27.666666666666668,
+          "ctr": 0
+        },
+        {
+          "query": "marinheiro popeye comendo espinafre",
+          "impressions": 3,
+          "position": 2.333333333333333,
+          "ctr": 0
+        },
+        {
+          "query": "o que o popeye come",
+          "impressions": 102,
+          "position": 5.784313725490196,
+          "ctr": 0
+        },
+        {
+          "query": "o que o popeye come para ficar forte",
+          "impressions": 1,
+          "position": 32,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Marinheiro Popeye Comendo Espinafre",
+      "post_id": 81933
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/attack-on-titan-todos-os-personagens-que-herdaram-a-mandibula-titan/",
+      "current_title": "Attack on Titan: quem herdou o Titan Mandíbula? — UnicornioHater",
+      "impressions": 675.0,
+      "clicks": 2.0,
+      "ctr": 0.002962962962962963,
+      "position": 5.0162962962962965,
+      "top_query": "marcel titan mandibula",
+      "top_queries": [
+        {
+          "query": "titan mandíbula",
+          "impressions": 119,
+          "position": 2.369747899159664,
+          "ctr": 0.008403361344537815
+        },
+        {
+          "query": "aot titan mandibula",
+          "impressions": 1,
+          "position": 4,
+          "ctr": 0
+        },
+        {
+          "query": "attack on titan mandibula",
+          "impressions": 5,
+          "position": 3.8,
+          "ctr": 0
+        },
+        {
+          "query": "falco aot",
+          "impressions": 1,
+          "position": 17,
+          "ctr": 0
+        },
+        {
+          "query": "falco grice",
+          "impressions": 1,
+          "position": 13,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Marcel Titan Mandibula",
+      "post_id": 42856
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/materia-exotica-esta-em-nossa-mira-agora/",
+      "current_title": "Matéria exótica: o que é e como é estudada — UnicornioHater",
+      "impressions": 674.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 6.014836795252226,
+      "top_query": "materia exotica fisica",
+      "top_queries": [
+        {
+          "query": "materia exotica",
+          "impressions": 218,
+          "position": 4.944954128440367,
+          "ctr": 0
+        },
+        {
+          "query": "materia exotica existe",
+          "impressions": 1,
+          "position": 1,
+          "ctr": 0
+        },
+        {
+          "query": "materia exotica fisica",
+          "impressions": 10,
+          "position": 2.1,
+          "ctr": 0
+        },
+        {
+          "query": "materia exótica",
+          "impressions": 11,
+          "position": 8,
+          "ctr": 0
+        },
+        {
+          "query": "matéria exotica",
+          "impressions": 45,
+          "position": 5.111111111111111,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Materia Exotica Fisica",
+      "post_id": 35216
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/one-piece-a-recompensa-conhecida-de-todos-os-piratas-do-barba-negra-classificada-do-mais-baixo-ao-mais-alto/",
+      "current_title": "One Piece: recompensas do bando do Barba Negra — UnicornioHater",
+      "impressions": 659.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.305007587253415,
+      "top_query": "atirador barba negra",
+      "top_queries": [
+        {
+          "query": "atirador barba negra",
+          "impressions": 2,
+          "position": 2.5,
+          "ctr": 0
+        },
+        {
+          "query": "atirador do bando do barba negra",
+          "impressions": 1,
+          "position": 2,
+          "ctr": 0
+        },
+        {
+          "query": "bando barba negra",
+          "impressions": 1,
+          "position": 29,
+          "ctr": 0
+        },
+        {
+          "query": "bando do barba negra",
+          "impressions": 1,
+          "position": 24,
+          "ctr": 0
+        },
+        {
+          "query": "barba negra",
+          "impressions": 1,
+          "position": 1,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Atirador Barba Negra",
+      "post_id": 14395
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/o-final-da-5a-temporada-de-rick-e-morty-revela-o-que-torna-o-evil-morty-evil/",
+      "current_title": "Em que episódio Evil Morty destrói a Cidadela? — UnicornioHater",
+      "impressions": 647.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 13.018547140649149,
+      "top_query": "episodio que o evil morty destroi a cidadela",
+      "top_queries": [
+        {
+          "query": "em que ep aparece o evil morty",
+          "impressions": 1,
+          "position": 11,
+          "ctr": 0
+        },
+        {
+          "query": "em que ep o evil morty aparece",
+          "impressions": 1,
+          "position": 10,
+          "ctr": 0
+        },
+        {
+          "query": "em que episódio o evil morty aparece",
+          "impressions": 5,
+          "position": 13.8,
+          "ctr": 0
+        },
+        {
+          "query": "ep que o evil morty aparece",
+          "impressions": 30,
+          "position": 10.733333333333333,
+          "ctr": 0
+        },
+        {
+          "query": "episodio que o evil morty destroi a cidadela",
+          "impressions": 2,
+          "position": 9,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Episodio que o Evil Morty Destroi a Cidadela",
+      "post_id": 36426
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/qual-e-a-diferenca-entre-anime-ova-oav-e-ona/",
+      "current_title": "Qual é a diferença entre Anime, OVA, OAV e ONA? — UnicornioHater",
+      "impressions": 631.0,
+      "clicks": 1.0,
+      "ctr": 0.001584786053882726,
+      "position": 21.01267828843106,
+      "top_query": "ova anime",
+      "top_queries": [
+        {
+          "query": "ova anime",
+          "impressions": 165,
+          "position": 4.272727272727273,
+          "ctr": 0.006060606060606061
+        },
+        {
+          "query": "a ova",
+          "impressions": 1,
+          "position": 2,
+          "ctr": 0
+        },
+        {
+          "query": "anime oav",
+          "impressions": 3,
+          "position": 60,
+          "ctr": 0
+        },
+        {
+          "query": "anime ona",
+          "impressions": 4,
+          "position": 31.75,
+          "ctr": 0
+        },
+        {
+          "query": "anime ona meaning",
+          "impressions": 5,
+          "position": 65.8,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Ova Anime",
+      "post_id": 78432
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/personagens-de-anime-que-farmam-mais-aura-que-sung-jinwoo/",
+      "current_title": "Anime: personagens com mais aura que Sung Jinwoo — UnicornioHater",
+      "impressions": 597.0,
+      "clicks": 2.0,
+      "ctr": 0.0033500837520938024,
+      "position": 7.6214405360134005,
+      "top_query": "personagem aura",
+      "top_queries": [
+        {
+          "query": "anime com aura",
+          "impressions": 4,
+          "position": 9,
+          "ctr": 0
+        },
+        {
+          "query": "animes com aura",
+          "impressions": 3,
+          "position": 11,
+          "ctr": 0
+        },
+        {
+          "query": "animes de aura",
+          "impressions": 2,
+          "position": 5.5,
+          "ctr": 0
+        },
+        {
+          "query": "aura",
+          "impressions": 1,
+          "position": 6,
+          "ctr": 0
+        },
+        {
+          "query": "personagem aura",
+          "impressions": 2,
+          "position": 2,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Personagem Aura",
+      "post_id": 96909
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/o-senhor-dos-aneis-como-sauron-se-tornou-o-necromante-em-o-hobbit/",
+      "current_title": "Como Sauron virou o Necromante de O Hobbit? — UnicornioHater",
+      "impressions": 590.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.472881355932204,
+      "top_query": "o necromante hobbit",
+      "top_queries": [
+        {
+          "query": "hobbit necromancer",
+          "impressions": 1,
+          "position": 72,
+          "ctr": 0
+        },
+        {
+          "query": "hobbit sauron",
+          "impressions": 5,
+          "position": 6.2,
+          "ctr": 0
+        },
+        {
+          "query": "necromancer hobbit",
+          "impressions": 1,
+          "position": 68,
+          "ctr": 0
+        },
+        {
+          "query": "necromancer the hobbit",
+          "impressions": 1,
+          "position": 74,
+          "ctr": 0
+        },
+        {
+          "query": "necromante hobbit",
+          "impressions": 117,
+          "position": 2.948717948717949,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "O Necromante Hobbit",
+      "post_id": 31187
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/senhor-dos-aneis-a-origem-do-cavalo-de-gandalf-shadowfax/",
+      "current_title": "Shadowfax: a origem do cavalo de Gandalf — UnicornioHater",
+      "impressions": 533.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 5.024390243902439,
+      "top_query": "cavalo de gandalf",
+      "top_queries": [
+        {
+          "query": "cavalo de gandalf",
+          "impressions": 27,
+          "position": 3.185185185185185,
+          "ctr": 0
+        },
+        {
+          "query": "cavalo do gandalf",
+          "impressions": 11,
+          "position": 3.727272727272727,
+          "ctr": 0
+        },
+        {
+          "query": "cavalo do gandalf nome",
+          "impressions": 2,
+          "position": 4.5,
+          "ctr": 0
+        },
+        {
+          "query": "cavalo gandalf",
+          "impressions": 27,
+          "position": 3.4444444444444446,
+          "ctr": 0
+        },
+        {
+          "query": "gandalf and shadowfax",
+          "impressions": 1,
+          "position": 42,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Cavalo de Gandalf",
+      "post_id": 31514
+    },
+    {
+      "url": "https://www.unicorniohater.com.br/viuva-negra-finalmente-revela-o-que-aconteceu-em-budapeste/",
+      "current_title": "Viúva Negra: o que aconteceu em Budapeste? — UnicornioHater",
+      "impressions": 511.0,
+      "clicks": 0.0,
+      "ctr": 0.0,
+      "position": 9.148727984344422,
+      "top_query": "oq aconteceu em budapeste",
+      "top_queries": [
+        {
+          "query": "o que aconteceu em budapeste",
+          "impressions": 69,
+          "position": 7.478260869565218,
+          "ctr": 0
+        },
+        {
+          "query": "o que aconteceu em budapeste com a viúva negra",
+          "impressions": 5,
+          "position": 11.6,
+          "ctr": 0
+        },
+        {
+          "query": "o que aconteceu em budapeste marvel",
+          "impressions": 183,
+          "position": 9.814207650273223,
+          "ctr": 0
+        },
+        {
+          "query": "o'que aconteceu em budapeste marvel",
+          "impressions": 111,
+          "position": 10.90990990990991,
+          "ctr": 0
+        },
+        {
+          "query": "oq aconteceu em budapeste",
+          "impressions": 31,
+          "position": 5.161290322580645,
+          "ctr": 0
+        }
+      ],
+      "suggested_title": "Oq Aconteceu em Budapeste",
+      "post_id": 34151
+    }
+  ],
+  "skipped": [],
+  "warnings": []
+}

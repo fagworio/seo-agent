@@ -223,10 +223,17 @@ def _rollout_allows_write(rollout: dict[str, Any] | None) -> bool:
     """
     if not rollout:
         return False
-    for chave in ("write_allowed", "allows_write", "write_enabled"):
+    # `writes_allowed` PRIMEIRO: e' a chave que o contrato real do motor entrega
+    # (`report/shadow_mode.py` -> {"mode": ..., "writes_allowed": ...}). Sem ela na
+    # lista, TODA decisao vinda do motor cairia em `rollout_blocks_write` — o gate
+    # funcionaria ao contrario do pretendido e nada executaria em silencio.
+    for chave in ("writes_allowed", "write_allowed", "allows_write",
+                  "write_enabled"):
         if chave in rollout:
             return bool(rollout.get(chave))
-    fase = str(rollout.get("stage") or rollout.get("phase") or "").lower()
+    # `mode`/`stage`/`phase` como fallback para rollout sem chave booleana.
+    fase = str(rollout.get("mode") or rollout.get("stage")
+               or rollout.get("phase") or "").lower()
     if fase:
         return fase in ("auto", "write", "full")
     return False
@@ -357,6 +364,91 @@ def reconcile_pending_enqueue(store: Any, *, limit: int = 50) -> dict[str, Any]:
             criados.append(dd["decision_id"])
     return {"pendentes": len(pendentes), "reconciliados": len(criados),
             "criados": criados, "barrados": barrados}
+
+
+def decision_from_action(action: dict[str, Any], *,
+                         contract: dict[str, Any] | None = None,
+                         live_title: str | None = None) -> TitleDecision:
+    """Traduz a `SafeAction` do motor (e o contrato que a originou) em decisao.
+
+    O `before` e' o titulo VIVO no WordPress quando ele foi lido; senao, o `before`
+    da propria acao (que o motor tirou do `rank_math_title` observado). Nenhuma
+    normalizacao aqui: e' esse valor que o gate 4 confere contra o banco.
+    """
+    contract = contract or {}
+    fix = action.get("fix") or {}
+    post_id = fix.get("post_id")
+    if post_id is None:
+        post_id = contract.get("post_id")
+    before = live_title
+    if before is None:
+        before = (action.get("before") or {}).get("rank_math_title")
+    after = (fix.get("meta") or {}).get("rank_math_title") or ""
+    conf = action.get("confidence")
+    if conf is None:
+        conf = contract.get("confidence")
+    # `requires_review`: o motor e' quem sabe se a URL precisa de revisao humana.
+    # Os contratos que chegam aqui ja' passaram pelo filtro `review_title`, entao o
+    # default e' False (pode executar) e a barreira so' aparece se o contrato a
+    # declarar — nunca por omissao, para nao bloquear tudo em silencio.
+    review = bool(contract.get("requires_review")
+                  or contract.get("approval_required"))
+    return make_decision(
+        url=str(action.get("url") or contract.get("url") or ""),
+        post_id=(int(post_id) if post_id is not None else None),
+        before=str(before or ""), after=str(after),
+        confidence=conf, rollout=contract.get("rollout") or {},
+        requires_review=review,
+        evidence={"decision": contract.get("decision"),
+                  "page": contract.get("page"),
+                  "baseline": contract.get("baseline"),
+                  "signal_window": contract.get("signal_window"),
+                  "source": "title_engine"})
+
+
+def persist_actions(store: Any, actions: list[dict[str, Any]], *,
+                    contracts_by_url: dict[str, dict[str, Any]] | None = None,
+                    live_titles: dict[str, str] | None = None,
+                    enqueue: bool = True) -> dict[str, Any]:
+    """Persiste cada acao como decisao e enfileira o que for executavel.
+
+    Ordem deliberada (gate 8): `persist_decision` ANTES de `enqueue_execution`. Se
+    o processo morrer entre os dois, a decisao existe e `reconcile_pending_enqueue`
+    fecha o buraco; a ordem inversa perderia a decisao.
+
+    Uma URL que estoura nunca derruba o lote: vira linha em `erros`.
+    """
+    by_url = contracts_by_url or {}
+    lives = live_titles or {}
+    criadas: list[str] = []
+    executaveis: list[str] = []
+    sem_execucao: list[dict[str, Any]] = []
+    erros: list[dict[str, Any]] = []
+    for action in actions or []:
+        # A leitura do `url` fica DENTRO da protecao: um item nao-dict nao pode
+        # derrubar o lote (regra principal do roadmap). Com o `url` fora do try, um
+        # unico item estranho estourava antes do `except` e levava o ciclo todo.
+        url = (str(action.get("url") or "")
+               if isinstance(action, dict) else "")
+        try:
+            d = decision_from_action(action, contract=by_url.get(url),
+                                     live_title=lives.get(url))
+            r = persist_decision(store, d)
+            criadas.append(d.decision_id)
+            if r.get("executavel"):
+                if enqueue:
+                    enqueue_execution(store, d)
+                executaveis.append(d.decision_id)
+            else:
+                sem_execucao.append({"decision_id": d.decision_id,
+                                     "motivo": r.get("motivo")})
+        except Exception as exc:  # nunca derrubar o lote por uma URL estranha
+            erros.append({"url": url,
+                          "erro": f"{type(exc).__name__}: {exc}"})
+    return {"criadas": criadas, "executaveis": executaveis,
+            "sem_execucao": sem_execucao, "erros": erros,
+            "counts": {"criadas": len(criadas), "executaveis": len(executaveis),
+                       "sem_execucao": len(sem_execucao), "erros": len(erros)}}
 
 
 def stats(store: Any) -> dict[str, Any]:

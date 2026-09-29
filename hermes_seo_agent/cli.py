@@ -2822,7 +2822,41 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             "refused_detail": built["skipped"][:20],
             "executor": None,
         }
-        if built["actions"]:
+        # ---- 7A.2: a decisao passa a IR PARA A FILA -------------------------
+        # O motor continua puro: `decisions_to_actions` segue montando a acao. O
+        # que muda e' QUEM executa — passa a ser o item `title_execution`, e
+        # enquanto o 7B nao existir ninguem executa (WordPress intocado). Isto
+        # elimina o caminho direto title-engine -> Executor -> WordPress, que era
+        # o ultimo lugar onde uma decisao podia virar escrita sem passar pela
+        # fila. Ligado por `title_decision_owns_writes` (default True) para poder
+        # voltar ao executor direto por config, sem mexer em codigo.
+        queued: dict[str, Any] | None = None
+        owns = bool(getattr(config, "title_decision_owns_writes", True))
+        if owns and built["actions"]:
+            try:
+                from .lanes.title_decision import persist_actions
+                with Storage(config.sqlite_path) as q_store:
+                    queued = persist_actions(
+                        q_store, built["actions"],
+                        contracts_by_url={str(c.get("url") or ""): c
+                                          for c in review_contracts})
+                write_summary["queued"] = {
+                    "criadas": queued["counts"]["criadas"],
+                    "executaveis": queued["counts"]["executaveis"],
+                    "sem_execucao": queued["counts"]["sem_execucao"],
+                    "erros": queued["counts"]["erros"],
+                    "sem_execucao_detalhe": queued["sem_execucao"][:20],
+                    "erros_detalhe": queued["erros"][:20],
+                }
+            except Exception as exc:
+                # Regra principal do roadmap: falha ao enfileirar nao derruba o
+                # ciclo — mas PRECISA ficar visivel, senao as decisoes somem em
+                # silencio e o `built` alto da falsa impressao de trabalho feito.
+                warnings.append(
+                    f"7A enqueue falhou: {type(exc).__name__}: {exc}")
+                write_summary["queued"] = {
+                    "error": f"{type(exc).__name__}: {exc}"}
+        if built["actions"] and not owns:
             # P0.5 (Sprint 1.1) — politica PROPRIA do executor de titulos. Antes
             # reutilizava MAX_SAFE_FIX_PER_CYCLE e depois ignorava valores >10 no
             # `min(10, teto)` — configuracao enganosa. Agora o teto e explicito

@@ -1,0 +1,48 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "audit",
+    "cycle_id": "cycle-b6d26eb744e4",
+    "wp_posts": 18916,
+    "sitemap_urls": 18975,
+    "static_urls": 0,
+    "in_sitemap": 18915,
+    "missing_from_sitemap": 1,
+    "orphan_in_sitemap": 60,
+    "wp_static_mismatch": 0,
+    "static_orphan": 0,
+    "audited_urls": 500,
+    "findings": 2
+  },
+  "findings": [
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-24/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-23/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-22/",
+      "severity": "medium",
+      "detail": "3 pages share the same title"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira-algumas-ofertas/, https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira/",
+      "severity": "medium",
+      "detail": "2 pages share the same title"
+    }
+  ],
+  "safe_actions": [],
+  "approval_required": [
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-24/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-23/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-22/",
+      "severity": "medium",
+      "detail": "3 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira-algumas-ofertas/, https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira/",
+      "severity": "medium",
+      "detail": "2 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    }
+  ]
+}

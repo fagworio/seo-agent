@@ -1,0 +1,48 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "audit",
+    "cycle_id": "cycle-802e03aeb81e",
+    "wp_posts": 18886,
+    "sitemap_urls": 18946,
+    "static_urls": 0,
+    "in_sitemap": 18886,
+    "missing_from_sitemap": 0,
+    "orphan_in_sitemap": 60,
+    "wp_static_mismatch": 0,
+    "static_orphan": 0,
+    "audited_urls": 500,
+    "findings": 2
+  },
+  "findings": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/orlando-bloom-quer-todo-mundo-de-volta-em-piratas-do-caribe-6/",
+      "severity": "low",
+      "detail": "title has 75 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/nintendo-adia-filme-de-the-legend-of-zelda-para-maio-de-2027/",
+      "severity": "low",
+      "detail": "title has 74 chars (> 65)"
+    }
+  ],
+  "safe_actions": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/orlando-bloom-quer-todo-mundo-de-volta-em-piratas-do-caribe-6/",
+      "severity": "low",
+      "detail": "title has 75 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/nintendo-adia-filme-de-the-legend-of-zelda-para-maio-de-2027/",
+      "severity": "low",
+      "detail": "title has 74 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    }
+  ],
+  "approval_required": []
+}

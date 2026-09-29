@@ -1,0 +1,74 @@
+[
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/crunchyroll-reune-animes-esportivos-para-assistir-na-copa-do-mundo-futebol-volei-basquete-patinacao-e-corrida/",
+    "detail": "titulo com 66 chars (>65) -> 58",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 107414,
+      "meta": {
+        "rank_math_title": "Crunchyroll reúne animes esportivos para assistir na Copa…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/famitsu-atualizou-a-lista-jogos-mais-desejados-em-2-de-agosto-de-2026/",
+    "detail": "titulo com 71 chars (>65) -> 57",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 108579,
+      "meta": {
+        "rank_math_title": "Famitsu atualizou a lista “Jogos mais desejados” em 2 de…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/kodansha-usa-anuncia-novos-lancamentos-no-print-club-e-omnibus-de-hajime-no-ippo-fighting-spirit/",
+    "detail": "titulo com 81 chars (>65) -> 55",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 109582,
+      "meta": {
+        "rank_math_title": "Kodansha USA anuncia novos lançamentos no Print Club e…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/netflix-anuncia-novidades-de-anime-e-animacoes-inspiradas-no-japao-trailers-e-datas-de-estreia/",
+    "detail": "titulo com 66 chars (>65) -> 58",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 109309,
+      "meta": {
+        "rank_math_title": "Netflix anuncia novidades de anime e animações inspiradas…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/series-menos-lembradas-da-netflix-para-maratonar-no-fim-de-semana/",
+    "detail": "titulo com 67 chars (>65) -> 58",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 108011,
+      "meta": {
+        "rank_math_title": "3 séries menos lembradas da Netflix para maratonar no fim…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_too_long",
+    "url": "https://www.unicorniohater.com.br/twin-peaks-inspirou-silenciosamente-um-dos-jogos-mais-estranhos-da-nintendo-links-awakening/",
+    "detail": "titulo com 77 chars (>65) -> 56",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 108301,
+      "meta": {
+        "rank_math_title": "'Twin Peaks' inspirou silenciosamente um dos jogos mais…"
+      }
+    }
+  }
+]

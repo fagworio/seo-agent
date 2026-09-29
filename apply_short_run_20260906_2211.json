@@ -1,0 +1,148 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "apply",
+    "cycle_id": "apply-f998ec9505b3",
+    "dry_run": false,
+    "executed": 0,
+    "previewed": 0,
+    "unverified": 0,
+    "skipped": 10
+  },
+  "findings": [],
+  "safe_actions": [],
+  "approval_required": [],
+  "skipped_actions": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-classicos-de-magical-girl-que-envelheceram-mal-e-hoje-parecem-dificeis-de-assistir/",
+      "detail": "titulo com 109 chars (>65) -> 59",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101471,
+        "meta": {
+          "rank_math_title": "10 animes clássicos de magical girl que envelheceram mal e…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-em-que-o-vilao-realmente-vence-e-a-historia-nao-tenta-consertar-isso/",
+      "detail": "titulo com 97 chars (>65) -> 60",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101961,
+        "meta": {
+          "rank_math_title": "10 animes em que o vilão realmente vence — e a história não…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-para-assistir-se-voce-ama-frieren-melancolia-fantasia-e-reflexao/",
+      "detail": "titulo com 93 chars (>65) -> 56",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101419,
+        "meta": {
+          "rank_math_title": "10 animes para assistir se você ama Frieren: melancolia,"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-que-acertaram-em-cheio-no-final-e-ficaram-na-memoria-dos-fas/",
+      "detail": "titulo com 89 chars (>65) -> 57",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101740,
+        "meta": {
+          "rank_math_title": "10 animes que acertaram em cheio no final — e ficaram na…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-que-chegam-a-netflix-em-maio-de-2026-veja-datas-e-destaques/",
+      "detail": "titulo com 87 chars (>65) -> 60",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101609,
+        "meta": {
+          "rank_math_title": "10 animes que chegam à Netflix em maio de 2026: veja datas e"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-que-completaram-10-anos-em-2016-e-seguem-marcando-fas-ate-hoje/",
+      "detail": "titulo com 89 chars (>65) -> 60",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101677,
+        "meta": {
+          "rank_math_title": "10 animes que completaram 10 anos em 2016 e seguem marcando…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-animes-que-ficaram-muito-mais-sombrios-apos-uma-unica-transformacao/",
+      "detail": "titulo com 87 chars (>65) -> 57",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101460,
+        "meta": {
+          "rank_math_title": "10 animes que ficaram muito mais sombrios após uma única…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-classicos-do-ps2-que-nao-envelheceram-tao-bem-quanto-voce-lembra/",
+      "detail": "titulo com 84 chars (>65) -> 56",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101416,
+        "meta": {
+          "rank_math_title": "10 clássicos do PS2 que não envelheceram tão bem quanto…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-herois-de-shonen-que-borram-a-linha-entre-heroi-e-vilao/",
+      "detail": "titulo com 75 chars (>65) -> 58",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 102145,
+        "meta": {
+          "rank_math_title": "10 heróis de shonen que borram a linha entre herói e vilão"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/10-melhores-animes-de-garotas-magicas-para-fas-de-sailor-moon/",
+      "detail": "titulo com 78 chars (>65) -> 57",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 101845,
+        "meta": {
+          "rank_math_title": "10 melhores animes de garotas mágicas para fãs de Sailor…"
+        }
+      },
+      "reason": "already executed (idempotent)"
+    }
+  ],
+  "unverified_actions": []
+}

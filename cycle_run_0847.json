@@ -1,0 +1,237 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "audit",
+    "cycle_id": "cycle-c3115718a78f",
+    "wp_posts": 18892,
+    "sitemap_urls": 18952,
+    "static_urls": 0,
+    "in_sitemap": 18892,
+    "missing_from_sitemap": 0,
+    "orphan_in_sitemap": 60,
+    "wp_static_mismatch": 0,
+    "static_orphan": 0,
+    "audited_urls": 500,
+    "findings": 17
+  },
+  "findings": [
+    {
+      "rule_id": "broken_internal_link",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "HTTP 404 (final https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/castlevania-dominus-collection-lancado-para-consoles-e-pc/",
+      "severity": "low",
+      "detail": "title has 71 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/mod-revolucionario-do-xbox-360-mudara-todo-o-cenario/",
+      "severity": "low",
+      "detail": "title has 80 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/witcher-4-sem-geralt-ator-de-voz-confirma-nova-direcao-do-jogo/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/borderlands-e-um-lixo-sem-vida-dizem-reacoes-iniciais/",
+      "severity": "low",
+      "detail": "title has 68 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/gestalt-steam-cinder-primeiras-impressoes-deste-metroidvania/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/22-anos-depois-kien-e-finalmente-lancado-para-game-boy-advance/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)"
+    },
+    {
+      "rule_id": "title_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "page has no <title>"
+    },
+    {
+      "rule_id": "meta_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "page has no meta description"
+    },
+    {
+      "rule_id": "canonical_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "medium",
+      "detail": "page has no rel=canonical"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/castlevania-revamped-funde-classicvania-com-metroidvania/",
+      "severity": "low",
+      "detail": "title has 84 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/fallout-2a-temporada-vai-chegar-o-mais-rapido-possivel/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/sera-que-concord-da-sony-ja-esta-destinado-ao-fracasso/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/chefe-da-naughty-dog-desmente-sony-em-situacao-polemica/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-23/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-22/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-21/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-20/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-19/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-18/",
+      "severity": "medium",
+      "detail": "6 pages share the same title"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira-algumas-ofertas/, https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira/",
+      "severity": "medium",
+      "detail": "2 pages share the same title"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-95-de-desconto-para-xbox-one-e-series-sx-9/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-95-de-desconto-para-xbox-one-e-series-sx-8/",
+      "severity": "medium",
+      "detail": "2 pages share the same title"
+    }
+  ],
+  "safe_actions": [
+    {
+      "rule_id": "broken_internal_link",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "HTTP 404 (final https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/)",
+      "suggested_action": "remove or update the link"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/castlevania-dominus-collection-lancado-para-consoles-e-pc/",
+      "severity": "low",
+      "detail": "title has 71 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/mod-revolucionario-do-xbox-360-mudara-todo-o-cenario/",
+      "severity": "low",
+      "detail": "title has 80 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/witcher-4-sem-geralt-ator-de-voz-confirma-nova-direcao-do-jogo/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/borderlands-e-um-lixo-sem-vida-dizem-reacoes-iniciais/",
+      "severity": "low",
+      "detail": "title has 68 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/gestalt-steam-cinder-primeiras-impressoes-deste-metroidvania/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/22-anos-depois-kien-e-finalmente-lancado-para-game-boy-advance/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/castlevania-revamped-funde-classicvania-com-metroidvania/",
+      "severity": "low",
+      "detail": "title has 84 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/fallout-2a-temporada-vai-chegar-o-mais-rapido-possivel/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/sera-que-concord-da-sony-ja-esta-destinado-ao-fracasso/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    }
+  ],
+  "approval_required": [
+    {
+      "rule_id": "title_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "page has no <title>",
+      "suggested_action": "add a title"
+    },
+    {
+      "rule_id": "meta_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "high",
+      "detail": "page has no meta description",
+      "suggested_action": "add meta description"
+    },
+    {
+      "rule_id": "canonical_missing",
+      "url": "https://www.unicorniohater.com.br/remake-do-anime-ranma-%c2%bd-anunciado-surpresas-e-novidades-apos-30-anos/",
+      "severity": "medium",
+      "detail": "page has no rel=canonical",
+      "suggested_action": "set canonical to the static URL"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-23/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-22/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-21/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-20/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-19/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-18/",
+      "severity": "medium",
+      "detail": "6 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira-algumas-ofertas/, https://www.unicorniohater.com.br/nuuvem-jogos-para-pc-com-ate-95-de-desconto-confira/",
+      "severity": "medium",
+      "detail": "2 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-95-de-desconto-para-xbox-one-e-series-sx-9/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-95-de-desconto-para-xbox-one-e-series-sx-8/",
+      "severity": "medium",
+      "detail": "2 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    }
+  ]
+}

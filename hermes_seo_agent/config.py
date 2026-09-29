@@ -66,6 +66,12 @@ class Config:
     # valores acima de 10 (min(10, teto)) — configuracao enganosa.
     title_max_writes_per_cycle: int = 10
 
+    # 7A.2 — a decisao de titulo vai para a FILA em vez de o motor escrever direto
+    # no WordPress. Default True: o caminho direto (title-engine -> Executor ->
+    # WordPress) e' exatamente o que o 7A elimina. `False` volta ao comportamento
+    # antigo sem mexer em codigo.
+    title_decision_owns_writes: bool = True
+
     # M0 — limites operacionais (URLs, queries, chunks, quota e custo por execução)
     max_queries_per_source: int = 500        # queries por fonte por execução
     max_chunks_per_doc: int = 200            # chunks/seções por documento no corpus
@@ -322,6 +328,7 @@ def load_config() -> Config:
         title_max_len=_int("TITLE_MAX_LEN", 60, 20, 200),
         title_engine_in_schedule=_bool("TITLE_ENGINE_IN_SCHEDULE", True),
         title_max_writes_per_cycle=_int("TITLE_MAX_WRITES_PER_CYCLE", 10, 0, 100),
+        title_decision_owns_writes=_bool("TITLE_DECISION_OWNS_WRITES", True),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),
         max_chunks_per_doc=_int("MAX_CHUNKS_PER_DOC", 200, 1, 10_000),
         max_external_calls=_int("MAX_EXTERNAL_CALLS", 0, 0, 100_000),

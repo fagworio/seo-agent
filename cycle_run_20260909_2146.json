@@ -1,0 +1,55 @@
+# SEO Audit Report
+
+_Generated 2026-09-10T00:48:24.714034+00:00 UTC_
+
+## Summary
+
+| Metric | Count |
+|---|---|
+| audited_urls | 500 |
+| command | audit |
+| cycle_id | cycle-4fefc0502a5f |
+| findings | 5 |
+| in_sitemap | 18886 |
+| missing_from_sitemap | 0 |
+| orphan_in_sitemap | 60 |
+| sitemap_urls | 18946 |
+| static_orphan | 0 |
+| static_urls | 0 |
+| wp_posts | 18886 |
+| wp_static_mismatch | 0 |
+
+**Findings:** 5 · **Safe actions:** 1 · **Require approval:** 4
+
+## Findings
+
+### 🟠 High
+
+| Rule | URL | Detail |
+|---|---|---|
+| `broken_internal_link` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | HTTP 404 (final https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/) |
+| `title_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | page has no <title> |
+| `meta_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | page has no meta description |
+
+### 🟡 Medium
+
+| Rule | URL | Detail |
+|---|---|---|
+| `canonical_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | page has no rel=canonical |
+| `title_duplicate` | `https://www.unicorniohater.com.br/my-hero-academia-final-season-vence-anime-of-the-year-no-2026-crunchyroll-anime-awards-veja-a-lista-completa/, https://www.unicorniohater.com.br/my-hero-academia-final-season-vence-anime-of-the-year-no-10o-crunchyroll-anime-awards/` | 2 pages share the same title |
+
+## Approval required (review queue — never auto-executed)
+
+| Rule | URL | Suggested action |
+|---|---|---|
+| `title_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | add a title |
+| `meta_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | add meta description |
+| `canonical_missing` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | set canonical to the static URL |
+| `title_duplicate` | `https://www.unicorniohater.com.br/my-hero-academia-final-season-vence-anime-of-the-year-no-2026-crunchyroll-anime-awards-veja-a-lista-completa/, https://www.unicorniohater.com.br/my-hero-academia-final-season-vence-anime-of-the-year-no-10o-crunchyroll-anime-awards/` | rewrite duplicate titles |
+
+## Safe actions (low-risk, idempotent)
+
+| Rule | URL | Suggested action |
+|---|---|---|
+| `broken_internal_link` | `https://www.unicorniohater.com.br/industria-de-anime-aposta-em-melhores-condicoes-de-trabalho-para-sustentar-o-boom-de-%c2%a56-trilhoes-cerca-de-r-230-bilhoes-de-reais/` | remove or update the link |
+

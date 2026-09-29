@@ -1,0 +1,98 @@
+[
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/quais-sao-os-reinos-elficos-em-o-senhor-dos-aneis/",
+    "detail": "título ancorado na query 'reino dos elfos em senhor dos aneis'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 77479,
+      "meta": {
+        "rank_math_title": "Quais são os reinos élficos em O Senhor dos Anéis?: Reino d…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/noblesse-e-mais-9-manhwas-sobre-vampiros-que-voce-precisa-conhecer/",
+    "detail": "título ancorado na query 'manhwa vampiro'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 36991,
+      "meta": {
+        "rank_math_title": "Noblesse e mais 9 manhwas de vampiros para conhecer: Manhwa…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/09-anime-para-assistir-se-voce-gostou-do-berserk/",
+    "detail": "título ancorado na query 'anime estilo berserk'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 7464,
+      "meta": {
+        "rank_math_title": "9 animes tipo Berserk para assistir se você gostou: Anime E…"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/the-all-devouring-whale-anime-chines-pokemon/",
+    "detail": "título ancorado na query 'anime pokemon chines'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 95244,
+      "meta": {
+        "rank_math_title": "The All-Devouring Whale: Pokemon Chines"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/todas-as-mortes-em-x-men-97-episodio-5/",
+    "detail": "título ancorado na query 'moira xmen 97'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 81884,
+      "meta": {
+        "rank_math_title": "X-Men ’97 episódio 5: Moira Xmen 97"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/os-simpsons-o-motivo-pelo-qual-comichao-e-cocadinha-sao-adicionados-a-certos-episodios/",
+    "detail": "título ancorado na query 'comichao e cocadinha'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 34392,
+      "meta": {
+        "rank_math_title": "Os Simpsons: Comichao e Cocadinha"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/piratas-do-caribe-por-que-davy-jones-matou-o-kraken-e-como/",
+    "detail": "título ancorado na query 'como jack sparrow sobreviveu ao kraken'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 19576,
+      "meta": {
+        "rank_math_title": "Piratas do Caribe: Como Jack Sparrow Sobreviveu Ao"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/red-dead-redemption-2-o-que-significam-os-sonhos-de-arthur-sobre-o-lobo-e-o-cervo/",
+    "detail": "título ancorado na query 'cervo arthur morgan'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 36027,
+      "meta": {
+        "rank_math_title": "Red Dead Redemption 2: Cervo Morgan"
+      }
+    }
+  }
+]

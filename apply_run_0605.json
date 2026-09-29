@@ -1,0 +1,148 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "apply",
+    "cycle_id": "apply-cfbb684ca672",
+    "dry_run": false,
+    "executed": 10,
+    "previewed": 0,
+    "unverified": 0,
+    "skipped": 0
+  },
+  "findings": [],
+  "safe_actions": [
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/the-beyonder-vs-one-above-all-quem-e-o-ser-supremo-da-marvel/",
+      "detail": "título ancorado na query 'one above all marvel poderes'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 6825,
+        "meta": {
+          "rank_math_title": "Beyonder vs One-Above-All: quem é o ser supremo da Marvel?"
+        }
+      },
+      "fingerprint": "0da2b23245d9d5e6bb5ee2a425ea9bf7"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/ghost-of-tsushima-mythic-tales-guide-como-encontrar-e-vencer-todos-eles/",
+      "detail": "título ancorado na query 'contos miticos ghost of tsushima'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 8971,
+        "meta": {
+          "rank_math_title": "Ghost of Tsushima: todos os Contos Míticos e como vencê-los"
+        }
+      },
+      "fingerprint": "940b9697d0c70e2de5df2c39249196e0"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/cronologia-completa-dos-filmes-anjos-da-noite-toda-a-linha-do-tempo-de-underworld-explicada/",
+      "detail": "título ancorado na query 'anjos da noite'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 5889,
+        "meta": {
+          "rank_math_title": "Underworld: cronologia completa dos filmes Anjos da Noite"
+        }
+      },
+      "fingerprint": "dbe97c01c5e77f326d24a0aee865fbc6"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/atriz-de-velozes-e-furiosos-elena-revela-o-gostaria-de-ter-feito-na-franquia/",
+      "detail": "título ancorado na query 'elsa pataky em velozes e furiosos'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 51822,
+        "meta": {
+          "rank_math_title": "Elsa Pataky revela o que sempre quis fazer em Velozes e Furiosos"
+        }
+      },
+      "fingerprint": "cf7b93d05f578bd8592dd758bf87a22f"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/stan-lee-criou-os-x-men-por-preguica/",
+      "detail": "título ancorado na query 'quem criou os xmen'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 44370,
+        "meta": {
+          "rank_math_title": "Quem criou os X-Men? Stan Lee — por pura preguiça"
+        }
+      },
+      "fingerprint": "c6966f2e94524669a1d9ddcdea21dadd"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/o-senhor-dos-aneis-os-aneis-do-poder-elenco-e-guia-de-personagens-quem-e-quem-no-novo-show-fotos/",
+      "detail": "título ancorado na query 'aneis do poder elenco'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 55439,
+        "meta": {
+          "rank_math_title": "Os Anéis do Poder: elenco e guia de personagens (fotos)"
+        }
+      },
+      "fingerprint": "a0e444f9ead4880a90c14f503802ea29"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/elenco-completo-de-gran-turismo-atores-principais-e-quem-eles-interpretam/",
+      "detail": "título ancorado na query 'atores de gran turismo'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 69384,
+        "meta": {
+          "rank_math_title": "Elenco de Gran Turismo: atores e quem eles interpretam"
+        }
+      },
+      "fingerprint": "91a38882fc6784eb7ffe0b02e35d2001"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/dragon-ball-quantos-anos-vegeta-tem-e-9-outras-coisas-que-voce-provavelmente-nao-sabia/",
+      "detail": "título ancorado na query 'quantos anos o vegeta tem'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 6133,
+        "meta": {
+          "rank_math_title": "Dragon Ball: quantos anos Vegeta tem? (e 9 curiosidades)"
+        }
+      },
+      "fingerprint": "b5a165b3b8473baa9c0cb85cc063dff3"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/inacreditavel-apos-27-anos-vagabond-ainda-implora-por-uma-adaptacao-em-anime/",
+      "detail": "título ancorado na query 'anime vagabond'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 97742,
+        "meta": {
+          "rank_math_title": "Vagabond: 27 anos esperando por uma adaptação em anime"
+        }
+      },
+      "fingerprint": "d266c5fa8a7c3226331d3f9af27b175e"
+    },
+    {
+      "rule_id": "title_opportunity",
+      "url": "https://www.unicorniohater.com.br/o-que-acontece-com-viserys-em-house-of-the-dragon-episodio-8/",
+      "detail": "título ancorado na query 'do que morreu o rei viserys targaryen'",
+      "fix": {
+        "type": "wp_post_meta",
+        "post_id": 57567,
+        "meta": {
+          "rank_math_title": "House of the Dragon: do que morreu o rei Viserys?"
+        }
+      },
+      "fingerprint": "49bc360a181f695272c78094ea884fa5"
+    }
+  ],
+  "approval_required": [],
+  "skipped_actions": [],
+  "unverified_actions": []
+}

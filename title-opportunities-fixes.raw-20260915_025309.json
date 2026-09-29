@@ -1,0 +1,14 @@
+[
+ {
+  "rule_id": "title_opportunity",
+  "url": "https://www.unicorniohater.com.br/he-man-agora-e-negro-em-masters-of-the-universe-revelation-de-kevin-smith/",
+  "detail": "rm truncado com '…' (56 chars, sem fechar a aspa) -> reescrito keyword-first cobrindo 'he man cabelo preto' (7 impr, pos 1,0) + entidade afrodescendente; pagina 243 impr / pos 4,05 / CTR 0%",
+  "fix": {
+   "type": "wp_post_meta",
+   "post_id": 33858,
+   "meta": {
+    "rank_math_title": "He-Man afrodescendente: por que ele tem cabelo preto"
+   }
+  }
+ }
+]

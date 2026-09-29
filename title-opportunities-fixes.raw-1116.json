@@ -1,0 +1,362 @@
+[
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/jujutsu-kaisen-idade-de-cada-personagem-principal/",
+    "detail": "título ancorado na query 'gojo'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 29138,
+      "meta": {
+        "rank_math_title": "Gojo"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/hughie-campbell-poderes-e-tudo-que-sabemos-ate-o-momento-sobre-esse-the-boys/",
+    "detail": "título ancorado na query 'highie'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 20530,
+      "meta": {
+        "rank_math_title": "Highie"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/sera-que-wolverine-e-dentes-de-sabre-sao-realmente-irmaos-em-x-men/",
+    "detail": "título ancorado na query 'dente de sabre irmao wolverine'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 69189,
+      "meta": {
+        "rank_math_title": "Dente de Sabre Irmao Wolverine"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/he-man-os-10-viloes-mais-assustadores-do-desenho-animado-classico-que-nao-eram-o-esqueleto/",
+    "detail": "título ancorado na query 'fantasma amigo do he man'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 35136,
+      "meta": {
+        "rank_math_title": "Fantasma Amigo do He Man"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/rick-e-morty-o-que-aconteceu-com-a-esposa-de-rick/",
+    "detail": "título ancorado na query 'esposa de rick'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 19196,
+      "meta": {
+        "rank_math_title": "Esposa de Rick"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/quem-e-celeborn-quem-e-o-marido-de-galadriel-em-senhor-dos-aneis-e-onde-ele-esta-nos-aneis-de-poder/",
+    "detail": "título ancorado na query 'celeborn aneis de poder'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 57595,
+      "meta": {
+        "rank_math_title": "Celeborn Aneis de Poder"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/bleach-a-origem-oculta-e-vida-do-pai-de-ichigo-explicado/",
+    "detail": "título ancorado na query 'bleach pai do ichigo'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 5386,
+      "meta": {
+        "rank_math_title": "Bleach Pai do Ichigo"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/37-filmes-de-comedia-das-decadas-de-80-que-definitivamente-devem-ser-relembrados/",
+    "detail": "título ancorado na query 'filme de comédia anos 80'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 6290,
+      "meta": {
+        "rank_math_title": "Filme de Comédia Anos 80"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/10-monstros-iconicos-em-o-senhor-dos-aneis-explicados/",
+    "detail": "título ancorado na query 'monstro do sr dos aneis'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 80191,
+      "meta": {
+        "rank_math_title": "Monstro do Sr dos Aneis"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/os-10-melhores-animes-de-romance-escolar-e-com-muitos-beijos/",
+    "detail": "título ancorado na query 'anime se beijando na boca'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 48690,
+      "meta": {
+        "rank_math_title": "Anime Se Beijando na Boca"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/venom-os-10-simbiontes-mais-poderosos-ranqueados/",
+    "detail": "título ancorado na query 'os simbiontes mais fortes'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 31098,
+      "meta": {
+        "rank_math_title": "Os Simbiontes Mais Fortes"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/o-pai-de-thanos-retorna-para-a-marvel-comics-em-uma-nova-variante/",
+    "detail": "título ancorado na query 'alars pai de thanos'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 35632,
+      "meta": {
+        "rank_math_title": "Alars Pai de Thanos"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/rick-e-morty-revelam-os-poderes-divinos-dos-tempos-epicos-de-jessica/",
+    "detail": "título ancorado na query 'jessica e morty'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 38892,
+      "meta": {
+        "rank_math_title": "Jessica e Morty"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/piratas-do-caribe-os-poderes-e-a-historia-de-tia-dalma-explicados/",
+    "detail": "título ancorado na query 'bruxa dos piratas do caribe'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 26473,
+      "meta": {
+        "rank_math_title": "Bruxa dos Piratas do Caribe"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/top-8-membros-da-tripulacao-de-gol-d-roger-quem-eles-sao/",
+    "detail": "título ancorado na query 'bando do roger'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 78154,
+      "meta": {
+        "rank_math_title": "Bando do Roger"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/10-armas-de-fogo-famosas-em-animes/",
+    "detail": "título ancorado na query 'anime armas'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 38867,
+      "meta": {
+        "rank_math_title": "Anime Armas"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/quantos-anos-tem-eri-em-my-hero-academia/",
+    "detail": "título ancorado na query 'eri my hero academia idade'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 46816,
+      "meta": {
+        "rank_math_title": "Eri My Hero Academia Idade"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/os-simpsons-todas-as-namoradas-que-bart-teve-no-programa-ate-o-momento/",
+    "detail": "título ancorado na query 'esposa de bart simpson'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 18270,
+      "meta": {
+        "rank_math_title": "Esposa de Bart Simpson"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/por-que-snape-matou-dumbledore-em-harry-potter/",
+    "detail": "título ancorado na query 'porque severo snape matou dumbledore'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 70198,
+      "meta": {
+        "rank_math_title": "Porque Severo Snape Matou Dumbledore"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/methode-em-frieren-beyond-journeys-end-perfil-completo-poderes-e-curiosidades/",
+    "detail": "título ancorado na query 'methode frieren altura'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 100138,
+      "meta": {
+        "rank_math_title": "Methode Frieren Altura"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/como-e-quando-popeye-ganhou-superforca-comendo-espinafre-e-finalmente-revelado/",
+    "detail": "título ancorado na query 'marinheiro popeye comendo espinafre'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 81933,
+      "meta": {
+        "rank_math_title": "Marinheiro Popeye Comendo Espinafre"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/attack-on-titan-todos-os-personagens-que-herdaram-a-mandibula-titan/",
+    "detail": "título ancorado na query 'marcel titan mandibula'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 42856,
+      "meta": {
+        "rank_math_title": "Marcel Titan Mandibula"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/materia-exotica-esta-em-nossa-mira-agora/",
+    "detail": "título ancorado na query 'materia exotica fisica'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 35216,
+      "meta": {
+        "rank_math_title": "Materia Exotica Fisica"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/one-piece-a-recompensa-conhecida-de-todos-os-piratas-do-barba-negra-classificada-do-mais-baixo-ao-mais-alto/",
+    "detail": "título ancorado na query 'atirador barba negra'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 14395,
+      "meta": {
+        "rank_math_title": "Atirador Barba Negra"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/o-final-da-5a-temporada-de-rick-e-morty-revela-o-que-torna-o-evil-morty-evil/",
+    "detail": "título ancorado na query 'episodio que o evil morty destroi a cidadela'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 36426,
+      "meta": {
+        "rank_math_title": "Episodio que o Evil Morty Destroi a Cidadela"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/qual-e-a-diferenca-entre-anime-ova-oav-e-ona/",
+    "detail": "título ancorado na query 'ova anime'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 78432,
+      "meta": {
+        "rank_math_title": "Ova Anime"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/personagens-de-anime-que-farmam-mais-aura-que-sung-jinwoo/",
+    "detail": "título ancorado na query 'personagem aura'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 96909,
+      "meta": {
+        "rank_math_title": "Personagem Aura"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/o-senhor-dos-aneis-como-sauron-se-tornou-o-necromante-em-o-hobbit/",
+    "detail": "título ancorado na query 'o necromante hobbit'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 31187,
+      "meta": {
+        "rank_math_title": "O Necromante Hobbit"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/senhor-dos-aneis-a-origem-do-cavalo-de-gandalf-shadowfax/",
+    "detail": "título ancorado na query 'cavalo de gandalf'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 31514,
+      "meta": {
+        "rank_math_title": "Cavalo de Gandalf"
+      }
+    }
+  },
+  {
+    "rule_id": "title_opportunity",
+    "url": "https://www.unicorniohater.com.br/one-piece-qual-e-a-akuma-no-mi-mais-forte-as-25-frutas-do-diabo-mais-fortes-ranqueadas/",
+    "detail": "título ancorado na query 'akuma no mi mais forte'",
+    "fix": {
+      "type": "wp_post_meta",
+      "post_id": 61640,
+      "meta": {
+        "rank_math_title": "Akuma no Mi Mais Forte"
+      }
+    }
+  }
+]

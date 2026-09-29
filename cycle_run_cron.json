@@ -1,0 +1,197 @@
+{
+  "status": "ok",
+  "summary": {
+    "command": "audit",
+    "cycle_id": "cycle-30a4fcd1d9a7",
+    "wp_posts": 18892,
+    "sitemap_urls": 18952,
+    "static_urls": 0,
+    "in_sitemap": 18892,
+    "missing_from_sitemap": 0,
+    "orphan_in_sitemap": 60,
+    "wp_static_mismatch": 0,
+    "static_orphan": 0,
+    "audited_urls": 500,
+    "findings": 15
+  },
+  "findings": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/todas-as-formas-que-all-for-one-assume-em-my-hero-academia/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/a-espera-acabou-banjo-kazooie-voltara-com-tudo-dizem-rumores/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/baldurs-gate-3-e-alan-wake-2-lideram-indicacoes-no-bafta-2024/",
+      "severity": "low",
+      "detail": "title has 68 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/kirkman-arrisca-tudo-na-serie-de-tv-invencivel-veja-por-que/",
+      "severity": "low",
+      "detail": "title has 75 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/o-arco-de-granolah-de-dragon-ball-super-vai-quebrar-a-internet/",
+      "severity": "low",
+      "detail": "title has 76 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/yu-yu-hakusho-tudo-o-que-sabemos-sobre-o-live-action-do-anime/",
+      "severity": "low",
+      "detail": "title has 76 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/invencivel-qual-e-o-papel-dos-livros-de-nolan-explicado/",
+      "severity": "low",
+      "detail": "title has 70 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/one-piece-top-10-melhores-akuma-no-mi-dos-comandantes-yonko/",
+      "severity": "low",
+      "detail": "title has 74 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/peter-pan-substituira-piratas-do-caribe-na-disney/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/baldurs-gate-3-adiciona-fisica-para-as-partes-intimas-em-update/",
+      "severity": "low",
+      "detail": "title has 70 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/code-geass-retorna-com-nova-serie-de-anime-apos-15-anos/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/ubisoft-se-desculpa-por-anuncio-invasivo-de-novo-assassins-creed/",
+      "severity": "low",
+      "detail": "title has 71 chars (> 65)"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/ubisoft-culpa-anuncio-pop-up-de-assassins-creed-por-erro-tecnico/",
+      "severity": "low",
+      "detail": "title has 71 chars (> 65)"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-9/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-8/",
+      "severity": "medium",
+      "detail": "2 pages share the same title"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/playstation-40-jogos-para-ps4-e-ps5-com-ate-99-de-desconto-2/, https://www.unicorniohater.com.br/playstation-40-jogos-para-ps4-e-ps5-com-ate-99-de-desconto/",
+      "severity": "medium",
+      "detail": "2 pages share the same title"
+    }
+  ],
+  "safe_actions": [
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/todas-as-formas-que-all-for-one-assume-em-my-hero-academia/",
+      "severity": "low",
+      "detail": "title has 72 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/a-espera-acabou-banjo-kazooie-voltara-com-tudo-dizem-rumores/",
+      "severity": "low",
+      "detail": "title has 69 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/baldurs-gate-3-e-alan-wake-2-lideram-indicacoes-no-bafta-2024/",
+      "severity": "low",
+      "detail": "title has 68 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/kirkman-arrisca-tudo-na-serie-de-tv-invencivel-veja-por-que/",
+      "severity": "low",
+      "detail": "title has 75 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/o-arco-de-granolah-de-dragon-ball-super-vai-quebrar-a-internet/",
+      "severity": "low",
+      "detail": "title has 76 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/yu-yu-hakusho-tudo-o-que-sabemos-sobre-o-live-action-do-anime/",
+      "severity": "low",
+      "detail": "title has 76 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/invencivel-qual-e-o-papel-dos-livros-de-nolan-explicado/",
+      "severity": "low",
+      "detail": "title has 70 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/one-piece-top-10-melhores-akuma-no-mi-dos-comandantes-yonko/",
+      "severity": "low",
+      "detail": "title has 74 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/peter-pan-substituira-piratas-do-caribe-na-disney/",
+      "severity": "low",
+      "detail": "title has 77 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    },
+    {
+      "rule_id": "title_too_long",
+      "url": "https://www.unicorniohater.com.br/baldurs-gate-3-adiciona-fisica-para-as-partes-intimas-em-update/",
+      "severity": "low",
+      "detail": "title has 70 chars (> 65)",
+      "suggested_action": "shorten title keeping the entity"
+    }
+  ],
+  "approval_required": [
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-9/, https://www.unicorniohater.com.br/xbox-jogos-com-ate-90-de-desconto-para-xbox-one-e-series-sx-8/",
+      "severity": "medium",
+      "detail": "2 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    },
+    {
+      "rule_id": "title_duplicate",
+      "url": "https://www.unicorniohater.com.br/playstation-40-jogos-para-ps4-e-ps5-com-ate-99-de-desconto-2/, https://www.unicorniohater.com.br/playstation-40-jogos-para-ps4-e-ps5-com-ate-99-de-desconto/",
+      "severity": "medium",
+      "detail": "2 pages share the same title",
+      "suggested_action": "rewrite duplicate titles"
+    }
+  ]
+}
