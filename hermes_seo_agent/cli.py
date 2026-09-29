@@ -2793,8 +2793,37 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         # O motor continua puro: quem monta a acao eh decisions_to_actions.
         from .report.title_action import decisions_to_actions
         review_contracts = [c for c in contracts if c.get("decision") == "review_title"]
+        # ---- 7A.2 (B): o `before` tem de ser o meta BRUTO do WordPress --------
+        # O contrato do motor carrega `current_title` vindo do `<title>` RENDERIZADO
+        # da pagina, nao necessariamente do `rank_math_title`. Para a precondition do
+        # gate 4 (e a do 7C) valer, o valor e' lido do WP REST ANTES de montar a
+        # acao e vira `live_titles` — o mesmo mapa habilita a checagem de STALE.
+        # Custa uma leitura por URL COM acao, nao por URL analisada.
+        live_titles: dict[str, str] = {}
+        if review_contracts:
+            try:
+                with WordPressClient(config) as _wp:
+                    for _c in review_contracts:
+                        _u = str(_c.get("url") or "")
+                        _pid = ((_c.get("page") or {}).get("post_id")
+                                or _c.get("post_id"))
+                        if not (_u and _pid):
+                            continue
+                        try:
+                            _p = _wp.get_post(int(_pid))
+                            _t = ((_p.get("meta") or {})
+                                  .get("rank_math_title") or "")
+                            if _t:
+                                live_titles[_u] = _t
+                        except Exception:
+                            continue  # uma URL estranha nunca derruba o lote
+            except Exception as exc:
+                warnings.append(
+                    "7A live_titles indisponivel "
+                    f"({type(exc).__name__}: {exc}): usando o `before` do "
+                    "contrato — precondition mais fraca")
         built = decisions_to_actions(
-            review_contracts,
+            review_contracts, live_titles=live_titles,
             max_len=int(getattr(config, "title_max_len", 60) or 60))
         # Item 5/6 (Sprint 1.2) — snapshot GSC PRE no formato que `baseline_gsc()`
         # le: metricas PLANAS em `gsc` (o medidor compara campo a campo com a
@@ -2832,6 +2861,17 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         # voltar ao executor direto por config, sem mexer em codigo.
         queued: dict[str, Any] | None = None
         owns = bool(getattr(config, "title_decision_owns_writes", True))
+        if not owns and not bool(getattr(config, "title_direct_writes_allowed",
+                                        False)):
+            # FAIL-CLOSED: um unico booleano bastava para reabrir motor -> Executor
+            # -> WordPress e burlar toda a garantia de lanes/fencing. Agora exige
+            # DUAS autorizacoes explicitas; com so' uma, o caminho direto fica
+            # bloqueado e o aviso sai no relatorio.
+            warnings.append(
+                "7A: caminho direto BLOQUEADO (fail-closed) — "
+                "TITLE_DECISION_OWNS_WRITES=0 exige "
+                "TITLE_DIRECT_WRITES_ALLOWED=1")
+            owns = True
         if owns and built["actions"]:
             try:
                 from .lanes.title_decision import persist_actions
@@ -2839,7 +2879,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     queued = persist_actions(
                         q_store, built["actions"],
                         contracts_by_url={str(c.get("url") or ""): c
-                                          for c in review_contracts})
+                                          for c in review_contracts},
+                        live_titles=live_titles)
                 write_summary["queued"] = {
                     "criadas": queued["counts"]["criadas"],
                     "executaveis": queued["counts"]["executaveis"],

@@ -745,3 +745,60 @@ def test_7a2_uma_url_estranha_nao_derruba_o_lote(tmp_path):
         assert r["counts"]["criadas"] == 2, "as validas entram"
         assert r["counts"]["erros"] == 1
         assert "AttributeError" in r["erros"][0]["erro"] or r["erros"]
+
+
+# ---------------------------------------------------------------------------
+# 7A.2.1 — os dois P1 latentes no caminho positivo
+# ---------------------------------------------------------------------------
+
+def test_7a21_rotulo_de_confidence_nao_vira_score():
+    """`float("high")` estourava em `production_ready` no 1o review_title real.
+
+    `decision_to_action` grava `confidence` como ROTULO na acao; o numero vive em
+    `contract["confidence_detail"]["score"]`. Como `review_title` era 0, o bug
+    estava latente — apareceria exatamente na primeira decisao real.
+    """
+    c = _contrato(confidence_detail={"score": 0.62, "label": "medium"})
+    a = _acao()
+    a["confidence"] = "high"  # ROTULO, como o motor grava
+    d = TD.decision_from_action(a, contract=c)
+    assert d.confidence == 0.62, "tem de usar o score NUMERICO"
+    assert d.evidence.get("confidence_label") == "high", "o rotulo vai p/ evidence"
+    ok, motivo = TD.production_ready(d)
+    assert ok is True and motivo is None
+
+
+def test_7a21_rotulo_sem_score_vira_missing_confidence():
+    """Sem numero, fail-closed — nunca `float("high")`."""
+    a = _acao()
+    a["confidence"] = "high"
+    d = TD.decision_from_action(a, contract=_contrato(confidence="high"))
+    assert d.confidence is None
+    ok, motivo = TD.production_ready(d)
+    assert ok is False and motivo == TD.NOT_EXEC_MISSING_CONFIDENCE
+
+
+def test_7a21_confidence_numerica_em_string_ainda_vale():
+    a = _acao()
+    a["confidence"] = "0.44"
+    d = TD.decision_from_action(a, contract=_contrato(confidence="0.44"))
+    assert d.confidence == 0.44
+
+
+def test_7a21_score_real_medido_em_producao():
+    """O contrato medido em producao traz `confidence_detail.score` = 0.388."""
+    c = _contrato(confidence="low",
+                  confidence_detail={"score": 0.388, "label": "low"})
+    d = TD.decision_from_action(_acao(), contract=c)
+    assert isinstance(d.confidence, float)
+    assert d.confidence == 0.388
+    # 0.388 > MIN_CONFIDENCE (0.35): a confianca NAO seria a barreira aqui
+    assert d.confidence > TD.MIN_CONFIDENCE
+
+
+def test_7a21_bool_nao_e_confianca():
+    """`True` e' 1.0 em Python — aceitar seria dar confianca maxima de graca."""
+    a = _acao()
+    a["confidence"] = True
+    d = TD.decision_from_action(a, contract=_contrato(confidence=True))
+    assert d.confidence is None

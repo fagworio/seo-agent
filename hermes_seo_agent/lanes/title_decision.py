@@ -366,6 +366,36 @@ def reconcile_pending_enqueue(store: Any, *, limit: int = 50) -> dict[str, Any]:
             "criados": criados, "barrados": barrados}
 
 
+def _numeric_confidence(action: dict[str, Any],
+                        contract: dict[str, Any]) -> float | None:
+    """Score NUMERICO da confianca. Rotulo textual nunca vira score.
+
+    `decision_to_action` grava `confidence` como ROTULO ("high"/"medium") na acao,
+    enquanto o numero real vive em `contract["confidence_detail"]["score"]`.
+    Sem esta separacao, o primeiro `review_title` real estourava em
+    `production_ready` -> `float("high")` -> ValueError. Rotulo desconhecido
+    resolve para `None`, que o gate trata como `missing_confidence` (fail-closed).
+    """
+    for fonte in (contract.get("confidence_detail"),
+                  action.get("confidence_detail")):
+        if isinstance(fonte, dict) and fonte.get("score") is not None:
+            try:
+                return float(fonte["score"])
+            except (TypeError, ValueError):
+                pass
+    for fonte in (contract.get("confidence"), action.get("confidence")):
+        if isinstance(fonte, bool) or fonte is None:
+            continue
+        if isinstance(fonte, (int, float)):
+            return float(fonte)
+        if isinstance(fonte, str):
+            try:
+                return float(fonte)
+            except ValueError:
+                continue  # rotulo ("high"/"low") NAO e' score
+    return None
+
+
 def decision_from_action(action: dict[str, Any], *,
                          contract: dict[str, Any] | None = None,
                          live_title: str | None = None) -> TitleDecision:
@@ -384,9 +414,13 @@ def decision_from_action(action: dict[str, Any], *,
     if before is None:
         before = (action.get("before") or {}).get("rank_math_title")
     after = (fix.get("meta") or {}).get("rank_math_title") or ""
-    conf = action.get("confidence")
-    if conf is None:
-        conf = contract.get("confidence")
+    # Score NUMERICO (de `confidence_detail`); o rotulo textual vai para evidence.
+    conf = _numeric_confidence(action, contract)
+    rotulo = None
+    for fonte in (contract.get("confidence"), action.get("confidence")):
+        if isinstance(fonte, str):
+            rotulo = fonte
+            break
     # `requires_review`: o motor e' quem sabe se a URL precisa de revisao humana.
     # Os contratos que chegam aqui ja' passaram pelo filtro `review_title`, entao o
     # default e' False (pode executar) e a barreira so' aparece se o contrato a
@@ -400,6 +434,7 @@ def decision_from_action(action: dict[str, Any], *,
         confidence=conf, rollout=contract.get("rollout") or {},
         requires_review=review,
         evidence={"decision": contract.get("decision"),
+                  "confidence_label": rotulo,
                   "page": contract.get("page"),
                   "baseline": contract.get("baseline"),
                   "signal_window": contract.get("signal_window"),

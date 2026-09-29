@@ -72,6 +72,12 @@ class Config:
     # antigo sem mexer em codigo.
     title_decision_owns_writes: bool = True
 
+    # Fail-closed do caminho direto: com `title_decision_owns_writes=False` o motor
+    # volta a escrever via Executor. Um unico booleano bastava para burlar toda a
+    # garantia de lanes/fencing, entao reabrir a escrita direta exige TAMBEM esta
+    # segunda autorizacao explicita.
+    title_direct_writes_allowed: bool = False
+
     # M0 — limites operacionais (URLs, queries, chunks, quota e custo por execução)
     max_queries_per_source: int = 500        # queries por fonte por execução
     max_chunks_per_doc: int = 200            # chunks/seções por documento no corpus
@@ -329,6 +335,7 @@ def load_config() -> Config:
         title_engine_in_schedule=_bool("TITLE_ENGINE_IN_SCHEDULE", True),
         title_max_writes_per_cycle=_int("TITLE_MAX_WRITES_PER_CYCLE", 10, 0, 100),
         title_decision_owns_writes=_bool("TITLE_DECISION_OWNS_WRITES", True),
+        title_direct_writes_allowed=_bool("TITLE_DIRECT_WRITES_ALLOWED", False),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),
         max_chunks_per_doc=_int("MAX_CHUNKS_PER_DOC", 200, 1, 10_000),
         max_external_calls=_int("MAX_EXTERNAL_CALLS", 0, 0, 100_000),
