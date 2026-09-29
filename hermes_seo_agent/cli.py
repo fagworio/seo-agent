@@ -2747,7 +2747,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             # GSC (page/context/signal_window) e o GA4 do banco na MESMA janela —
             # sem rede, deterministico e temporalmente compativel (Sprint 1.2).
             contratos_por_url = {str(c.get("url")): c for c in contracts if c.get("url")}
-            sem_mudanca = [c.get("url") for c in contracts
+            sem_mudanca = [str(c.get("url")) for c in contracts
                            if c.get("decision") == "no_title_change" and c.get("url")]
             fechados = {"done": 0, "superseded": 0}
             outcomes_criados = 0
@@ -2757,10 +2757,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     # P0.6 (Sprint 1.2) — ORDEM: primeiro o OUTCOME, depois o
                     # 'done'. Antes a Caixa fechava independentemente do outcome,
                     # permitindo "WordPress atualizado + Caixa done + Google sem
-                    # medir" — o closed loop que mente. Agora uma URL só entra em
-                    # `fechaveis` se o outcome foi persistido. Tudo com
-                    # commit=False e um único commit: nao existe estado parcial.
-                    fechaveis: list[str] = []
+                    # medir" — o closed loop que mente. Agora o item só vira
+                    # 'done' dentro da transação que persistiu o outcome. Tudo
+                    # com commit=False e um commit por URL: sem estado parcial.
                     falhas: list[dict[str, Any]] = []
                     for acao in acoes_executadas:
                         url_acao = str(acao.get("url") or "")
@@ -2788,14 +2787,20 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                                     implemented_at=agora,
                                     gsc_baseline=_gsc_snapshot(contrato_acao),
                                     ga4_baseline=contrato_acao.get("ga4"),
+                                    # P0.7 — identidade da AÇÃO no outcome: é o
+                                    # que permite saber depois se ESTA intervenção
+                                    # foi medida (a URL ter algum outcome não
+                                    # prova nada — ela passa por dezenas delas).
+                                    action_fingerprint=acao.get("fingerprint"),
                                     commit=False,
                                 )
-                                # SO dentro da mesma transacao o item vira 'done'
-                                store_life.close_title_checklist(
+                                # SO dentro da mesma transacao o item vira 'done'.
+                                # Telemetria pelo rowcount REAL desta operação.
+                                _closed = store_life.close_title_checklist(
                                     [url_acao], status="done", when=agora,
                                     commit=False)
                             outcomes_criados += 1
-                            fechados["done"] += 1
+                            fechados["done"] += _closed
                         except Exception as exc:
                             # P0.6: NAO engolir. Registra o erro e mantem o item
                             # recuperavel (pending + measurement_unavailable).
@@ -2807,10 +2812,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                                 url_acao,
                                 error=f"outcome_failed: {type(exc).__name__}: {exc}",
                                 commit=False)
-                    # transacao unica: outcomes + marcas de pendencia
+                    # Commit das marcas de pendência (P0.6) que ficaram pendentes.
+                    #
+                    # (P0.7, item 7) Aqui existia um SEGUNDO fechamento sobre
+                    # `fechaveis` — que nunca recebia URL — e ele ZERAVA
+                    # `closed_checklist.done`: o banco ficava 'done' e a resposta
+                    # dizia 0, quebrando exatamente a telemetria usada para
+                    # detectar travamento. O 'done' agora vem do rowcount real
+                    # (dentro da transação, por URL).
                     store_life.conn.commit()
-                    fechados["done"] = store_life.close_title_checklist(
-                        fechaveis, status="done", when=agora)
                     fechados["superseded"] = store_life.close_title_checklist(
                         sem_mudanca, status="superseded", when=agora)
                     if falhas:

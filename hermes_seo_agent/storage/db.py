@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -740,6 +740,10 @@ class Storage:
             ],
             "opportunity_outcomes": [
                 ("baseline_json", "TEXT"),
+                # Sprint 1.2.1 (P0.7): a identidade do outcome é a AÇÃO, nunca a
+                # URL — uma URL acumula dezenas de intervenções e o outcome de uma
+                # esconderia a falta de medição da seguinte.
+                ("action_fingerprint", "TEXT"),
                 ("measured_7d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_28d", "INTEGER NOT NULL DEFAULT 0"),
                 ("measured_56d", "INTEGER NOT NULL DEFAULT 0"),
@@ -781,6 +785,15 @@ class Storage:
             for column, ddl in columns:
                 if column not in existing:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        # Sprint 1.2.1 (P0.7) — a identidade do outcome é a AÇÃO, nunca a URL: o
+        # outcome da intervenção #1 esconderia a falta de medição da #2. UNIQUE
+        # parcial: legado fica NULL (sem backfill às cegas). Fica DEPOIS dos
+        # ALTERs porque `_SCHEMA` roda antes — índice sobre coluna recém-criada
+        # falharia em banco pré-existente.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_outcomes_action_fingerprint "
+            "ON opportunity_outcomes(action_fingerprint) "
+            "WHERE action_fingerprint IS NOT NULL")
 
     # -- cycles / findings ---------------------------------------------------
 
@@ -977,6 +990,7 @@ class Storage:
                                    implemented_at: str, work_item_id: str | None = None,
                                    campaign_item_id: int | None = None,
                                    gsc_baseline: Any = None, ga4_baseline: Any = None,
+                                   action_fingerprint: str | None = None,
                                    commit: bool = True) -> int:
         """B8 — vincula uma melhoria executada ao pipeline de revalidação.
 
@@ -1025,16 +1039,22 @@ class Storage:
         cur = self.conn.execute(
             "INSERT INTO opportunity_outcomes (keyword, opportunity_type, decision, "
             "human_decision, implemented_action, url, baseline_json, implemented_at, "
-            "created_at, work_item_id, campaign_item_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "created_at, work_item_id, campaign_item_id, action_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (url, action_type, action_type, "approved", implemented_action, url,
              json.dumps(baseline, ensure_ascii=False, default=str),
-             implemented_at, implemented_at, work_item_id, campaign_item_id))
+             implemented_at, implemented_at, work_item_id, campaign_item_id,
+             action_fingerprint))
         outcome_id = int(cur.lastrowid)
         if work_item_id:
+            # P0.7.8 (Sprint 1.2.1) — `commit=commit`: sem isto o lifecycle faz
+            # commit ESCONDIDO dentro de `Storage.transaction()`, quebrando a
+            # atomicidade (e sera fatal no Sprint 2, quando o work_item_id vem do
+            # claim/lease). E a MESMA identidade de acao segue para o lifecycle.
             self.set_work_item_lifecycle(
                 work_item_id, "implemented", source="",
-                url=url, action_fingerprint=None, outcome_id=outcome_id)
+                url=url, action_fingerprint=action_fingerprint,
+                outcome_id=outcome_id, commit=commit)
         if commit:
             self.conn.commit()
         return outcome_id
@@ -1067,6 +1087,7 @@ class Storage:
                                 campaign_id: int | None = None,
                                 campaign_item_id: int | None = None,
                                 outcome_id: int | None = None,
+                                commit: bool = True,
                                 _retry: bool = True) -> None:
         """Registra/aprimora o estado canônico de um work item (única fonte p/ UI).
 
@@ -1111,7 +1132,8 @@ class Storage:
                 (canonical_status, source, url, action_fingerprint, campaign_id,
                  campaign_item_id, outcome_id, now, work_item_id, prior),
             )
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
             if cur2.rowcount == 0 and _retry:
                 # Corrida: o estado mudou entre o SELECT e o UPDATE. Reavalia uma
                 # vez com o estado atual (aplica o gate correto).
@@ -1131,7 +1153,8 @@ class Storage:
             (work_item_id, canonical_status, source, url, action_fingerprint,
              campaign_id, campaign_item_id, outcome_id, now),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         if cur3.rowcount == 0 and _retry:
             # corrida no primeiro INSERT: reavalia o gate sobre o estado criado.
             self.set_work_item_lifecycle(
@@ -1682,6 +1705,12 @@ class Storage:
 
     # -- Sprint 1.2 (item 3): reconciliacao pos-write ------------------------
 
+    # Sprint 1.2.1 (P0.7, item 6) — boundary do recovery pós-write. Ações
+    # executadas ANTES deste marco vieram de pipelines que não gravavam a
+    # identidade da ação no outcome (`action_fingerprint`); reconciliá-las às
+    # cegas criaria outcomes fictícios. Avance este marco ao fazer backfill.
+    RECONCILE_BOUNDARY = "2026-09-29T00:00:00+00:00"
+
     def executed_without_outcome(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Conjunto derivado EXECUTED_UNMEASURED (sem tabela nova).
 
@@ -1697,12 +1726,29 @@ class Storage:
         # fingerprint, before_json, after_json, rollback_json, executed_at,
         # fix_json, work_item_id) — o detalhe legivel sai do `rule_id`.
         rows = self.conn.execute(
-            "SELECT a.url, a.rule_id, a.before_json, a.after_json, "
+            # P0.7 (Sprint 1.2.1): a identidade é a AÇÃO (`actions.fingerprint`),
+            # nunca a URL — correlacionar por URL fazia a intervenção #2 ficar sem
+            # medição para sempre quando a #1 já tinha outcome.
+            #
+            # Item 5 — não reconciliar genericamente qualquer `safe_fix`: só o
+            # closed loop de títulos. A marca não é o `rule_id` (não existe
+            # 'title_engine': os reais são title_opportunity/title_too_long/
+            # title_manual...) e sim o `fix_json` que altera `rank_math_title` —
+            # é a assinatura inequívoca de uma mudança de título em WP Post Meta.
+            #
+            # Item 6 — boundary: ações anteriores a este marco foram executadas por
+            # pipelines que não gravavam a identidade da ação. Reconciliá-las às
+            # cegas produziria outcomes fictícios; o legado fica fora do recovery.
+            "SELECT a.url, a.rule_id, a.fingerprint, a.before_json, a.after_json, "
             "       a.fix_json, a.executed_at "
-            "FROM actions a WHERE a.status = 'executed' AND a.url IS NOT NULL "
+            "FROM actions a WHERE a.status = 'executed' "
+            "AND a.url IS NOT NULL AND a.fingerprint IS NOT NULL "
+            "AND a.fix_json LIKE '%rank_math_title%' "
+            "AND a.executed_at >= ? "
             "AND NOT EXISTS (SELECT 1 FROM opportunity_outcomes o "
-            "                WHERE o.url = a.url) "
-            "ORDER BY a.id DESC LIMIT ?", (limit,)).fetchall()
+            "                WHERE o.action_fingerprint = a.fingerprint) "
+            "ORDER BY a.id DESC LIMIT ?",
+            (self.RECONCILE_BOUNDARY, limit)).fetchall()
 
         def _loads(raw):
             if not raw:
@@ -1712,9 +1758,9 @@ class Storage:
             except (TypeError, ValueError):
                 return None
 
-        return [{"url": r[0], "rule_id": r[1],
-                 "before": _loads(r[2]), "after": _loads(r[3]),
-                 "fix": _loads(r[4]), "executed_at": r[5]}
+        return [{"url": r[0], "rule_id": r[1], "fingerprint": r[2],
+                 "before": _loads(r[3]), "after": _loads(r[4]),
+                 "fix": _loads(r[5]), "executed_at": r[6]}
                 for r in rows]
 
     def reconcile_executed_outcomes(self, *, limit: int = 50,
@@ -1746,7 +1792,11 @@ class Storage:
                         action_type=str(item.get("rule_id") or "title_engine"),
                         implemented_action=str(item.get("rule_id") or "recovery"),
                         before=item.get("before"), after=item.get("after"),
-                        implemented_at=when, commit=False)
+                        implemented_at=when,
+                        # P0.7 — sem isto o outcome reconciliado nasceria SEM a
+                        # identidade da acao e seria reconciliado para sempre.
+                        action_fingerprint=item.get("fingerprint"),
+                        commit=False)
                     if close_checklist:
                         self.close_title_checklist(
                             [item["url"]], status="done", when=when, commit=False)

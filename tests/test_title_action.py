@@ -652,21 +652,139 @@ def test_transacao_commita_outcome_e_checklist_juntos(tmp_path):
             (_URL_12,)).fetchone()[0] == "done"
 
 
-def _acao_executada(store, url: str, *, status: str = "executed") -> None:
-    """Grava uma acao no audit trail exatamente como o Executor faz."""
+def _acao_executada(store, url: str, *, status: str = "executed",
+                    fingerprint: str | None = None,
+                    rule_id: str = "title_opportunity",
+                    fix: dict | None = None) -> None:
+    """Grava uma acao no audit trail exatamente como o Executor faz.
+
+    `rule_id` default é o REAL do pipeline de títulos (`title_opportunity`) — não
+    existe 'title_engine' no banco. O `fix_json` altera `rank_math_title`, que é
+    a marca inequívoca do closed loop usada pela reconciliação.
+    """
     import json as _json
 
+    _fix = fix if fix is not None else {
+        "type": "wp_post_meta", "post_id": 1,
+        "meta": {"rank_math_title": "Título novo"}}
     store.conn.execute(
         "INSERT INTO actions (cycle_id, rule_id, url, level, status, fingerprint, "
         "before_json, after_json, rollback_json, executed_at, fix_json) "
-        "VALUES ('c1', 'title_engine', ?, 'safe_fix', ?, ?, ?, ?, '{}', ?, ?)",
-        (url, status, f"fp-{url}-{status}",
+        "VALUES ('c1', ?, ?, 'safe_fix', ?, ?, ?, ?, '{}', ?, ?)",
+        (rule_id, url, status, fingerprint or f"fp-{url}-{status}",
          _json.dumps({"rank_math_title": "Título antigo"}),
          _json.dumps({"rank_math_title": "Título novo"}),
          "2026-09-29T10:00:00+00:00",
-         _json.dumps({"type": "wp_post_meta", "post_id": 1,
-                      "meta": {"rank_math_title": "Título novo"}})))
+         _json.dumps(_fix)))
     store.conn.commit()
+
+
+# --- Sprint 1.2.1 (P0.7): identidade da ACAO, nunca da URL ------------------
+
+def test_p07_mesma_url_duas_intervencoes_a_segunda_nao_fica_invisivel(tmp_path):
+    """P0.7 (teste central): #1 medida e #2 executada-sem-outcome na MESMA URL.
+
+    Correlacionar por URL fazia o outcome da #1 "provar" que a #2 foi medida — a
+    segunda intervenção ficava sem medição para sempre.
+    """
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("duas-intervencoes")
+    with Storage(str(tmp_path / "p07.db")) as store:
+        # intervenção #1: executada E medida
+        _acao_executada(store, url, fingerprint="fp-1")
+        store.record_implemented_outcome(
+            url=url, action_type="title_opportunity", implemented_action="fix",
+            before={}, after={}, implemented_at="2026-09-29T11:00:00+00:00",
+            action_fingerprint="fp-1")
+        assert store.executed_without_outcome() == []
+
+        # intervenção #2 na MESMA url: executada, crash antes do outcome
+        _acao_executada(store, url, fingerprint="fp-2")
+        pend = store.executed_without_outcome()
+        assert [p["fingerprint"] for p in pend] == ["fp-2"]
+
+        res = store.reconcile_executed_outcomes()
+        assert res["outcomes_created"] == 1
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
+            (url,)).fetchone()[0] == 2          # as DUAS medidas
+        # idempotente
+        assert store.reconcile_executed_outcomes()["candidates"] == 0
+
+
+def test_p07_outcome_correlaciona_por_fingerprint_e_nao_por_url(tmp_path):
+    """P0.7: hash UNIQUE por ação — a mesma URL aceita N outcomes distintos."""
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("fingerprints-distintos")
+    with Storage(str(tmp_path / "p07b.db")) as store:
+        for fp in ("a1", "a2"):
+            store.record_implemented_outcome(
+                url=url, action_type="title_opportunity", implemented_action="fix",
+                before={}, after={}, implemented_at="2026-09-29T11:00:00+00:00",
+                action_fingerprint=fp)
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
+            (url,)).fetchone()[0] == 2
+
+
+def test_p07_media_alt_nao_entra_no_recovery_de_titulo(tmp_path):
+    """Item 5 — só o closed loop de títulos; safe fixes de mídia ficam fora."""
+    from hermes_seo_agent.storage.db import Storage
+
+    with Storage(str(tmp_path / "p07c.db")) as store:
+        _acao_executada(store, _url("midia"), rule_id="wp_media_alt",
+                        fix={"type": "wp_media_alt", "post_id": 1,
+                             "attach_id": 9, "alt_text": "novo alt"})
+        assert store.executed_without_outcome() == []
+        assert store.reconcile_executed_outcomes()["outcomes_created"] == 0
+
+
+def test_p07_boundary_impede_backfill_de_acao_antiga(tmp_path):
+    """Item 6 — nada de transformar ação antiga em EXECUTED_UNMEASURED."""
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("legado")
+    with Storage(str(tmp_path / "p07d.db")) as store:
+        _acao_executada(store, url, fingerprint="fp-antigo")
+        # ação anterior ao boundary do recovery
+        store.conn.execute(
+            "UPDATE actions SET executed_at = '2026-08-01T00:00:00+00:00' "
+            "WHERE url = ?", (url,))
+        store.conn.commit()
+        assert store.executed_without_outcome() == []
+        assert store.reconcile_executed_outcomes()["outcomes_created"] == 0
+
+
+def test_p07_lifecycle_nao_commita_escondido_na_transacao(tmp_path):
+    """Item 8 — exceção no meio desfaz outcome E lifecycle (nada parcial)."""
+    from hermes_seo_agent.storage.db import Storage
+
+    url = _url("lifecycle-tx")
+    with Storage(str(tmp_path / "p07e.db")) as store:
+        try:
+            with store.transaction():
+                store.record_implemented_outcome(
+                    url=url, action_type="title_opportunity",
+                    implemented_action="fix", before={}, after={},
+                    implemented_at="2026-09-29T11:00:00+00:00",
+                    work_item_id="wi-1", action_fingerprint="fp-wi",
+                    commit=False)          # o lifecycle herda commit=False
+                raise RuntimeError("crash depois do lifecycle")
+        except RuntimeError:
+            pass
+        assert store.conn.execute(
+            "SELECT COUNT(*) FROM opportunity_outcomes WHERE url = ?",
+            (url,)).fetchone()[0] == 0
+        # se a tabela de work items existir, o lifecycle também foi desfeito
+        try:
+            n = store.conn.execute(
+                "SELECT COUNT(*) FROM work_items WHERE work_item_id = 'wi-1'"
+            ).fetchone()[0]
+            assert n == 0
+        except Exception:
+            pass
 
 
 def _url(sub: str) -> str:
