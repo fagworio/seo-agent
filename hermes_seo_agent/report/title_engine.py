@@ -847,27 +847,39 @@ def decide_title(
     # ---- decisão (ordem = gravidade da lacuna) ---------------------------
     if not gates["page_impressions_sufficient"] or not gates["query_family_demand_sufficient"]:
         decision = "gather_more_data"
+        decision_cause = ("insufficient_family_demand"
+                          if not gates["query_family_demand_sufficient"]
+                          else "insufficient_page_impressions")
     elif not gates["position_actionable"]:
         decision = "gather_more_data"
+        decision_cause = "position_not_actionable"
     elif not gates["title_coverage_gap"]:
         decision = "no_title_change"
+        decision_cause = "coverage_gap"
     elif not gates["baseline_anomaly"]:
         decision = "no_title_change"
+        decision_cause = "baseline_not_anomalous"
     elif not gates["entity_preserved"]:
         decision = "no_title_change"
+        decision_cause = "entity_not_preserved"
     elif not gates["evidence_confidence"]:
         decision = "investigate_cause"
+        decision_cause = "insufficient_evidence"
     elif ga4_status["status"] == GA4_AVAILABLE and ga4_status.get("post_click_healthy") is False:
         decision = "investigate_cause"
+        decision_cause = "poor_post_click"
     elif signal_window_aligned is False:
         # A cadeia passaria para review_title, mas a evidência de rankability
         # veio de OUTRA janela: os dados existem, só não estão alinhados no tempo
         # -> investigar, nunca publicar título com essa mistura.
         decision = "investigate_cause"
+        decision_cause = "signal_window_misaligned"
     elif best is None or float(best["title_score"]["score"]) < float(min_title_score):
         decision = "no_title_change"
+        decision_cause = "score_below_minimum"
     else:
         decision = "review_title"
+        decision_cause = "review_title"
 
     label = _confidence_label(gates=gates, ga4_status=ga4_status,
                               confidence_score=evidence_conf)
@@ -890,6 +902,7 @@ def decide_title(
 
     contract = {
         "decision": decision,
+        "decision_cause": decision_cause,
         "confidence": label,
         "url": url,
         "model_version": model_version,

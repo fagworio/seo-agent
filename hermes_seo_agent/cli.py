@@ -2641,14 +2641,19 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     if f.get("share") is not None
                     and float(f.get("share") or 0) >= 0.03),
                 "relevant_count": len(relevant),
+                "all_family_max_impressions": max(
+                    (float(f.get("impressions") or 0) for f in _fam_all), default=0.0),
+                "relevant_family_max_impressions": max(
+                    (float(f.get("impressions") or 0) for f in relevant), default=0.0),
                 "relevant_empty_reason": _motivo_vazio,
                 "semantic": [],
                 "candidates_total": None, "candidates_valid": None,
                 "candidates_discarded": None,
                 "candidate_discard_reasons": {},
                 "candidate_score": None, "candidate_factors": None,
-                "coverage_gain": None,
-                "checks_passed": None,
+                "coverage_gain": None, "checks_passed": None,
+                "decision_cause": None, "first_failed_gate": None,
+                "ga4_status": None, "post_click_healthy": None,
                 "evaluator_called": False,
                 "finalizer_best": None, "finalizer_titles_count": None,
                 "candidate_exists": None, "candidate_title_options_count": None,
@@ -2887,8 +2892,14 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             # concreto; nao quebrar significa que o diagnostico anterior correlacionava
             # paginas diferentes.
             diag["decision"] = contract.get("decision")
+            diag["decision_cause"] = contract.get("decision_cause")
             _checks_real = contract.get("checks") or {}
+            diag["first_failed_gate"] = (
+                list(_checks_real.get("failed") or [None])[0])
             diag["checks_passed"] = bool(_checks_real.get("passed"))
+            _ga4_diag = contract.get("ga4") or {}
+            diag["ga4_status"] = _ga4_diag.get("status")
+            diag["post_click_healthy"] = _ga4_diag.get("post_click_healthy")
             diag["failed_checks"] = list(_checks_real.get("failed") or [])
             _cd = contract.get("confidence_detail") or {}
             _cd_checks = _cd.get("checks") if isinstance(_cd, dict) else {}

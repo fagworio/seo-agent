@@ -177,6 +177,7 @@ def test_score_e_reproduzivel_a_partir_da_mesma_evidencia():
 def test_cadeia_completa_recomenda_review_title_high():
     contract = _contract()
     assert contract["decision"] == "review_title"
+    assert contract["decision_cause"] == "review_title"
     assert contract["confidence"] == "high"
     assert contract["checks"]["passed"] is True
     assert contract["candidate"]["intents"] == ["idade", "poderes"]
@@ -186,6 +187,7 @@ def test_score_alto_sem_baseline_anomalo_nao_altera_titulo():
     contract = _contract(baseline_verdict={"verdict": "typical", "context": "x",
                                           "sample_size": 90})
     assert contract["decision"] == "no_title_change"
+    assert contract["decision_cause"] == "baseline_not_anomalous"
     assert "baseline_anomaly" in contract["checks"]["failed"]
 
 
@@ -193,6 +195,7 @@ def test_score_alto_sem_posicao_vai_para_gather_more_data():
     contract = _contract(page={"impressions": 4300, "clicks": 31, "position": None,
                                "entity": "Gojo"})
     assert contract["decision"] == "gather_more_data"
+    assert contract["decision_cause"] == "position_not_actionable"
     assert contract["checks"]["position_actionable"] is False
 
 
@@ -207,6 +210,7 @@ def test_ga4_ausente_nao_bloqueia_mas_rebaixa_confianca():
 def test_ga4_com_pos_clique_ruim_manda_investigar():
     contract = _contract(ga4={"sessions": 300, "engagement_rate": 0.12})
     assert contract["decision"] == "investigate_cause"
+    assert contract["decision_cause"] == "poor_post_click"
     assert contract["ga4"]["status"] == GA4_AVAILABLE
 
 
