@@ -2911,13 +2911,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             diag["candidate_title_options_count"] = len(
                 candidate_contract.get("title_options") or [])
             diag["suggested_titles_count"] = len(contract["suggested_titles"])
-            _chk = contract.get("checks")
-            _chk = (_chk.get("checks") if isinstance(_chk, dict)
-                    and isinstance(_chk.get("checks"), dict) else _chk)
-            if isinstance(_chk, dict):
-                diag["failed_checks"] = sorted(
-                    str(k) for k, v in _chk.items()
-                    if isinstance(v, dict) and v.get("passed") is False)
             _viol = None
             if diag.get("finalizer_best"):
                 if not candidate_contract:
