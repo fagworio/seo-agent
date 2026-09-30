@@ -2810,6 +2810,18 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 diag["finalizer_best"] = bool(outcome.get("best"))
                 diag["finalizer_titles_count"] = len(
                     outcome.get("titles") or outcome.get("title_options") or [])
+                _fb = outcome.get("best") or {}
+                _fts = _fb.get("title_score") or {}
+                if isinstance(_fts, dict):
+                    diag["candidate_score"] = _fts.get("score")
+                    diag["candidate_factors"] = (_fts.get("factors")
+                                                  or _fts.get("components"))
+                _fcov = _fb.get("measured_coverage")
+                if _fcov is None:
+                    _fcov = _fb.get("candidate_coverage")
+                _ccov = coverage.get("observed_demand_coverage")
+                if _fcov is not None and _ccov is not None:
+                    diag["coverage_gain"] = round(float(_fcov) - float(_ccov), 4)
                 if outcome.get("best"):
                     funil["finalizer_com_best"] += 1
                 else:
@@ -2878,13 +2890,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             _checks_real = contract.get("checks") or {}
             diag["checks_passed"] = bool(_checks_real.get("passed"))
             diag["failed_checks"] = list(_checks_real.get("failed") or [])
-            _cand_score = candidate_contract.get("title_score") or {}
-            if isinstance(_cand_score, dict):
-                diag["candidate_score"] = _cand_score.get("score")
-                diag["candidate_factors"] = (_cand_score.get("factors")
-                                              or _cand_score.get("components"))
-            _ctx = _checks_real.get("_context") or {}
-            diag["coverage_gain"] = _ctx.get("coverage_gain")
             _cd = contract.get("confidence_detail") or {}
             _cd_checks = _cd.get("checks") if isinstance(_cd, dict) else {}
             if not isinstance(_cd_checks, dict):
