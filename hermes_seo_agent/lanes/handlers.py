@@ -11,9 +11,13 @@ Registrados hoje
     entre a escrita confirmada e o outcome. Fecha o loop sem reescrever nada no
     WordPress, e é idempotente: após reconciliar, o item sai do conjunto derivado.
 
-Ainda NÃO registrados (dependem dos itens 6/7): `dead_url`, `title_decision`,
-`title_execution`, `measurement` por ação, `audit`. Um handler de lane só entra
-quando o efeito dele for reversível/seguro o bastante para rodar sem humano.
+`title_execution` — aplica uma decisão já persistida, com precondição, limite,
+idempotência e releitura REST pós-write. Não reanalisa GSC/GA4 nem cria novo
+título; apenas executa o payload fechado pela lane de decisão.
+
+Ainda NÃO registrados: `title_decision`, `measurement` por ação, `audit`. Um
+handler de lane só entra quando o efeito dele for reversível/seguro o bastante
+para rodar sem humano.
 """
 from __future__ import annotations
 
@@ -22,7 +26,8 @@ from typing import Any, Callable
 from hermes_seo_agent.lanes import policy as P
 from hermes_seo_agent.lanes.worker import SkipItem, register_handler
 
-__all__ = ["handler_technical", "handler_dead_url", "register_default_handlers",
+__all__ = ["handler_technical", "handler_dead_url", "handler_title_execution",
+           "register_default_handlers",
            "HANDLERS_REGISTRADOS"]
 
 # Nome lógico -> função, para o CLI poder listar/diagnosticar.
@@ -114,6 +119,78 @@ def handler_dead_url(item: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
             "reanalisou": False}
 
 
+def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
+    """Executa uma decisão de título sem reabrir o motor de análise.
+
+    A ação só é concluída quando o WordPress confirma o valor por uma segunda
+    leitura REST. Divergência de precondição é ``stale`` (terminal e seguro);
+    erro de transporte ou confirmação ausente permanece retryable no worker.
+    """
+    from hermes_seo_agent.config import load_config
+    from hermes_seo_agent.connectors.wordpress import WordPressClient
+    from hermes_seo_agent.executor.executor import Executor
+    from hermes_seo_agent.storage.db import Storage
+
+    payload = item.get("payload") or {}
+    decision_id = str(payload.get("decision_id") or item.get("work_item_id") or "")
+    url = str(payload.get("url") or item.get("url") or "")
+    post_id = payload.get("post_id")
+    field = str(payload.get("field") or "rank_math_title")
+    before = str(payload.get("before") or "")
+    after = str(payload.get("after") or "")
+    if not decision_id or not url or post_id is None or not after:
+        raise ValueError("title_execution sem payload completo")
+    if field != "rank_math_title":
+        raise ValueError(f"campo de título não suportado: {field}")
+
+    config = load_config()
+    if config.dry_run:
+        raise RuntimeError("TITLE_ENGINE_MODE=auto incompatível com DRY_RUN")
+    db_path = getattr(ctx, "db_path", None) or config.sqlite_path
+    action = {
+        "rule_id": "title_engine",
+        "url": url,
+        "detail": f"title_decision:{decision_id}",
+        "work_item_id": decision_id,
+        "fix": {
+            "type": "wp_post_meta", "post_id": int(post_id),
+            "meta": {field: after},
+            "precondition": {"meta": {field: before}},
+        },
+    }
+
+    with Storage(db_path) as store, WordPressClient(config) as wp:
+        executor = Executor(config, wp, store)
+
+        def verify(fix: dict[str, Any], _after: Any) -> bool:
+            fresh = wp.get_post(int(fix["post_id"]))
+            return ((fresh.get("meta") or {}).get(field) or "") == after
+
+        outcome = executor.apply_safe_actions(
+            [action], cycle_id=f"title-worker-{decision_id}",
+            max_actions=1, verify=verify)
+        if outcome.get("executed"):
+            store.mark_title_decision_outcome(decision_id, status="executed")
+            return {"decision_id": decision_id, "status": "executed",
+                    "url": url}
+        if outcome.get("stale"):
+            reason = str((outcome["stale"][0] or {}).get("reason") or "stale")
+            store.mark_title_decision_outcome(
+                decision_id, status="stale", reason=reason[:300])
+            return {"skip": True, "motivo": reason, "status": "stale"}
+        if outcome.get("unverified"):
+            raise RuntimeError(str((outcome["unverified"][0] or {}).get(
+                "reason") or "pós-write não confirmado"))
+        skipped = outcome.get("skipped") or []
+        if skipped:
+            reason = str((skipped[0] or {}).get("reason") or "execução recusada")
+            if "already executed" in reason:
+                store.mark_title_decision_outcome(decision_id, status="executed")
+                return {"skip": True, "motivo": reason, "status": "executed"}
+            raise RuntimeError(reason)
+    raise RuntimeError("title_execution terminou sem desfecho")
+
+
 def register_default_handlers() -> dict[str, str]:
     """Registra os handlers seguros. Idempotente (chamar 2x não duplica efeito)."""
     register_handler(P.LANE_TECHNICAL, handler_technical)
@@ -122,6 +199,8 @@ def register_default_handlers() -> dict[str, str]:
     # seguro sem humano. `redirect_candidate` fica SO' registrado (nao redireciona).
     register_handler("dead_url", handler_dead_url)
     HANDLERS_REGISTRADOS["dead_url"] = "handler_dead_url"
+    register_handler(P.LANE_TITLE_EXECUTION, handler_title_execution)
+    HANDLERS_REGISTRADOS[P.LANE_TITLE_EXECUTION] = "handler_title_execution"
     return dict(HANDLERS_REGISTRADOS)
 
 

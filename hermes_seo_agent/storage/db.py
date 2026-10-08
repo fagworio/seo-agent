@@ -3751,6 +3751,33 @@ class Storage:
             self.conn.commit()
         return bool(cur.rowcount)
 
+    def mark_title_decision_outcome(self, decision_id: str, *,
+                                    status: str,
+                                    reason: str = "",
+                                    commit: bool = True) -> bool:
+        """Registra o desfecho do worker sem reabrir uma decisão terminal.
+
+        ``enqueued`` continua sendo o estado durante retries. Apenas o worker,
+        depois de confirmar a escrita ou classificar stale, pode fechar a
+        decisão. O guard evita que um retry tardio regrida ``executed``/``stale``.
+        """
+        allowed = {"executed", "stale", "rejected"}
+        if status not in allowed:
+            raise ValueError(f"status de decisão inválido: {status}")
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET status = ?, executed_at = ?, "
+            "not_executable_reason = COALESCE(NULLIF(?, ''), not_executable_reason), "
+            "updated_at = ? WHERE decision_id = ? "
+            "AND status NOT IN ('executed', 'stale', 'rejected')",
+            (status, now, reason, now, decision_id),
+        )
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
     def title_decision_stats(self) -> dict[str, Any]:
         """Observabilidade do 7A, SEPARANDO o que pode executar do que nao pode.
 

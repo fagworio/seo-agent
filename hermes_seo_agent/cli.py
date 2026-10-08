@@ -1651,7 +1651,13 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         if True:
             def _due(key: str, min_hours: float) -> bool:
-                raw = str(_daily_state.get_setting(key, "") or "")
+                # Checkpoints de sucesso são a fonte da verdade. Mantemos a
+                # chave antiga como fallback para não tornar bancos existentes
+                # imediatamente elegíveis após o deploy.
+                raw = str(_daily_state.get_setting(
+                    f"{key}:last_success",
+                    _daily_state.get_setting(key, ""),
+                ) or "")
                 if not raw:
                     return True
                 try:
@@ -1663,12 +1669,52 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 3600.0
                 return age >= min_hours
 
-            def _mark(key: str) -> None:
+            def _mark(key: str, value: str | None = None) -> bool:
                 try:
                     _daily_state.set_setting(
-                        key, datetime.datetime.now(datetime.timezone.utc).isoformat())
+                        key, value or datetime.datetime.now(
+                            datetime.timezone.utc).isoformat())
+                    return True
                 except Exception:  # noqa: BLE001
-                    pass
+                    return False
+
+            def _checkpoint(stage: str, *, success: bool,
+                            error: str = "", retry_hours: float = 1.0) -> bool:
+                """Persist stage attempt/success/retry without hiding failures."""
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                now_iso = now_utc.isoformat()
+                ok = _mark(f"{stage}:last_attempt", now_iso)
+                if success:
+                    ok = _mark(f"{stage}:last_success", now_iso) and ok
+                    # Alias de compatibilidade para consumidores antigos.
+                    if stage == "gsc":
+                        ok = _mark("gsc:last_daily", now_iso) and ok
+                    if stage == "ga4":
+                        ok = _mark("ga4:last_daily", now_iso) and ok
+                    if stage == "corpus":
+                        ok = _mark("corpus:last_rebuild", now_iso) and ok
+                    _mark(f"{stage}:last_error", "")
+                    _mark(f"{stage}:next_retry", "")
+                else:
+                    _mark(f"{stage}:last_error", error[:500])
+                    _mark(f"{stage}:next_retry", (
+                        now_utc + datetime.timedelta(hours=retry_hours)).isoformat())
+                if not ok:
+                    errors.append(f"checkpoint-{stage}: persist failed")
+                return ok
+
+            def _run_stage(func, stage: str, *, retry_hours: float = 1.0,
+                           **kw) -> bool:
+                before_errors = len(errors)
+                result = run_silently(func, **kw)
+                if result:
+                    _checkpoint(stage, success=True, retry_hours=retry_hours)
+                    return True
+                detail = "; ".join(errors[before_errors:]) or (
+                    f"{func.__name__}: unsuccessful")
+                _checkpoint(stage, success=False, error=detail,
+                            retry_hours=retry_hours)
+                return False
 
             _gsc_daily = _due("gsc:last_daily", 20)
             _ga4_daily = _due("ga4:last_daily", 20)
@@ -1676,17 +1722,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
 
         # 1) Bounded audit + report (always).
-        run_silently(_cmd_audit, args=_ns(limit=config.max_urls_per_run, json=True,
-                                          markdown=False, command="report",
-                                          _run_context=run_context,
-                                          _incremental=True), config=config)
+        _run_stage(_cmd_audit, "audit", args=_ns(
+            limit=config.max_urls_per_run, json=True, markdown=False,
+            command="report", _run_context=run_context,
+            _incremental=True), config=config)
         steps.append("audit")
 
         # 1b) R17: refresh incremental WordPress/Sitemap via o MESMO motor (AgentRun
         #     refresh_data). Não há um segundo motor de coleta.
-        run_silently(_cmd_refresh_data,
-                     args=_ns(sources="wordpress,sitemap", json=True,
-                              _run_context=run_context), config=config)
+        _run_stage(_cmd_refresh_data, "refresh",
+                    args=_ns(sources="wordpress,sitemap", json=True,
+                             _run_context=run_context), config=config)
         steps.append("refresh-wp-sitemap")
 
         # 2) Daily GSC inspect window.
@@ -1696,24 +1742,28 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             # travava o scheduler por dezenas de minutos. Distribuído pelos
             # ciclos do dia (~12), o mesmo budget é consumido sem bloquear.
             _inspect_budget = max(50, int(getattr(config, "url_inspection_daily_budget", 0) or 0) // 12)
-            run_silently(_cmd_inspect,
-                         args=_ns(budget=_inspect_budget, dry_run=False, json=True,
-                                  _run_context=run_context), config=config)
+            gsc_ok = _run_stage(
+                _cmd_inspect, "gsc-inspect", retry_hours=20,
+                args=_ns(budget=_inspect_budget, dry_run=False, json=True,
+                         _run_context=run_context), config=config)
             if config.google_credentials:
-                run_silently(_cmd_demand,
-                             args=_ns(store=True, min_impressions=0,
-                                      _run_context=run_context), config=config)
-                run_silently(_cmd_outcomes,
-                             args=_ns(action="revalidate-due", limit=200,
-                                      _run_context=run_context), config=config)
+                gsc_ok = _run_stage(
+                    _cmd_demand, "gsc-demand", retry_hours=20,
+                    args=_ns(store=True, min_impressions=0,
+                             _run_context=run_context), config=config) and gsc_ok
+                gsc_ok = _run_stage(
+                    _cmd_outcomes, "gsc-revalidate-7d", retry_hours=20,
+                    args=_ns(action="revalidate-due", limit=200,
+                             _run_context=run_context), config=config) and gsc_ok
                 steps.append("gsc-demand")
                 steps.append("revalidate-7d")
                 # Marco de 1 MES: reavalia ~28 dias depois — se o desempenho
                 # PIOROU, abre a retriagem (title_regression); se nao, o titulo
                 # segue bloqueado (nunca retratado sem piora comprovada).
-                run_silently(_cmd_outcomes,
-                             args=_ns(action="revalidate-due", limit=200, measure_days=28,
-                                      _run_context=run_context), config=config)
+                gsc_ok = _run_stage(
+                    _cmd_outcomes, "gsc-revalidate-28d", retry_hours=20,
+                    args=_ns(action="revalidate-due", limit=200, measure_days=28,
+                             _run_context=run_context), config=config) and gsc_ok
                 steps.append("revalidate-28d")
                 # F21/F22 — SHADOW MODE automático: o motor de FAMÍLIAS roda em
                 # paralelo ao motor atual sobre os MESMOS dados que o Hermes
@@ -1741,22 +1791,42 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     # Caixa, mas `decision_to_action` exige
                     # `rollout.writes_allowed=true` — que so existe em `auto`.
                     escreve = engine_mode == "auto"
-                    run_silently(_cmd_title_engine,
-                                 args=_ns(limit=10, min_impressions=100.0,
-                                          query_min_impressions=10.0, top_families=0,
-                                          mode=engine_mode, generation_mode="",
-                                          shadow=(not escreve), explain=False,
-                                          persist=True, write=escreve,
-                                          sample_per_decision=0,
-                                          include_non_anomalous=False,
-                                          no_deep_signals=False,
-                                          _run_context=run_context), config=config)
+                    title_ok = _run_stage(
+                        _cmd_title_engine, "title-engine", retry_hours=20,
+                        args=_ns(limit=int(getattr(
+                            config, "title_max_writes_per_cycle", 10) or 10),
+                                 min_impressions=100.0,
+                                 query_min_impressions=10.0, top_families=0,
+                                 mode=engine_mode, generation_mode="",
+                                 shadow=(not escreve), explain=False,
+                                 persist=True, write=escreve,
+                                 sample_per_decision=0,
+                                 include_non_anomalous=False,
+                                 no_deep_signals=False,
+                                 _run_context=run_context), config=config)
+                    gsc_ok = title_ok and gsc_ok
+                    if escreve and title_ok:
+                        # O motor apenas enfileira decisões. O worker é a única
+                        # camada autorizada a aplicar a escrita no WordPress.
+                        worker_ok = _run_stage(
+                            _cmd_lanes_run, "title-worker", retry_hours=1,
+                            args=_ns(lane="title_execution", worker_id=None,
+                                      lease_seconds=300, limit=None,
+                                      max_items=(getattr(
+                                          config, "title_max_writes_per_cycle", 10)),
+                                      no_heartbeat=False, json=True),
+                            config=config)
+                        gsc_ok = worker_ok and gsc_ok
                     steps.append(f"title-engine-{engine_mode}")
-                _mark("gsc:last_daily")
+                if gsc_ok:
+                    _checkpoint("gsc", success=True, retry_hours=20)
+                else:
+                    _checkpoint("gsc", success=False,
+                                error="etapa GSC/title incompleta", retry_hours=20)
             # Background: mantém a fila de melhorias crescendo diariamente.
-            run_silently(_cmd_post_audit,
-                         args=_ns(limit=20, min_impressions=50, write=False, json=True,
-                                  _run_context=run_context), config=config)
+            _run_stage(_cmd_post_audit, "post-audit", args=_ns(
+                limit=20, min_impressions=50, write=False, json=True,
+                _run_context=run_context), config=config)
             steps.append("inspect")
             steps.append("post-audit")
 
@@ -1773,10 +1843,9 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         # 4) Weekly GA4 collection (A2): janela fechada, persistida; degrada em
         #    silêncio quando GA4_PROPERTY_ID não está configurado.
         if config.ga4_property_id and _ga4_daily:
-            run_silently(_cmd_ga4,
-                         args=_ns(action="collect", days=28, store=True,
-                                  _run_context=run_context), config=config)
-            _mark("ga4:last_daily")
+            _run_stage(_cmd_ga4, "ga4", retry_hours=20,
+                       args=_ns(action="collect", days=28, store=True,
+                                _run_context=run_context), config=config)
             steps.append("ga4-collect")
 
         # 5) Weekly corpus maintenance (M2): rebuild incremental por content_hash
@@ -1790,10 +1859,9 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             # `limit=0` (drenar tudo) travava o scheduler por horas. O rebuild é
             # retomável (claim atômico + lease), então drenar por partes é seguro.
             _corpus_limit = int(getattr(config, "corpus_build_limit_per_run", 1000) or 1000)
-            run_silently(_cmd_corpus, args=_ns(action="rebuild", limit=_corpus_limit,
-                                               _run_context=run_context),
-                         config=config)
-            _mark("corpus:last_rebuild")
+            _run_stage(_cmd_corpus, "corpus", retry_hours=24,
+                       args=_ns(action="rebuild", limit=_corpus_limit,
+                                _run_context=run_context), config=config)
             steps.append("corpus-rebuild")
 
         # 6) B6: campanhas aprovadas/vencidas — usa o MESMO Campaign Runner (não um

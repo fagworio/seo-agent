@@ -149,3 +149,34 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
             "SELECT status, intent, summary_json FROM agent_runs ORDER BY id DESC LIMIT 1"
         ).fetchone()
         assert run[0] == "success" and run[1] == "normal_cycle"
+
+
+def test_schedule_does_not_advance_gsc_checkpoint_when_title_stage_fails(
+        monkeypatch, capsys, tmp_path):
+    """Falha do motor mantém o ciclo elegível para retry."""
+    db = tmp_path / "failed-title.db"
+    _now_patch(monkeypatch, hour=6)
+    config = dataclasses.replace(_config(db), google_credentials="configured",
+                                 title_engine_mode="auto")
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_inspect", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_demand", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_outcomes", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_ga4", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_corpus", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_opportunities", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_title_engine",
+                        lambda *a, **k: 2)
+    worker_calls = []
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_lanes_run",
+                        lambda *a, **k: worker_calls.append(True) or 0)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0),
+                         config) == 1
+    json.loads(capsys.readouterr().out)
+    with Storage(str(db)) as storage:
+        assert storage.get_setting("gsc:last_success", "") == ""
+        assert storage.get_setting("gsc:last_error", "")
+        assert worker_calls == []
