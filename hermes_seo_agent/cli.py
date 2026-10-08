@@ -1630,6 +1630,13 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 summary = payload.get("summary", {})
                 for key in totals:
                     totals[key] += int(summary.get(key, summary.get("audited_urls", 0) if key == "urls" else 0) or 0)
+                payload_status = str(payload.get("status") or "").lower()
+                if payload_status in {"error", "partial", "failed"}:
+                    errors.append(
+                        f"{func.__name__}: status {payload_status}"
+                        + (f" ({payload.get('error')})" if payload.get("error") else "")
+                    )
+                    return False
             except Exception:
                 pass
             if isinstance(code, int) and code != 0:

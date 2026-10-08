@@ -180,3 +180,24 @@ def test_schedule_does_not_advance_gsc_checkpoint_when_title_stage_fails(
         assert storage.get_setting("gsc:last_success", "") == ""
         assert storage.get_setting("gsc:last_error", "")
         assert worker_calls == []
+
+
+def test_schedule_treats_json_error_as_failed_stage(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "json-error.db"
+    _now_patch(monkeypatch, hour=6)
+
+    def failed_audit(*_args, **_kwargs):
+        print(json.dumps({"status": "error", "error": "source unavailable"}))
+
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit", failed_audit)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_inspect", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_opportunities", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_ga4", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_corpus", lambda *a, **k: None)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0),
+                         _config(db)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert any("status error" in error for error in result["summary"]["errors"])
