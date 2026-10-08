@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RunDetail } from "@/lib/api";
 import { Button } from "@/design-system/button";
@@ -22,21 +22,39 @@ export function RefreshDataButton() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>(SOURCES.map((s) => s.key));
   const [runId, setRunId] = useState<number | null>(null);
+  const invalidatedRun = useRef<number | null>(null);
   const qc = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ csrf_token: string; user: { permissions: string[] } }>("/auth/me") });
   const canRun = me.data?.user.permissions.includes("agent.run") ?? false;
+  const invalidateData = useCallback(() => {
+    for (const key of ["today", "integrations", "pages", "title-impact", "runs"]) {
+      qc.invalidateQueries({ queryKey: [key] });
+    }
+  }, [qc]);
 
   const create = useMutation({
-    mutationFn: () => api.post<{ id: number; status: string }>("/runs", { intent: "refresh_data", mode: "analyze", sources: selected }, me.data?.csrf_token),
-    onSuccess: (run) => { setRunId(run.id); qc.invalidateQueries({ queryKey: ["runs"] }); },
+    mutationFn: () => api.post<RunDetail>("/runs", { intent: "refresh_data", mode: "analyze", sources: selected }, me.data?.csrf_token),
+    onSuccess: (run) => { setRunId(run.id); invalidateData(); },
   });
 
   const run = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.get<RunDetail>(`/runs/${runId}`),
     enabled: runId != null,
-    refetchInterval: (q) => (q.state.data && !TERMINAL.has(q.state.data.status) ? 2000 : false),
+    refetchInterval: (q) => {
+      if (q.state.data && TERMINAL.has(q.state.data.status)) {
+        return false;
+      }
+      return q.state.data ? 2000 : false;
+    },
   });
+
+  useEffect(() => {
+    const current = run.data;
+    if (!current || !TERMINAL.has(current.status) || invalidatedRun.current === current.id) return;
+    invalidatedRun.current = current.id;
+    if (current.status === "success" || current.status === "partial") invalidateData();
+  }, [invalidateData, run.data]);
 
   const toggle = (key: string) => setSelected((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
 
@@ -44,7 +62,7 @@ export function RefreshDataButton() {
     <>
       <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>↻ Atualizar dados</Button>
       {open && (
-        <Drawer title="Atualizar dados" onClose={() => setOpen(false)}>
+        <Drawer title="Atualizar dados" onClose={() => { setOpen(false); setRunId(null); }}>
           {!runId || create.isPending ? (
             <>
               <p className="mb-3 text-sm text-[var(--muted)]">Escolha as fontes a atualizar. Isso gera uma execução do agente (AgentRun refresh_data) — nada é escrito no site.</p>

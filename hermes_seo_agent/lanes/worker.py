@@ -245,6 +245,7 @@ class LaneRun:
     claimed: int = 0
     completed: int = 0
     skipped: int = 0
+    stale: int = 0
     failed: int = 0
     lost_lease: int = 0
     heartbeat_error: str | None = None
@@ -257,6 +258,7 @@ class LaneRun:
             "lane": self.lane, "worker_id": self.worker_id,
             "recovered": self.recovered, "claimed": self.claimed,
             "completed": self.completed, "skipped": self.skipped,
+            "stale": self.stale,
             "failed": self.failed, "lost_lease": self.lost_lease,
             "heartbeat_error": self.heartbeat_error,
             "items_com_erro": self.items_com_erro[:20],
@@ -382,6 +384,15 @@ class LaneWorker:
                 # (ou será recuperado) — e nada foi registrado como sucesso.
                 run.lost_lease += 1
                 run.items_com_erro.append(f"{wid}: lease perdido durante o handler")
+                return
+            if isinstance(resultado, dict) and resultado.get("status") == "stale":
+                stale = self.queue.mark_stale(
+                    wid, self.worker_id,
+                    v, reason=str(resultado.get("motivo") or "stale"))
+                if stale.get("ok"):
+                    run.stale += 1
+                else:
+                    run.lost_lease += 1
                 return
             if isinstance(resultado, dict) and resultado.get("skip") is True:
                 raise SkipItem(str(resultado.get("motivo") or "sem mudanca"))

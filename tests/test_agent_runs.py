@@ -95,6 +95,10 @@ def test_fail_and_cancel(tmp_path):
 
     rid2 = svc.start_run("hermes-seo-agent", trigger="manual", intent="technical")
     run2 = svc.cancel(rid2)
+    assert run2["status"] == "running"
+    assert run2["cancel_requested_at"] is not None
+    assert svc.cancellation_requested(rid2) is True
+    run2 = svc.complete(rid2, status="cancelled")
     assert run2["status"] == "cancelled"
     storage.close()
 

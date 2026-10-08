@@ -202,6 +202,23 @@ class TitleFunnelModel(BaseModel):
     changed: int = 0
     measured: int = 0
     improved: int = 0
+    queued: int = 0
+    retry: int = 0
+    stale: int = 0
+    blocked: int = 0
+    failed: int = 0
+
+
+class AuditCoverageModel(BaseModel):
+    """Coverage counts plus provenance; zero is not an availability signal."""
+    availability: str = "missing"
+    measured_at: str | None = None
+    known: int | None = None
+    never_audited: int | None = None
+    dirty: int | None = None
+    stale: int | None = None
+    failed: int | None = None
+    fresh: int | None = None
 
 
 class ObservedImpactModel(BaseModel):
@@ -283,6 +300,7 @@ class AgentRunModel(BaseModel):
     error: str | None = None
     target_url: str | None = None
     sources: list[str] | None = None
+    cancel_requested_at: str | None = None
 
 
 class RunStepModel(BaseModel):
@@ -335,6 +353,7 @@ class TodayModel(BaseModel):
     improvement_summary: ImprovementSummaryModel = ImprovementSummaryModel()
     change_summary: ChangeSummaryModel = ChangeSummaryModel()
     title_funnel: TitleFunnelModel = TitleFunnelModel()
+    audit_coverage: AuditCoverageModel = AuditCoverageModel()
     observed_impact: ObservedImpactModel = ObservedImpactModel()
     measurement_summary: MeasurementSummaryModel = MeasurementSummaryModel()
     next_executions: list[NextExecutionModel] = []

@@ -66,10 +66,21 @@ export function TitleFunnelPanel({ funnel }: { funnel: TitleFunnel }) {
           <strong className="tabular-nums">{integer.format(value)}</strong>
         </li>)}
       </ol>
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-[var(--border)] pt-3 text-xs sm:grid-cols-3">
+        <OperationalMetric label="Na fila" value={funnel.queued ?? 0} tone="info" />
+        <OperationalMetric label="Em retry" value={funnel.retry ?? 0} tone="warning" />
+        <OperationalMetric label="Bloqueadas" value={funnel.blocked ?? 0} tone="danger" />
+        <OperationalMetric label="Stale" value={funnel.stale ?? 0} tone="neutral" />
+        <OperationalMetric label="Falharam" value={funnel.failed ?? 0} tone="danger" />
+      </div>
       <p className="mt-4 border-t border-[var(--border)] pt-3 text-sm"><span className="text-[var(--muted)]">Taxa de sucesso medida: </span><strong className="tabular-nums">{rate === null ? "Não medida" : `${decimal.format(rate)}%`}</strong></p>
       {!funnel.approved && <p className="mt-2 text-xs text-[var(--muted)]">Aprovações antigas sem vínculo de campanha não são inferidas.</p>}
     </> : <Empty text="Ainda não há oportunidades de título persistidas. Quando o agente registrar candidatos, o funil aparecerá aqui." />}
   </Card>;
+}
+
+function OperationalMetric({ label, value, tone }: { label: string; value: number; tone: "success" | "warning" | "danger" | "info" | "neutral" }) {
+  return <div className="rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-2"><span className="block text-[var(--muted)]">{label}</span><Badge tone={tone}>{integer.format(value)}</Badge></div>;
 }
 
 export function AutomationPanel({ executions }: { executions: NextExecution[] }) {

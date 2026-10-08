@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from hermes_seo_agent.services.opportunity import OpportunityDTO, OpportunityFeedService
+from hermes_seo_agent.lanes.title_decision import make_decision, persist_decision
 from hermes_seo_agent.storage.db import Storage
 
 
@@ -92,6 +93,32 @@ def test_feed_source_filter_and_unknown_source(tmp_path):
             assert False, "fonte desconhecida deveria levantar ValueError"
         except ValueError:
             pass
+
+
+def test_feed_exposes_title_decisions_with_queue_projection(tmp_path):
+    with Storage(tmp_path / "title-feed.db") as storage:
+        decision = make_decision(
+            url="https://x.com/title/", post_id=7,
+            before="Título antigo", after="Título novo", confidence=0.9,
+            rollout={"writes_allowed": True},
+            evidence={"page": {"impressions": 100, "ctr": 0.01}},
+        )
+        persist_decision(storage, decision)
+        storage.conn.execute(
+            "INSERT INTO lane_queue (lane, work_item_id, url, payload_json, status, "
+            "priority, max_attempts, next_attempt_at, created_at, updated_at) "
+            "VALUES ('title_execution', ?, ?, '{}', 'retry', 100, 3, ?, ?, ?)",
+            (decision.decision_id, decision.url, "2026-01-01T00:00:00+00:00",
+             "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        storage.conn.commit()
+        item = OpportunityFeedService(storage).feed(
+            source="title_decision", limit=1)[0]
+
+    assert item["source"] == "title_decision"
+    assert item["projection"]["before"] == "Título antigo"
+    assert item["projection"]["queue"]["status"] == "retry"
+    assert item["recommendation"] == "Título novo"
 
 
 def test_opportunity_dto_to_dict_roundtrip():

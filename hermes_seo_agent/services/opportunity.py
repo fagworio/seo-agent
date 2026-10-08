@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
-_SOURCES = ("checklist", "content_brief", "backlog", "interlink")
+_SOURCES = ("checklist", "title_decision", "content_brief", "backlog", "interlink")
 
 
 @dataclass
@@ -256,6 +256,63 @@ class OpportunityFeedService:
             ))
         return out
 
+    def _title_decisions(self, status: str | None = None,
+                         limit: int = 200) -> list[OpportunityDTO]:
+        """Expose the title engine's durable decision read model in the feed."""
+        sql = (
+            "SELECT decision_id, url, before, after, evidence_json, rollout_json, "
+            "confidence, status, not_executable_reason, decided_at, enqueued_at, "
+            "executed_at, outcome_id FROM title_decision"
+        )
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status = ?"
+            params.append(status)
+        else:
+            sql += " WHERE status <> 'superseded'"
+        sql += " ORDER BY decided_at DESC LIMIT ?"
+        params.append(limit)
+        try:
+            rows = self.storage.conn.execute(sql, params).fetchall()
+        except Exception:
+            return []
+        out: list[OpportunityDTO] = []
+        for row in rows:
+            evidence = json.loads(row[4] or "{}")
+            rollout = json.loads(row[5] or "{}")
+            decision_status = str(row[7] or "decided")
+            queue = self.storage.conn.execute(
+                "SELECT status, attempt_count, next_attempt_at, last_error "
+                "FROM lane_queue WHERE lane = 'title_execution' "
+                "AND work_item_id = ?", (row[0],)).fetchone()
+            queue_state = {
+                "status": queue[0], "attempt_count": queue[1],
+                "next_attempt_at": queue[2], "last_error": queue[3],
+            } if queue else {}
+            detail = row[8] or queue_state.get("last_error") or ""
+            state = "measured" if row[12] else (
+                "pending_measurement" if decision_status == "executed" else decision_status)
+            gsc = evidence.get("page") or evidence.get("gsc") or {}
+            out.append(OpportunityDTO(
+                id=f"title_decision:{row[0]}", source="title_decision",
+                type="title_engine", status=decision_status, url=row[1] or "",
+                title=row[2] or "", score=None,
+                evidence=detail or "Decisão persistida pelo motor de títulos.",
+                recommendation=row[3] or "", gsc_metrics=gsc,
+                measurement_state=state,
+                action_class="safe_fix" if rollout.get("writes_allowed") else "approval_required",
+                risk=str(rollout.get("risk") or "review_required"),
+                rollback_available=True, created_at=row[9] or "",
+                updated_at=row[11] or row[10] or row[9] or "",
+                decision_type="title_meta",
+                projection={"decision_id": row[0], "before": row[2] or "",
+                            "after": row[3] or "", "confidence": row[6],
+                            "rollout": rollout, "queue": queue_state,
+                            "outcome_id": row[12]},
+                data_freshness={"decided_at": row[9] or ""},
+            ))
+        return out
+
     # -- feed unificado ------------------------------------------------------
 
     def feed(self, *, source: str | None = None, status: str | None = None,
@@ -264,6 +321,8 @@ class OpportunityFeedService:
         if source and source not in _SOURCES:
             raise ValueError(f"fonte desconhecida: {source!r} (válidas: {_SOURCES})")
         dto: list[OpportunityDTO] = []
+        if source in (None, "title_decision"):
+            dto.extend(self._title_decisions(status=status, limit=limit))
         if source in (None, "checklist"):
             dto.extend(self._checklist(status=status or "pending", limit=limit))
         if source in (None, "content_brief"):

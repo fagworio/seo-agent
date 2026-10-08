@@ -73,6 +73,7 @@ class AgentRunService:
         mode: str | None = None,
         started_by: str | None = None,
         description: str = "",
+        target_url: str | None = None,
         sources: list[str] | None = None,
     ) -> int:
         """Persist a human request for a worker to execute.
@@ -86,7 +87,7 @@ class AgentRunService:
         run_id = self.store.create_run(
             agent_id=agent_id, status="queued", trigger="manual",
             intent=intent, mode=mode, started_by=started_by, now=self._now(),
-            sources=sources,
+            target_url=target_url, sources=sources,
         )
         self.store.add_event(run_id, now=self._now(), event="RUN_QUEUED",
                              level="info", message="execução solicitada; aguardando worker")
@@ -154,7 +155,17 @@ class AgentRunService:
             raise AgentRunError(f"run inexistente: {run_id}")
         if run["status"] in TERMINAL_STATES:
             return run
-        return self.complete(run_id, status="cancelled")
+        if run["status"] == "queued":
+            return self.complete(run_id, status="cancelled")
+        requested = self.store.request_cancel(run_id, requested_at=self._now())
+        if requested:
+            self.store.add_event(
+                run_id, now=self._now(), event="RUN_CANCEL_REQUESTED",
+                level="warning", message="cancelamento cooperativo solicitado")
+        return self.get_run(run_id) or run
+
+    def cancellation_requested(self, run_id: int) -> bool:
+        return self.store.is_cancel_requested(run_id)
 
     # -- queries -------------------------------------------------------------
     def get_run(self, run_id: int) -> dict[str, Any] | None:

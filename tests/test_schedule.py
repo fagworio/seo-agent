@@ -5,7 +5,7 @@ import dataclasses
 import datetime
 import json
 
-from hermes_seo_agent.cli import _cmd_schedule
+from hermes_seo_agent.cli import _cmd_schedule, _emit
 from hermes_seo_agent.config import Config
 from hermes_seo_agent.storage.db import Storage
 
@@ -179,7 +179,9 @@ def test_schedule_does_not_advance_gsc_checkpoint_when_title_stage_fails(
     with Storage(str(db)) as storage:
         assert storage.get_setting("gsc:last_success", "") == ""
         assert storage.get_setting("gsc:last_error", "")
-        assert worker_calls == []
+        # A title collection failure must not strand already queued decisions;
+        # the independent execution lane still gets its bounded turn.
+        assert worker_calls == [True]
 
 
 def test_schedule_treats_json_error_as_failed_stage(monkeypatch, capsys, tmp_path):
@@ -187,7 +189,8 @@ def test_schedule_treats_json_error_as_failed_stage(monkeypatch, capsys, tmp_pat
     _now_patch(monkeypatch, hour=6)
 
     def failed_audit(*_args, **_kwargs):
-        print(json.dumps({"status": "error", "error": "source unavailable"}))
+        _emit({"status": "error", "error": "source unavailable",
+               "summary": {}}, force_json=True)
 
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit", failed_audit)
     monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data", lambda *a, **k: None)

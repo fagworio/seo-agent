@@ -14,7 +14,7 @@ import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 
 export default function TodayPage() {
-  const { data, error, isLoading } = useQuery({ queryKey: ["today"], queryFn: () => api.get<TodayResponse>("/dashboard/today?limit=8") });
+  const { data, error, isLoading } = useQuery({ queryKey: ["today"], queryFn: () => api.get<TodayResponse>("/dashboard/today?limit=8"), refetchInterval: 30000 });
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando dados operacionais…</div>;
   if (error) {
     const apiError = error as ApiError;
@@ -44,7 +44,7 @@ export default function TodayPage() {
     ...rawToday.change_summary,
   };
   const auditCoverage: AuditCoverage = {
-    known: 0, never_audited: 0, dirty: 0, stale: 0, failed: 0, fresh: 0,
+    availability: "missing", known: null, never_audited: null, dirty: null, stale: null, failed: null, fresh: null,
     ...rawToday.audit_coverage,
   };
   const titleFunnel: TitleFunnel = {
@@ -75,27 +75,20 @@ export default function TodayPage() {
     improvement_summary: improvementSummary,
   };
   const widgets: DashboardWidget[] = [
-    { id: "title-impact", label: "Impacto acumulado dos títulos", className: "xl:col-span-2", content: <TitleImpactWidget /> },
-    { id: "outcome-summary", label: "Resumo de resultados", className: "xl:col-span-2", content: <OutcomeKpis changes={changeSummary} impact={observedImpact} measurement={measurementSummary} executions={nextExecutions} /> },
-    { id: "google-trust", label: "Saúde dos dados Google", className: "xl:col-span-2", content: <GoogleTrust data={googleData} /> },
+    { id: "source-warnings", label: "Fontes que precisam de atenção", className: "xl:col-span-2", content: <SourceWarnings warnings={today.integration_warnings} /> },
     { id: "audit-coverage", label: "Cobertura de auditoria do acervo", content: (
-      <dl className="grid grid-cols-2 gap-3 text-sm">
-        <div><dt className="text-xs text-muted-foreground">URLs conhecidas</dt><dd className="text-lg font-semibold">{auditCoverage.known}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Nunca auditadas</dt><dd className="text-lg font-semibold text-amber-500">{auditCoverage.never_audited}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Na fila (dirty)</dt><dd className="text-lg font-semibold">{auditCoverage.dirty}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Desatualizadas (stale)</dt><dd className="text-lg font-semibold">{auditCoverage.stale}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Em falha (backoff)</dt><dd className="text-lg font-semibold text-red-500">{auditCoverage.failed}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Auditadas (fresh)</dt><dd className="text-lg font-semibold text-emerald-600">{auditCoverage.fresh}</dd></div>
-      </dl>
+      <AuditCoveragePanel coverage={auditCoverage} />
     ) },
     { id: "title-funnel", label: "Funil de otimização de títulos", content: <TitleFunnelPanel funnel={titleFunnel} /> },
+    { id: "recent-activity", label: "Atividade recente", content: <RecentRuns runs={today.recent_runs} /> },
+    { id: "outcome-summary", label: "Resumo de resultados", className: "xl:col-span-2", content: <OutcomeKpis changes={changeSummary} impact={observedImpact} measurement={measurementSummary} executions={nextExecutions} /> },
+    { id: "google-trust", label: "Saúde dos dados Google", className: "xl:col-span-2", content: <GoogleTrust data={googleData} /> },
+    { id: "title-impact", label: "Impacto acumulado dos títulos", className: "xl:col-span-2", content: <TitleImpactWidget /> },
     { id: "automation", label: "Próximas execuções", content: <AutomationPanel executions={nextExecutions} /> },
     { id: "observed-impact", label: "Impacto observado", content: <ObservedImpactPanel impact={observedImpact} /> },
     { id: "measurement", label: "Em medição", content: <MeasurementPanel summary={measurementSummary} /> },
-    { id: "recent-activity", label: "Atividade recente", content: <RecentRuns runs={today.recent_runs} /> },
     { id: "opportunities", label: "Decisões sustentadas por Google", content: <TopOpportunities opportunities={today.top_opportunities} /> },
     { id: "organic-trend", label: "Desempenho orgânico", content: <OrganicTrend points={today.search_trend} /> },
-    { id: "source-warnings", label: "Fontes que precisam de atenção", content: <SourceWarnings warnings={today.integration_warnings} /> },
     { id: "top-searches", label: "Buscas com visibilidade", className: "xl:col-span-2", content: <TopSearches searches={today.top_searches} /> },
     { id: "google-signals", label: "Sinais Google", className: "xl:col-span-2", content: <GoogleSignalsPanel signals={rawToday.google_signals ?? {}} /> },
     { id: "topic-movers", label: "Tópicos em movimento", className: "xl:col-span-2", content: <TopicMovers today={today} /> },
@@ -104,6 +97,21 @@ export default function TodayPage() {
     <header><h1 className="text-xl font-semibold">Hoje</h1><p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">O que o SEO Agent mudou, o que está sendo medido e qual lote será executado em seguida.</p></header>
     <DashboardWidgetLayout widgets={widgets} />
   </div>;
+}
+
+function AuditCoveragePanel({ coverage }: { coverage: AuditCoverage }) {
+  if (coverage.availability !== "available") {
+    return <Card title="Cobertura de auditoria do acervo"><p className="text-sm text-[var(--muted)]">{coverage.availability === "error" ? "Não foi possível consultar a cobertura." : "A cobertura ainda não está disponível."} Não interpretamos ausência de dados como zero.</p>{coverage.measured_at && <p className="mt-2 text-xs text-[var(--muted)]">Última medição: {dateTime(coverage.measured_at)}</p>}</Card>;
+  }
+  const value = (n: number | null | undefined) => n == null ? "—" : n;
+  return <Card title="Cobertura de auditoria do acervo"><dl className="grid grid-cols-2 gap-3 text-sm">
+    <div><dt className="text-xs text-muted-foreground">URLs conhecidas</dt><dd className="text-lg font-semibold">{value(coverage.known)}</dd></div>
+    <div><dt className="text-xs text-muted-foreground">Nunca auditadas</dt><dd className="text-lg font-semibold text-amber-500">{value(coverage.never_audited)}</dd></div>
+    <div><dt className="text-xs text-muted-foreground">Na fila (dirty)</dt><dd className="text-lg font-semibold">{value(coverage.dirty)}</dd></div>
+    <div><dt className="text-xs text-muted-foreground">Desatualizadas (stale)</dt><dd className="text-lg font-semibold">{value(coverage.stale)}</dd></div>
+    <div><dt className="text-xs text-muted-foreground">Em falha (backoff)</dt><dd className="text-lg font-semibold text-red-500">{value(coverage.failed)}</dd></div>
+    <div><dt className="text-xs text-muted-foreground">Auditadas (fresh)</dt><dd className="text-lg font-semibold text-emerald-600">{value(coverage.fresh)}</dd></div>
+  </dl>{coverage.measured_at && <p className="mt-3 text-xs text-[var(--muted)]">Atualizado {dateTime(coverage.measured_at)}</p>}</Card>;
 }
 
 function RecentRuns({ runs }: { runs: TodayResponse["today"]["recent_runs"] }) {
@@ -120,6 +128,7 @@ function SourceWarnings({ warnings }: { warnings: TodayResponse["today"]["integr
 
 function runLabel(status: string) { return ({ success: "Concluída", failed: "Falhou", partial: "Parcial", running: "Em execução" } as Record<string, string>)[status] ?? status; }
 function runTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" { if (status === "success") return "success"; if (status === "failed") return "danger"; if (status === "partial") return "warning"; if (status === "running") return "info"; return "neutral"; }
+function dateTime(value: string | null) { if (!value) return "—"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date); }
 
 function TopicMovers({ today }: { today: { emerging_topics?: { topic: string; authority: number; momentum: number | null }[]; declining_topics?: { topic: string; authority: number; momentum: number | null }[] } }) {
   const emerging = today.emerging_topics ?? [];

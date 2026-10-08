@@ -27,9 +27,10 @@ export default function AgentsPage() {
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: () => api.get<{ runs: AgentRun[] }>("/runs?limit=50"),
+    refetchInterval: (q) => q.state.data?.runs.some((run) => run.status === "queued" || run.status === "running") ? 3000 : false,
   });
   const queue = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; run: AgentRun }>("/runs", { intent, mode }, me.data?.csrf_token),
+    mutationFn: () => api.post<AgentRun>("/runs", { intent, mode }, me.data?.csrf_token),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runs"] }),
   });
   const campaigns = useQuery({

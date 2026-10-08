@@ -91,31 +91,25 @@ def test_etapa_b_exige_caixa_humana():
 def test_etapa_c_automatiza_apenas_caso_seguro():
     """Etapa C: em `auto` o motor escreve o caso que ELE decidiu.
 
-    DIRETRIZ 2026-09-28 (dono): "o ciclo e incremental de 200 em 200 ... nunca
-    parar e bloquear a fila. Mesmo se o titulo nao tiver uma boa selecao. O
-    objetivo e sempre continuar o fluxo". O gate de DECISAO (`review_title`)
-    continua obrigatorio; o que saiu daqui foi a exigencia de
-    `historical_success.sufficient` (nunca verdadeiro com weights_version=0) e o
-    `risk == low` (dependia de coverage_gain >= 0.15, inalcancavel) — juntos,
-    travavam 100% das escritas mesmo em modo `auto`.
+    O gate de decisão continua obrigatório e a automação exige os três sinais
+    explícitos de segurança: confiança alta, risco baixo e histórico suficiente.
+    Sem evidência histórica, o caso permanece na revisão humana.
     """
     seguro = _new_contract()
     policy = rollout_policy(seguro, mode=MODE_AUTO,
                             historical_success={"sufficient": True})
     assert policy["writes_allowed"] is True
 
-    # historico insuficiente deixou de bloquear (com weights_version=0 ele
-    # nunca fica suficiente: era uma trava morta, nao uma protecao).
+    # Histórico insuficiente não autoriza publicação automática.
     sem_historico = rollout_policy(seguro, mode=MODE_AUTO,
                                   historical_success={"sufficient": False})
-    assert sem_historico["writes_allowed"] is True
+    assert sem_historico["writes_allowed"] is False
 
-    # confianca media tambem escreve: a decisao ja passou pela cadeia completa
-    # de evidencia e pelo _covered.
+    # Confiança média permanece na revisão humana.
     confianca_media = rollout_policy(_new_contract(confidence="medium"),
                                      mode=MODE_AUTO,
                                      historical_success={"sufficient": True})
-    assert confianca_media["writes_allowed"] is True
+    assert confianca_media["writes_allowed"] is False
 
     # confianca BAIXA continua caindo na caixa humana (revisao do dono).
     confianca_baixa = rollout_policy(_new_contract(confidence="low"),

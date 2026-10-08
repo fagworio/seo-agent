@@ -72,7 +72,7 @@ class AgentStore:
             "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
             "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
             "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
-            "r.target_url, r.sources_json "
+            "r.target_url, r.sources_json, r.cancel_requested_at "
             "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE r.id = ?",
             (run_id,),
         ).fetchone()
@@ -84,7 +84,7 @@ class AgentStore:
                "r.started_by, r.started_at, r.finished_at, r.duration_ms, r.summary_json, "
                "r.comparison_json, r.urls_analyzed, r.findings_count, r.opportunities_count, "
                "r.safe_fixes_count, r.executed_changes_count, r.error, r.created_at, "
-               "r.target_url, r.sources_json "
+               "r.target_url, r.sources_json, r.cancel_requested_at "
                "FROM agent_runs r JOIN agents a ON a.id = r.agent_id WHERE 1=1")
         params: list[Any] = []
         if agent:
@@ -128,6 +128,22 @@ class AgentStore:
     def set_run_started(self, run_id: int) -> None:
         self.conn.execute("UPDATE agent_runs SET status = 'running' WHERE id = ? AND status = 'queued'", (run_id,))
         self.conn.commit()
+
+    def request_cancel(self, run_id: int, *, requested_at: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE agent_runs SET cancel_requested_at = ? "
+            "WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL",
+            (requested_at, run_id),
+        )
+        self.conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    def is_cancel_requested(self, run_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT status, cancel_requested_at FROM agent_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return bool(row and (row[0] == "cancelled" or row[1]))
 
     def claim_queued_run(self, *, agent: str, intent: str | None) -> dict[str, Any] | None:
         """Claim the oldest compatible manual request for the scheduler.
@@ -277,6 +293,7 @@ class AgentStore:
             "executed_changes_count": row[17], "error": row[18], "created_at": row[19],
             "target_url": row[20] if len(row) > 20 else None,
             "sources": json.loads(row[21]) if len(row) > 21 and row[21] else None,
+            "cancel_requested_at": row[22] if len(row) > 22 else None,
         }
 
     @staticmethod

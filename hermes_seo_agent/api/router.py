@@ -371,6 +371,7 @@ class Router:
         body = request._json_body or {}
         intent = body.get("intent") or "normal_cycle"
         mode = body.get("mode") or "analyze"
+        target_url = body.get("target_url")
         if intent not in {"normal_cycle", "technical", "sitemap_indexing", "opportunities", "content", "specific_url"}:
             raise BadRequest("Intenção de execução inválida.")
         if mode not in {"analyze", "safe_fix"}:
@@ -378,6 +379,7 @@ class Router:
         session = request._session
         run_id = self.runs.queue_run(
             "hermes-seo-agent", intent=intent, mode=mode, started_by=session.email,
+            target_url=target_url,
             description="Hermes SEO Agent",
         )
         self.storage.log_audit(session.email, "AGENT_RUN_QUEUED", str(run_id),

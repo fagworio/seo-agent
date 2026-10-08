@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -517,7 +517,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     error TEXT,
     created_at TEXT,
     target_url TEXT,
-    sources_json TEXT
+    sources_json TEXT,
+    cancel_requested_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status ON agent_runs(agent_id, status, id);
 CREATE TABLE IF NOT EXISTS agent_run_steps (
@@ -859,6 +860,7 @@ class Storage:
             "agent_runs": [
                 ("target_url", "TEXT"),
                 ("sources_json", "TEXT"),
+                ("cancel_requested_at", "TEXT"),
             ],
             # 7A.2.2 — separa "observei o meta e estava VAZIO" de "nao consegui ler".
             # `1` = observado (vazio ou nao); `0` = desconhecido => nunca executa.
@@ -993,6 +995,29 @@ class Storage:
             "SELECT 1 FROM actions WHERE fingerprint = ? AND status = 'executed'", (fingerprint,)
         ).fetchone()
         return row is not None
+
+    def executed_action_for_work_item(self, work_item_id: str) -> dict[str, Any] | None:
+        """Return the durable write record used to recover a lost worker ack."""
+        row = self.conn.execute(
+            "SELECT fingerprint, url, before_json, after_json, fix_json, executed_at "
+            "FROM actions WHERE work_item_id = ? AND status = 'executed' "
+            "ORDER BY id DESC LIMIT 1", (work_item_id,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "fingerprint": row[0], "url": row[1],
+            "before": json.loads(row[2]) if row[2] else {},
+            "after": json.loads(row[3]) if row[3] else {},
+            "fix": json.loads(row[4]) if row[4] else {},
+            "executed_at": row[5] or "",
+        }
+
+    def outcome_for_action(self, action_fingerprint: str) -> int | None:
+        """Find an outcome already linked to an action (idempotent recovery)."""
+        row = self.conn.execute(
+            "SELECT id FROM opportunity_outcomes WHERE action_fingerprint = ? "
+            "ORDER BY id DESC LIMIT 1", (action_fingerprint,)).fetchone()
+        return int(row[0]) if row else None
 
     def record_action(
         self,
@@ -4208,7 +4233,8 @@ class Storage:
         dirty = int(row[2] or 0)
         stale = int(row[3] or 0)
         failed = int(row[4] or 0)
-        return {"known": total, "never_audited": never, "dirty": dirty,
+        return {"availability": "available", "measured_at": now,
+                "known": total, "never_audited": never, "dirty": dirty,
                 "stale": stale, "failed": failed,
                 "fresh": max(0, total - never - stale)}
 

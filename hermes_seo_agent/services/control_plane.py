@@ -274,6 +274,7 @@ class ControlPlaneService:
     def pages(self, *, query: str = "", limit: int = 100, offset: int = 0,
               sort: str = "captured", health: str | None = None,
               index: str | None = None,
+              preset: str | None = None,
               include_rankability_v2: bool = False) -> dict[str, Any]:
         """Explorer de páginas: snapshot mais recente por URL + métricas.
 
@@ -325,6 +326,17 @@ class ControlPlaneService:
             out = [p for p in out if p["health"] == health]
         if index:
             out = [p for p in out if p["index_state"] == index]
+        if preset == "high_potential":
+            out = [p for p in out if (
+                isinstance((p.get("rankability_v2") or {}).get("opportunity", {}).get("score"),
+                           (int, float))
+                and float(p["rankability_v2"]["opportunity"]["score"]) >= 70)]
+        elif preset == "near_top10":
+            out = [p for p in out if p["metrics"].get("position") is not None
+                   and 10 < float(p["metrics"]["position"]) <= 20]
+        elif preset == "technical_block":
+            out = [p for p in out if p["index_state"] == "noindex"
+                   or p["health"] == "error"]
         if sort == "title":
             out.sort(key=lambda p: p["title"].lower())
         elif sort == "clicks":
@@ -1135,29 +1147,49 @@ class ControlPlaneService:
         """Cobertura de auditoria por URL (SEO-INC-008)."""
         try:
             return self.storage.audit_coverage()
-        except Exception:
-            return {"known": 0, "never_audited": 0, "dirty": 0, "stale": 0,
-                    "failed": 0, "fresh": 0}
+        except Exception as exc:
+            return {"availability": "error", "measured_at": None,
+                    "known": None, "never_audited": None, "dirty": None,
+                    "stale": None, "failed": None, "fresh": None,
+                    "error": f"{type(exc).__name__}: {exc}"}
 
 
     def _title_funnel(self) -> dict[str, Any]:
         result = {"opportunities": 0, "approved": 0, "changed": 0,
-                  "measured": 0, "improved": 0}
+                  "measured": 0, "improved": 0, "queued": 0, "retry": 0,
+                  "stale": 0, "blocked": 0, "failed": 0}
         try:
-            action_rows = self.storage.conn.execute(
-                "SELECT fingerprint, status FROM actions WHERE lower(rule_id) LIKE '%title%'"
+            decisions = self.storage.conn.execute(
+                "SELECT decision_id, status, not_executable_reason FROM title_decision"
             ).fetchall()
-            result["opportunities"] = len(action_rows)
-            result["changed"] = sum(row[1] == "executed" for row in action_rows)
-            fingerprints = [row[0] for row in action_rows if row[0]]
-            if fingerprints:
-                placeholders = ",".join("?" for _ in fingerprints)
-                result["approved"] = self.storage.conn.execute(
-                    "SELECT COUNT(*) FROM work_item_lifecycle "
-                    f"WHERE action_fingerprint IN ({placeholders}) "
-                    "AND canonical_status IN ('approved', 'delegated', 'executing', 'implemented', 'measured')",
-                    fingerprints,
+            result["opportunities"] = len(decisions)
+            result["approved"] = sum(row[1] in {
+                "decided", "enqueued", "executing", "executed", "stale"
+            } and not row[2] for row in decisions)
+            result["changed"] = sum(row[1] == "executed" for row in decisions)
+            result["blocked"] = sum(bool(row[2]) for row in decisions)
+            # Older databases legitimately have title outcomes/actions but no
+            # persisted title_decision rows. Preserve those proven historical
+            # changes instead of showing a misleading zero during migration.
+            if not decisions:
+                legacy_changed = self.storage.conn.execute(
+                    "SELECT COUNT(*) FROM actions "
+                    "WHERE status = 'executed' AND rule_id LIKE '%title%'"
                 ).fetchone()[0]
+                result["changed"] = int(legacy_changed or 0)
+                result["opportunities"] = result["changed"]
+                result["approved"] = result["changed"]
+            for status, count in self.storage.conn.execute(
+                    "SELECT status, COUNT(*) FROM lane_queue "
+                    "WHERE lane = 'title_execution' GROUP BY status"):
+                if status in {"pending", "claimed", "executing"}:
+                    result["queued"] += int(count)
+                elif status == "retry":
+                    result["retry"] += int(count)
+                elif status in {"stale", "manual"}:
+                    result["stale"] += int(count)
+                elif status == "failed":
+                    result["failed"] += int(count)
         except Exception:
             pass
         for outcome in self.storage.list_opportunity_outcomes(limit=2000):

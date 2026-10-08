@@ -19,10 +19,10 @@ export default function RunDetailPage() {
 
   const { data, error, isLoading } = useQuery({
     queryKey: ["run", id],
-    queryFn: () => api.get<{ run: RunDetail }>(`/runs/${id}`),
+    queryFn: () => api.get<RunDetail>(`/runs/${id}`),
     // polling 3s só enquanto queued|running; para em estados terminais (ADR-0007)
     refetchInterval: (q) => {
-      const status = (q.state.data as { run?: RunDetail } | undefined)?.run?.status;
+      const status = (q.state.data as RunDetail | undefined)?.status;
       return status === "queued" || status === "running" ? 3000 : false;
     },
   });
@@ -35,7 +35,7 @@ export default function RunDetailPage() {
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
   if (error) return <div className="text-sm text-[var(--danger)]">{(error as ApiError).message}</div>;
 
-  const run = data!.run;
+  const run = data!;
   const chips: Record<string, string> = {
     Summary: `${run.summary?.ok === undefined ? "Resumo" : "Resumo"} · ${run.agent}`,
     Stages: `${run.steps.length} etapas`,
@@ -58,7 +58,7 @@ export default function RunDetailPage() {
         {run.duration_ms != null && (
           <span className="text-sm text-[var(--muted)]">{run.duration_ms / 1000}s</span>
         )}
-        {(run.status === "queued" || run.status === "running") && <Button variant="secondary" size="sm" onClick={() => cancel.mutate()} disabled={!canCancel || cancel.isPending}>{cancel.isPending ? "Cancelando…" : "Cancelar execução"}</Button>}
+        {(run.status === "queued" || run.status === "running") && <Button variant="secondary" size="sm" onClick={() => cancel.mutate()} disabled={!canCancel || cancel.isPending || !!run.cancel_requested_at}>{run.cancel_requested_at ? "Cancelamento solicitado" : cancel.isPending ? "Cancelando…" : "Cancelar execução"}</Button>}
       </div>
       {cancel.error && <p className="text-sm text-[var(--danger)]">{(cancel.error as ApiError).message}</p>}
 

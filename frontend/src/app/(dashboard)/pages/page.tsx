@@ -24,14 +24,14 @@ export default function PagesPage() {
   const [page, setPage] = useState(1);
   const offset = (page - 1) * PAGE_SIZE;
   const { data, error, isLoading } = useQuery({
-    queryKey: ["pages", q, sort, page],
+    queryKey: ["pages", q, sort, preset, page],
     queryFn: () => api.get<{ pages?: PageSummary[]; total?: number }>(
-      `/pages?limit=${PAGE_SIZE}&offset=${offset}&sort=${sort}&q=${encodeURIComponent(q)}`),
+      `/pages?limit=${PAGE_SIZE}&offset=${offset}&sort=${sort}&preset=${encodeURIComponent(preset)}&include_rankability_v2=true&q=${encodeURIComponent(q)}`),
   });
 
   if (isLoading) return <div className="text-sm text-[var(--muted)]">Carregando…</div>;
   if (error) return <div className="text-sm text-[var(--danger)]">{(error as ApiError).message}</div>;
-  const pages = (data?.pages ?? []).filter((p) => presetFilter(p, preset));
+  const pages = data?.pages ?? [];
   const total = data?.total ?? 0;
   return (
     <div className="space-y-4">
@@ -99,16 +99,5 @@ export default function PagesPage() {
   );
 }
 
-function presetFilter(p: PageSummary, preset: string): boolean {
-  if (!preset) return true;
-  const opp = p.rankability_v2?.opportunity?.score ?? null;
-  const pos = p.metrics.position ?? null;
-  // V2 pontual é computado sob demanda (detalhe), não na lista: sem o score a
-  // lista não pode filtrar por potencial — mantém a página (em vez de esvaziar).
-  if (preset === "high_potential") return opp != null ? opp >= 70 : true;
-  if (preset === "near_top10") return pos != null && pos > 10 && pos <= 20;
-  if (preset === "technical_block") return p.index_state === "noindex" || p.health === "error";
-  return true;
-}
 function scoreCell(v?: number | null) { return typeof v === "number" ? Math.round(v) : "—"; }
 function momentumOf(v?: { signals?: { momentum_delta_pct?: number | null } } | null) { return v?.signals?.momentum_delta_pct ?? null; }

@@ -203,12 +203,14 @@ export interface ChangeSummary {
 
 // SEO-INC-008: cobertura real do acervo (fila incremental por URL).
 export interface AuditCoverage {
-  known: number;
-  never_audited: number;
-  dirty: number;
-  stale: number;
-  failed: number;
-  fresh: number;
+  availability: "available" | "stale" | "partial" | "missing" | "error" | string;
+  measured_at?: string | null;
+  known: number | null;
+  never_audited: number | null;
+  dirty: number | null;
+  stale: number | null;
+  failed: number | null;
+  fresh: number | null;
 }
 
 export interface TitleFunnel {
@@ -217,6 +219,11 @@ export interface TitleFunnel {
   changed: number;
   measured: number;
   improved: number;
+  queued?: number;
+  retry?: number;
+  stale?: number;
+  blocked?: number;
+  failed?: number;
 }
 
 export interface ObservedImpact {
@@ -354,6 +361,7 @@ export interface AgentRun {
   error: string | null;
   target_url?: string | null;
   sources?: string[] | null;
+  cancel_requested_at?: string | null;
 }
 
 export interface Campaign {

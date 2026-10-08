@@ -292,9 +292,11 @@ def read_routers() -> list[APIRouter]:
               offset: int = Query(0, ge=0),
               sort: str = "captured", health: str | None = None,
               index: str | None = None,
+              preset: str | None = None,
               include_rankability_v2: bool = Query(False)) -> dict[str, Any]:
         res = services.control.pages(query=q, limit=limit, offset=offset,
                                      sort=sort, health=health, index=index,
+                                     preset=preset,
                                      include_rankability_v2=include_rankability_v2)
         return {"pages": res["items"], "total": res["total"]}
     @pg.get("/history", operation_id="pages_history")
@@ -394,10 +396,13 @@ def read_routers() -> list[APIRouter]:
                                              mode=body.mode, started_by=session.email,
                                              sources=sources)
         else:
-            run_id = services.runs.start_run("hermes-seo-agent", trigger="manual",
-                                             intent=body.intent, mode=body.mode,
-                                             started_by=session.email, target_url=body.target_url,
-                                             sources=sources)
+            # Toda solicitação manual começa em `queued`. O dispatcher/worker é
+            # quem promove para `running`; criar diretamente em running deixa
+            # uma execução aparentemente ativa sem trabalho associado.
+            run_id = services.runs.queue_run(
+                "hermes-seo-agent", intent=body.intent, mode=body.mode,
+                started_by=session.email, target_url=body.target_url,
+                sources=sources)
         return services.runs.get_run(run_id) or {}
 
     @runs.post("/{id}/cancel", response_model=AgentRunModel, operation_id="runs_cancel")

@@ -47,6 +47,7 @@ from .storage.db import Storage
 from .tools.sitemap_diff import sitemap_diff
 
 _OUTPUT_CONTRACT = ("status", "summary", "findings", "safe_actions", "approval_required")
+_LAST_EMITTED_RESULT: dict[str, Any] | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -631,6 +632,11 @@ def _record_agent_run(config: Any, result: dict[str, Any], *, cycle_id: str,
                 run_id = svc.start_run("hermes-seo-agent", trigger="schedule",
                                        intent=intent, mode=mode,
                                        started_by=config.app_user or "system")
+            if svc.cancellation_requested(run_id):
+                svc.complete(run_id, status="cancelled",
+                             summary={"cycle_id": cycle_id,
+                                      "cancelled_cooperatively": True})
+                return
             findings = result.get("findings", [])
             safe_actions = result.get("safe_actions", [])
             approval = result.get("approval_required", [])
@@ -1592,6 +1598,29 @@ def _cmd_producers_cycle(args: argparse.Namespace, config: Any) -> int:
     return 1 if errors else 0
 
 
+def _cmd_reconcile_title_queue(args: argparse.Namespace, config: Any) -> int:
+    """Recover title decisions persisted without their execution queue item."""
+    from .lanes.title_decision import reconcile_pending_enqueue
+
+    with Storage(config.sqlite_path) as storage:
+        result = reconcile_pending_enqueue(
+            storage, limit=int(getattr(args, "limit", 50) or 50))
+    blocked = len(result.get("barrados") or [])
+    _emit({
+        "status": "ok",
+        "summary": {
+            "command": "reconcile-title-queue",
+            "pending": result.get("pendentes", 0),
+            "reconciled": result.get("reconciliados", 0),
+            "blocked": blocked,
+        },
+        "findings": result.get("barrados", []),
+        "safe_actions": [],
+        "approval_required": [],
+    }, force_json=bool(getattr(args, "json", False)))
+    return 0
+
+
 def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     """Watchdog: run the right phase by time-of-day (publish-cron pattern).
 
@@ -1614,19 +1643,45 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     errors: list[str] = []
     totals = {"urls": 0, "findings": 0, "opportunities": 0, "safe_fixes": 0, "executed": 0}
     with Storage(config.sqlite_path) as run_storage:
-        scheduled_run_id = AgentRunService(run_storage).start_run(
-            "hermes-seo-agent", trigger="schedule", intent="normal_cycle",
-            mode="analyze", started_by="system",
-        )
+        run_service = AgentRunService(run_storage)
+        scheduled_run_id = run_service.claim_queued_run(
+            "hermes-seo-agent", intent="normal_cycle")
+        if scheduled_run_id is None:
+            scheduled_run_id = run_service.start_run(
+                "hermes-seo-agent", trigger="schedule", intent="normal_cycle",
+                mode="analyze", started_by="system",
+            )
 
     def run_silently(func, **kw) -> bool:
         """Run an internal command swallowing stdout while preserving failures."""
+        global _LAST_EMITTED_RESULT
+        _LAST_EMITTED_RESULT = None
         try:
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
                 code = func(**kw)
             try:
-                payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
+                # Comandos internos publicam seu resultado estruturado através de
+                # `_emit`; o scheduler não depende mais do JSON formatado no
+                # stdout. O fallback mantém compatibilidade com comandos legados
+                # que ainda imprimem JSON diretamente.
+                payload = _LAST_EMITTED_RESULT
+                if payload is None:
+                    raw = buffer.getvalue().strip()
+                    decoder = json.JSONDecoder()
+                    payload = None
+                    for start in range(len(raw)):
+                        if raw[start] != "{":
+                            continue
+                        try:
+                            candidate, end = decoder.raw_decode(raw[start:])
+                        except json.JSONDecodeError:
+                            continue
+                        if end == len(raw[start:]) and isinstance(candidate, dict):
+                            payload = candidate
+                            break
+                    if payload is None:
+                        raise ValueError("resultado interno não estruturado")
                 summary = payload.get("summary", {})
                 for key in totals:
                     totals[key] += int(summary.get(key, summary.get("audited_urls", 0) if key == "urls" else 0) or 0)
@@ -1645,6 +1700,26 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             return True
         except Exception as exc:  # scheduler must always close its run
             errors.append(f"{func.__name__}: {exc}")
+            return False
+
+    def record_stage(stage: str, status: str, detail: dict[str, Any] | None = None) -> None:
+        """Persist the same stage list that the scheduler reports in its summary."""
+        try:
+            with Storage(config.sqlite_path) as stage_storage:
+                AgentRunService(stage_storage).mark_step(
+                    scheduled_run_id, stage, status, detail=detail)
+        except Exception as exc:  # observability must not stop the scheduler
+            errors.append(f"run-step-{stage}: {exc}")
+
+    class _ScheduleCancelled(Exception):
+        pass
+
+    def cancellation_requested() -> bool:
+        try:
+            with Storage(config.sqlite_path) as cancel_storage:
+                return AgentRunService(cancel_storage).cancellation_requested(
+                    scheduled_run_id)
+        except Exception:
             return False
 
     from .services.run_context import RunContext
@@ -1712,15 +1787,19 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
             def _run_stage(func, stage: str, *, retry_hours: float = 1.0,
                            **kw) -> bool:
+                if cancellation_requested():
+                    raise _ScheduleCancelled()
                 before_errors = len(errors)
                 result = run_silently(func, **kw)
                 if result:
                     _checkpoint(stage, success=True, retry_hours=retry_hours)
+                    record_stage(stage, "success")
                     return True
                 detail = "; ".join(errors[before_errors:]) or (
                     f"{func.__name__}: unsuccessful")
                 _checkpoint(stage, success=False, error=detail,
                             retry_hours=retry_hours)
+                record_stage(stage, "failed", {"error": detail})
                 return False
 
             _gsc_daily = _due("gsc:last_daily", 20)
@@ -1741,6 +1820,13 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     args=_ns(sources="wordpress,sitemap", json=True,
                              _run_context=run_context), config=config)
         steps.append("refresh-wp-sitemap")
+
+        # A crash can happen after a title decision is committed and before the
+        # deterministic lane item is created. Reconcile on every schedule tick,
+        # independently of whether a new GSC analysis is due.
+        _run_stage(_cmd_reconcile_title_queue, "title-reconcile", retry_hours=1,
+                   args=_ns(limit=50, json=True), config=config)
+        steps.append("title-reconcile")
 
         # 2) Daily GSC inspect window.
         inspect_hours = {int(h) for h in str(args.inspect_hours).split(",") if h.strip()}
@@ -1812,18 +1898,6 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                                  no_deep_signals=False,
                                  _run_context=run_context), config=config)
                     gsc_ok = title_ok and gsc_ok
-                    if escreve and title_ok:
-                        # O motor apenas enfileira decisões. O worker é a única
-                        # camada autorizada a aplicar a escrita no WordPress.
-                        worker_ok = _run_stage(
-                            _cmd_lanes_run, "title-worker", retry_hours=1,
-                            args=_ns(lane="title_execution", worker_id=None,
-                                      lease_seconds=300, limit=None,
-                                      max_items=(getattr(
-                                          config, "title_max_writes_per_cycle", 10)),
-                                      no_heartbeat=False, json=True),
-                            config=config)
-                        gsc_ok = worker_ok and gsc_ok
                     steps.append(f"title-engine-{engine_mode}")
                 if gsc_ok:
                     _checkpoint("gsc", success=True, retry_hours=20)
@@ -1836,6 +1910,18 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 _run_context=run_context), config=config)
             steps.append("inspect")
             steps.append("post-audit")
+
+        # Pending title work is independent of the GSC checkpoint. A temporary
+        # collection failure must not strand decisions already eligible to run.
+        if str(getattr(config, "title_engine_mode", "observe") or "observe").lower() == "auto":
+            _run_stage(
+                _cmd_lanes_run, "title-worker", retry_hours=1,
+                args=_ns(lane="title_execution", worker_id=None,
+                          lease_seconds=300, limit=None,
+                          max_items=getattr(config, "title_max_writes_per_cycle", 10),
+                          no_heartbeat=False, json=True),
+                config=config)
+            steps.append("title-worker")
 
         # 3) Weekly deep report + opportunities + deep post-audit.
         if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
@@ -1902,6 +1988,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         # (agregadas no RunContext/budget compartilhado pelas etapas).
         telemetry = run_context.budget.stats() if run_context.budget is not None else {}
         run_context.close()
+        if cancellation_requested():
+            with Storage(config.sqlite_path) as run_storage:
+                AgentRunService(run_storage).complete(
+                    scheduled_run_id, status="cancelled",
+                    summary={"steps": steps, "cancelled_cooperatively": True,
+                             "telemetry": telemetry})
+            _emit({"status": "cancelled", "summary": {"command": "schedule",
+                   "steps": steps, "cancelled_cooperatively": True},
+                   "findings": [], "safe_actions": [], "approval_required": []},
+                  force_json=True)
+            return 0
         result = {
             "status": "partial" if errors else "ok",
             "summary": {"command": "schedule", "steps": steps,
@@ -1922,6 +2019,19 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         # falha no exit code para o cron (antes retornava 0 mesmo com errors).
         return 1 if errors else 0
     except Exception as exc:  # noqa: BLE001 — nunca deixar o ciclo sem finalizar
+        if isinstance(exc, _ScheduleCancelled) or cancellation_requested():
+            try:
+                with Storage(config.sqlite_path) as run_storage:
+                    AgentRunService(run_storage).complete(
+                        scheduled_run_id, status="cancelled",
+                        summary={"steps": steps, "cancelled_cooperatively": True})
+            except Exception:
+                pass
+            _emit({"status": "cancelled", "summary": {"command": "schedule",
+                   "steps": steps, "cancelled_cooperatively": True},
+                   "findings": [], "safe_actions": [], "approval_required": []},
+                  force_json=True)
+            return 0
         errors.append(f"scheduler: {exc}")
         try:
             with Storage(config.sqlite_path) as run_storage:
@@ -6400,12 +6510,13 @@ def _cmd_refresh_data(args: argparse.Namespace, config: Any) -> int:
                               collectors=build_refresh_collectors(config, storage, context=ctx),
                               reconcile=lambda: collect_reconcile(config, context=ctx))
             summary = run.get("summary") or {}
-            _emit({"status": "ok",
+            refresh_status = str(run.get("status") or "failed")
+            _emit({"status": ("ok" if refresh_status == "success" else refresh_status),
                    "summary": {"command": "refresh-data", "run_id": run_id,
-                               "status": run.get("status"), "sources": sources,
+                               "status": refresh_status, "sources": sources,
                                "results": summary.get("results", {})}},
                   force_json=bool(getattr(args, "json", False)))
-            return 0
+            return 0 if refresh_status == "success" else 1
     finally:
         if own_ctx is not None:
             own_ctx.close()
@@ -6499,6 +6610,8 @@ def _cmd_user(args: argparse.Namespace, config: Any) -> int:
 
 
 def _emit(result: dict[str, Any], *, force_json: bool = False) -> None:
+    global _LAST_EMITTED_RESULT
+    _LAST_EMITTED_RESULT = result
     if not force_json:
         # Keep the contract keys first for stable diffs.
         ordered = {key: result.get(key) for key in _OUTPUT_CONTRACT}

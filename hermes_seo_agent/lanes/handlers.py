@@ -21,6 +21,7 @@ para rodar sem humano.
 """
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Any, Callable
 
 from hermes_seo_agent.lanes import policy as P
@@ -169,15 +170,58 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
         outcome = executor.apply_safe_actions(
             [action], cycle_id=f"title-worker-{decision_id}",
             max_actions=1, verify=verify)
-        if outcome.get("executed"):
-            store.mark_title_decision_outcome(decision_id, status="executed")
+        executed_action = (outcome.get("executed") or [None])[0]
+        if executed_action is None and outcome.get("skipped"):
+            # O WordPress pode ter sido escrito antes de o worker perder o lease
+            # ou a confirmação. Recupera o registro durável em vez de reescrever.
+            executed_action = store.executed_action_for_work_item(decision_id)
+        if executed_action is not None:
+            action_fingerprint = str(executed_action.get("fingerprint") or "")
+            implemented_at = str(
+                executed_action.get("executed_at")
+                or _dt.datetime.now(_dt.timezone.utc).isoformat()
+            )
+            evidence = payload.get("evidence") or {}
+            page = evidence.get("page") or {}
+            base = evidence.get("baseline") or {}
+            signal_window = evidence.get("signal_window") or {}
+            gsc = {k: page[k] for k in ("impressions", "clicks", "ctr", "position")
+                   if page.get(k) is not None}
+            gsc["_meta"] = {
+                "window_start": base.get("window_start") or signal_window.get("window_start"),
+                "window_end": base.get("window_end") or signal_window.get("window_end"),
+                "source": "title_execution_decision",
+            }
+            before_value = (executed_action.get("before") or {}).get(field, before)
+            after_value = (executed_action.get("after") or {}).get(field, after)
+            # A escrita confirmada, seu outcome e o estado da decisão fecham em
+            # uma única transação. Reprocessamentos só reutilizam o outcome.
+            with store.transaction():
+                if action_fingerprint and not store.outcome_for_action(action_fingerprint):
+                    store.record_implemented_outcome(
+                        url=url, action_type="title_engine",
+                        implemented_action=after_value,
+                        before={field: before_value}, after={field: after_value},
+                        implemented_at=implemented_at,
+                        work_item_id=decision_id,
+                        gsc_baseline=gsc,
+                        ga4_baseline=evidence.get("ga4"),
+                        action_fingerprint=action_fingerprint,
+                        commit=False,
+                    )
+                store.mark_title_decision_outcome(
+                    decision_id, status="executed", commit=False)
+                store.close_title_checklist(
+                    [url], status="done",
+                    when=implemented_at,
+                    commit=False)
             return {"decision_id": decision_id, "status": "executed",
-                    "url": url}
+                    "url": url, "outcome": "reconciled"}
         if outcome.get("stale"):
             reason = str((outcome["stale"][0] or {}).get("reason") or "stale")
             store.mark_title_decision_outcome(
                 decision_id, status="stale", reason=reason[:300])
-            return {"skip": True, "motivo": reason, "status": "stale"}
+            return {"motivo": reason, "status": "stale"}
         if outcome.get("unverified"):
             raise RuntimeError(str((outcome["unverified"][0] or {}).get(
                 "reason") or "pós-write não confirmado"))

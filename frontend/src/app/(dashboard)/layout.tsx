@@ -34,6 +34,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <LogoutButton />
           </div>
         </header>
+        <div className="border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2 md:hidden">
+          <DashboardNav items={NAV} className="flex gap-1 overflow-x-auto px-0 [scrollbar-width:none] [&>a]:whitespace-nowrap [&>a]:py-1.5" />
+        </div>
         <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
       </div>
     </div>

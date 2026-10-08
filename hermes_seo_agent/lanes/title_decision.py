@@ -460,6 +460,7 @@ def decision_from_action(action: dict[str, Any], *,
                   "confidence_label": rotulo,
                   "page": contract.get("page"),
                   "baseline": contract.get("baseline"),
+                  "ga4": contract.get("ga4"),
                   "signal_window": contract.get("signal_window"),
                   "source": "title_engine"})
 

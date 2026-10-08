@@ -14,7 +14,7 @@ import { DelegateCampaignModal } from "@/components/delegate-campaign-modal";
 import { StatusBadge } from "@/components/status-badge";
 import { ScoreBar, ConfidenceBadge } from "@/features/intelligence";
 
-const filters = [["", "Todas"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["interlink", "Links internos"]] as const;
+const filters = [["", "Todas"], ["title_decision", "Otimização de títulos"], ["checklist", "Melhorias SEO"], ["content_brief", "Planos de conteúdo"], ["interlink", "Links internos"]] as const;
 const pageSize = 10;
 type Decision = "approve" | "reject" | "snooze";
 
@@ -67,7 +67,7 @@ function Workbox() {
   const canReview = me.data?.user.permissions.includes("opportunity.review") ?? false;
   const selectedItems = items.filter((i) => bulk.has(i.id) && i.url).map((i) => ({ work_item_id: i.id, url: i.url as string }));
   const toggleBulk = (id: string) => setBulk((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const selectable = items.filter((i) => !!i.url && !lifecycleDone(i));
+  const selectable = items.filter((i) => i.source !== "title_decision" && !!i.url && !lifecycleDone(i));
   const allSelected = canReview && selectable.length > 0 && selectable.every((i) => bulk.has(i.id));
   const toggleAll = () => {
     if (!canReview || selectable.length === 0) return;
@@ -102,7 +102,7 @@ function Workbox() {
           {visible.map((item) => {
             const view = presentOpportunity(item);
             return <tr key={item.id} className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]">
-              <td className="px-3 py-2">{lifecycleDone(item) ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} />}</td>
+              <td className="px-3 py-2">{lifecycleDone(item) || item.source === "title_decision" ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} />}</td>
               <td className="max-w-2xl px-3 py-2"><button onClick={() => setParam("item", item.id)} className="block max-w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"><span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span><span className="mt-0.5 block line-clamp-1 font-medium">{displayTitle(item)}</span><span className="mt-0.5 block line-clamp-1 text-xs font-normal text-[var(--muted)]">{view.detail}</span></button></td>
               <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--muted)]">{opportunityEvidenceSummary(item)}</td>
               <td className="px-3 py-2"><ActionBadge value={item.action_class} /><span className="ml-1"><V2Badge item={item} /></span></td>
@@ -125,7 +125,7 @@ function Workbox() {
         return (
           <div key={item.id} className="rounded-[9px] border border-[var(--border)] p-3">
             <div className="flex items-start justify-between gap-2">
-              {lifecycleDone(item) ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} className="mt-1" />}
+              {lifecycleDone(item) || item.source === "title_decision" ? <LifecycleBadge item={item} /> : <input type="checkbox" checked={bulk.has(item.id)} disabled={!item.url || !canReview} onChange={() => toggleBulk(item.id)} aria-label={`Selecionar ${displayTitle(item)}`} className="mt-1" />}
               <div className="min-w-0 flex-1">
                 <span className="block text-xs font-medium text-[var(--primary)]">{view.label}</span>
                 <button onClick={() => setParam("item", item.id)} className="block max-w-full text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]">{displayTitle(item)}</button>
@@ -156,7 +156,14 @@ function Detail({ item, canReview, pending, error, close, decide }: { item: Oppo
   const view = presentOpportunity(item);
   const extras = item.related_recommendations ?? [];
   const heading = item.source === "interlink" && item.link_context?.target_title ? `Adicionar link para ${cleanTitle(item.link_context.target_title)}` : displayTitle(item);
-  return <Drawer title="Decisão de melhoria" onClose={close}><div className="mb-5 flex justify-between gap-3"><div className="min-w-0"><ActionBadge value={item.action_class} /><p className="mt-2 text-sm font-medium text-[var(--primary)]">{view.label}</p><h2 className="mt-1 text-xl font-bold leading-snug">{heading}</h2><p className="mt-2 text-sm font-normal leading-6 text-[var(--muted)]">{view.detail}</p></div><Button variant="ghost" size="sm" onClick={close}>Fechar</Button></div><OpportunityIntelligence item={item} /><DecisionInsight item={item} /><section className="mt-5 text-sm" aria-labelledby="action-title"><h3 id="action-title" className="font-semibold">Escopo da melhoria</h3>{extras.length > 0 && <><h4 className="mt-3 font-medium">Ações complementares</h4><ul className="mt-1 list-disc space-y-1 pl-5">{extras.map((value) => <li key={value}>{value}</li>)}</ul></>}<div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3"><strong>URL:</strong> <span className="break-all">{item.url || "a definir"}</span></div></section><div className="sticky bottom-0 -mx-6 mt-6 border-t border-[var(--border)] bg-[var(--surface)] px-6 pt-4"><p className="mb-3 text-xs text-[var(--muted)]">{canReview ? "Aprovar registra o plano; implementação e medição continuam rastreadas separadamente." : "Você não possui permissão para decidir esta oportunidade."}</p><div className="flex flex-wrap justify-end gap-2"><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("reject")}>Rejeitar</Button><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("snooze")}>Adiar</Button><Button disabled={!canReview || pending} onClick={() => decide("approve")}>{pending ? "Registrando…" : "Aprovar plano"}</Button></div>{error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}</div></Drawer>;
+  const titleDecision = item.source === "title_decision";
+  return <Drawer title={titleDecision ? "Decisão de título" : "Decisão de melhoria"} onClose={close}><div className="mb-5 flex justify-between gap-3"><div className="min-w-0"><ActionBadge value={item.action_class} /><p className="mt-2 text-sm font-medium text-[var(--primary)]">{view.label}</p><h2 className="mt-1 text-xl font-bold leading-snug">{heading}</h2><p className="mt-2 text-sm font-normal leading-6 text-[var(--muted)]">{view.detail}</p></div><Button variant="ghost" size="sm" onClick={close}>Fechar</Button></div><OpportunityIntelligence item={item} />{titleDecision ? <TitleDecisionDetails item={item} /> : <DecisionInsight item={item} />}<section className="mt-5 text-sm" aria-labelledby="action-title"><h3 id="action-title" className="font-semibold">Escopo da melhoria</h3>{extras.length > 0 && <><h4 className="mt-3 font-medium">Ações complementares</h4><ul className="mt-1 list-disc space-y-1 pl-5">{extras.map((value) => <li key={value}>{value}</li>)}</ul></>}<div className="mt-3 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3"><strong>URL:</strong> <span className="break-all">{item.url || "a definir"}</span></div></section>{titleDecision ? <p className="mt-5 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-xs text-[var(--muted)]">Esta decisão é somente leitura. O worker de títulos controla execução, retries, stale e medição.</p> : <div className="sticky bottom-0 -mx-6 mt-6 border-t border-[var(--border)] bg-[var(--surface)] px-6 pt-4"><p className="mb-3 text-xs text-[var(--muted)]">{canReview ? "Aprovar registra o plano; implementação e medição continuam rastreadas separadamente." : "Você não possui permissão para decidir esta oportunidade."}</p><div className="flex flex-wrap justify-end gap-2"><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("reject")}>Rejeitar</Button><Button variant="secondary" disabled={!canReview || pending} onClick={() => decide("snooze")}>Adiar</Button><Button disabled={!canReview || pending} onClick={() => decide("approve")}>{pending ? "Registrando…" : "Aprovar plano"}</Button></div>{error && <p className="mt-2 text-sm text-[var(--danger)]">{error.message}</p>}</div>}</Drawer>;
+}
+
+function TitleDecisionDetails({ item }: { item: Opportunity }) {
+  const detail = item.projection ?? {};
+  const queue = (detail.queue ?? {}) as { status?: string; attempt_count?: number; next_attempt_at?: string; last_error?: string };
+  return <section className="mt-4 space-y-3 rounded-[9px] border border-[var(--border)] bg-[var(--surface)] p-4 text-sm" aria-label="Evidência da decisão de título"><div className="grid gap-2 sm:grid-cols-2"><div><span className="text-xs text-[var(--muted)]">Título anterior</span><p className="font-medium">{String(detail.before || "—")}</p></div><div><span className="text-xs text-[var(--muted)]">Título proposto</span><p className="font-medium">{String(detail.after || item.recommendation || "—")}</p></div></div><div className="flex flex-wrap gap-2 text-xs"><Badge tone="info">Decisão: {item.status}</Badge>{queue.status && <Badge tone="neutral">Fila: {queue.status}</Badge>}{detail.confidence != null && <Badge tone="neutral">Confiança: {String(detail.confidence)}</Badge>}</div>{queue.last_error && <p className="text-xs text-[var(--danger)]">{queue.last_error}</p>}{queue.next_attempt_at && <p className="text-xs text-[var(--muted)]">Próxima tentativa: {queue.next_attempt_at}</p>}<p className="text-xs text-[var(--muted)]">{item.evidence}</p></section>;
 }
 
 function ActionBadge({ value }: { value: Opportunity["action_class"] }) { const content = value === "safe_fix" ? ["Correção segura", "success"] : value === "observe" ? ["Observar", "info"] : ["Requer aprovação", "warning"]; return <Badge tone={content[1] as "success" | "info" | "warning"}>{content[0]}</Badge>; }

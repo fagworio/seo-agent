@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export function DashboardNav({ items }: { items: { href: string; label: string }[] }) {
+export function DashboardNav({ items, className = "" }: { items: { href: string; label: string }[]; className?: string }) {
   const pathname = usePathname();
-  return <nav className="space-y-0.5 px-2" aria-label="Navegação principal">
+  return <nav className={`space-y-0.5 px-2 ${className}`} aria-label="Navegação principal">
     {items.map((item) => {
       const active = pathname === item.href || (item.href !== "/today" && pathname.startsWith(`${item.href}/`));
       return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined}
