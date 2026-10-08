@@ -297,8 +297,11 @@ class ControlPlaneService:
         # carregar o feed por cada URL) — feed é determinístico, então o mapa
         # é idêntico ao que um loop por linha produziria.
         labels = self._primary_opportunity_labels()
-        # P3: índice do topic graph construído UMA vez (evita build_topic_graph por página).
+        # P3: índice do topic graph construído UMA vez. O enriquecimento V2 é
+        # adiado para a página retornada; só o preset high_potential precisa
+        # examinar todo o conjunto para filtrar por score.
         cluster_index = None
+        rankability_for_all = include_rankability_v2 and preset == "high_potential"
         if include_rankability_v2:
             from ..report.topics import build_cluster_index
             cluster_index = build_cluster_index(self.storage)
@@ -315,7 +318,7 @@ class ControlPlaneService:
                 "captured_at": r[4],
                 "word_count": r[7] or 0,
             }
-            if include_rankability_v2:
+            if rankability_for_all:
                 try:
                     from ..report.opportunity_v2 import page_rankability_v2
                     item["rankability_v2"] = page_rankability_v2(self.storage, url, index=cluster_index)
@@ -344,7 +347,16 @@ class ControlPlaneService:
         elif sort == "position":
             out.sort(key=lambda p: p["metrics"]["position"] if p["metrics"]["position"] is not None else 9999)
         total = len(out)
-        return {"items": out[offset:offset + limit], "total": total}
+        page = out[offset:offset + limit]
+        if include_rankability_v2 and not rankability_for_all:
+            from ..report.opportunity_v2 import page_rankability_v2
+            for item in page:
+                try:
+                    item["rankability_v2"] = page_rankability_v2(
+                        self.storage, item["url"], index=cluster_index)
+                except Exception:  # noqa: BLE001 — V2 é enriquecimento opcional
+                    item["rankability_v2"] = None
+        return {"items": page, "total": total}
 
     def page_history(self, url: str) -> list[dict[str, Any]]:
         """Timeline narrativa por URL: detecção -> aprovação -> implementação ->
@@ -728,6 +740,32 @@ class ControlPlaneService:
         event = self.ACTION_EVENTS.get(status)
         if event is None:
             raise ValueError(f"status inválido para work item: {status!r}")
+        # Decisões de título usam o decision_id como identidade canônica (o
+        # mesmo valor da fila/lifecycle, por exemplo ``td:abc``), portanto não
+        # cabem no parser numérico das tabelas legadas do feed. A aprovação
+        # humana é o caminho supervisionado para iniciar a primeira amostra;
+        # ela não altera a política de automação.
+        if item_id.startswith("td:"):
+            decision = self.storage.title_decision(item_id)
+            if decision is None:
+                return None
+            if status == "approved":
+                from ..lanes.title_decision import enqueue_human_approved_execution
+                queued = enqueue_human_approved_execution(self.storage, decision)
+                if not queued.get("enfileirado") and not queued.get("ja_existia"):
+                    raise ValueError(
+                        f"decisão de título não pode ser enfileirada: {queued.get('motivo')}")
+            elif status == "rejected":
+                self.storage.mark_title_decision_review(
+                    item_id, status="rejected", reason=reason)
+            else:
+                self.storage.mark_title_decision_review(
+                    item_id, status="snoozed", reason=reason)
+            self.storage.set_work_item_lifecycle(
+                item_id, status, source="title_decision", url=decision.get("url") or "")
+            self.storage.log_audit(actor or "system", event, item_id,
+                                   {"status": status}, {"status": status, "reason": reason})
+            return {"id": item_id, "source": "title_decision", "status": status}
         source, _, key = item_id.partition(":")
         if not key or not key.isdigit():
             return None
@@ -1157,7 +1195,8 @@ class ControlPlaneService:
     def _title_funnel(self) -> dict[str, Any]:
         result = {"opportunities": 0, "approved": 0, "changed": 0,
                   "measured": 0, "improved": 0, "queued": 0, "retry": 0,
-                  "stale": 0, "blocked": 0, "failed": 0}
+                  "stale": 0, "blocked": 0, "failed": 0,
+                  "manual_review": 0, "terminal": 0}
         try:
             decisions = self.storage.conn.execute(
                 "SELECT decision_id, status, not_executable_reason FROM title_decision"
@@ -1188,6 +1227,10 @@ class ControlPlaneService:
                     result["retry"] += int(count)
                 elif status in {"stale", "manual"}:
                     result["stale"] += int(count)
+                elif status == "manual_review":
+                    result["manual_review"] += int(count)
+                elif status == "terminal":
+                    result["terminal"] += int(count)
                 elif status == "failed":
                     result["failed"] += int(count)
         except Exception:

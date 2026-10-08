@@ -207,6 +207,8 @@ class TitleFunnelModel(BaseModel):
     stale: int = 0
     blocked: int = 0
     failed: int = 0
+    manual_review: int = 0
+    terminal: int = 0
 
 
 class AuditCoverageModel(BaseModel):

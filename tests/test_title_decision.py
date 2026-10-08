@@ -617,6 +617,42 @@ def test_hardening_confidence_ausente_e_fail_closed(tmp_path):
         assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
 
 
+def test_aprovacao_humana_supervisionada_constroi_primeira_amostra(tmp_path):
+    """Aprovação explícita pode iniciar a amostra sem liberar o modo auto."""
+    db = str(tmp_path / "supervised.db")
+    with Storage(db) as store:
+        decision = _decisao(confidence=0.1, requires_review=True,
+                            rollout={"mode": "approval", "writes_allowed": False})
+        TD.persist_decision(store, decision)
+        result = TD.enqueue_human_approved_execution(
+            store, store.title_decision(decision.decision_id))
+
+        assert result["enfileirado"] is True
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+        saved = store.title_decision(decision.decision_id)
+        assert saved["status"] == "enqueued"
+        assert saved["requires_review"] is False
+        assert saved["rollout"]["human_approved"] is True
+
+
+def test_outcome_id_fica_vinculado_a_decisao(tmp_path):
+    db = str(tmp_path / "outcome-link.db")
+    with Storage(db) as store:
+        decision = _decisao()
+        TD.persist_decision(store, decision)
+        outcome_id = store.record_implemented_outcome(
+            url=decision.url, action_type="title_engine",
+            implemented_action=decision.after, before={"rank_math_title": decision.before},
+            after={"rank_math_title": decision.after},
+            implemented_at="2026-10-08T12:00:00+00:00",
+            work_item_id=decision.decision_id, action_fingerprint=decision.action_fingerprint,
+            commit=False)
+        store.mark_title_decision_outcome(
+            decision.decision_id, status="executed", outcome_id=outcome_id,
+            commit=False)
+        assert store.title_decision(decision.decision_id)["outcome_id"] == outcome_id
+
+
 def test_hardening_limpar_o_motivo_devolve_ao_reconciliavel(tmp_path):
     """Decisao que passa a satisfazer os gates volta sozinha ao fluxo."""
     db = str(tmp_path / "limpa.db")

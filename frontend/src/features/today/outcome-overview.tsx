@@ -71,6 +71,8 @@ export function TitleFunnelPanel({ funnel }: { funnel: TitleFunnel }) {
         <OperationalMetric label="Em retry" value={funnel.retry ?? 0} tone="warning" />
         <OperationalMetric label="Bloqueadas" value={funnel.blocked ?? 0} tone="danger" />
         <OperationalMetric label="Stale" value={funnel.stale ?? 0} tone="neutral" />
+        <OperationalMetric label="Revisão humana" value={funnel.manual_review ?? 0} tone="warning" />
+        <OperationalMetric label="Terminais" value={funnel.terminal ?? 0} tone="neutral" />
         <OperationalMetric label="Falharam" value={funnel.failed ?? 0} tone="danger" />
       </div>
       <p className="mt-4 border-t border-[var(--border)] pt-3 text-sm"><span className="text-[var(--muted)]">Taxa de sucesso medida: </span><strong className="tabular-nums">{rate === null ? "Não medida" : `${decimal.format(rate)}%`}</strong></p>

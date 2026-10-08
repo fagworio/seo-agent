@@ -49,6 +49,7 @@ __all__ = [
     "persist_decision",
     "execution_item",
     "enqueue_execution",
+    "enqueue_human_approved_execution",
     "reconcile_pending_enqueue",
     "title_action_fingerprint",
     "decision_id_for",
@@ -345,6 +346,70 @@ def enqueue_execution(store: Any, d: TitleDecision | dict[str, Any], *,
             "decision_id": dd["decision_id"], "item_status": st,
             "status_confirmado": False, "nao_regrediu": True,
             "detalhe": f"item terminal ({st}): status da decisao preservado"}
+
+
+def enqueue_human_approved_execution(store: Any, d: dict[str, Any], *,
+                                     priority: int = 100) -> dict[str, Any]:
+    """Coloca uma decisão na fila após aprovação humana explícita.
+
+    Este é o caminho supervisionado inicial: não relaxa ``production_ready``
+    para o modo automático, mas permite que um operador assuma a decisão e
+    construa a amostra real de títulos medidos. Os gates estruturais (alvo,
+    precondição e título diferente/dentro do limite) continuam obrigatórios.
+    """
+    from hermes_seo_agent.storage.db import _now
+    from hermes_seo_agent.lanes.queue import LaneQueue
+    import json
+
+    dd = dict(d)
+    after = str(dd.get("after") or "")
+    before = str(dd.get("before") or "")
+    if not dd.get("post_id"):
+        return {"enfileirado": False, "motivo": NOT_EXEC_NO_POST_ID,
+                "decision_id": dd.get("decision_id")}
+    if not bool(dd.get("before_known", True)):
+        return {"enfileirado": False, "motivo": NOT_EXEC_BEFORE_UNKNOWN,
+                "decision_id": dd.get("decision_id")}
+    if not after.strip():
+        return {"enfileirado": False, "motivo": NOT_EXEC_EMPTY_AFTER,
+                "decision_id": dd.get("decision_id")}
+    if after.strip() == before.strip():
+        return {"enfileirado": False, "motivo": NOT_EXEC_SAME_AS_BEFORE,
+                "decision_id": dd.get("decision_id")}
+    if len(after.strip()) > MAX_TITLE_LEN:
+        return {"enfileirado": False, "motivo": NOT_EXEC_TOO_LONG,
+                "decision_id": dd.get("decision_id")}
+
+    approved_rollout = dict(dd.get("rollout") or {})
+    approved_rollout.update({
+        "mode": "approval",
+        "writes_allowed": True, "approval_required": False,
+        "human_approved": True,
+    })
+    dd["rollout"] = approved_rollout
+    dd["requires_review"] = False
+    now = _now()
+    store.conn.execute(
+        "UPDATE title_decision SET requires_review = 0, "
+        "not_executable_reason = NULL, rollout_json = ?, status = 'decided', "
+        "updated_at = ? WHERE decision_id = ? AND status NOT IN "
+        "('executed', 'stale', 'rejected', 'superseded')",
+        (json.dumps(approved_rollout, ensure_ascii=False), now, dd["decision_id"]))
+    q = LaneQueue(store)
+    payload = execution_item(dd)
+    created = q.enqueue("title_execution", dd["decision_id"], url=dd["url"],
+                        payload=payload, priority=priority)
+    if created:
+        store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
+        return {"enfileirado": True, "motivo": None,
+                "decision_id": dd["decision_id"], "ja_existia": False}
+    item = q.get_by_work_item("title_execution", dd["decision_id"])
+    state = (item or {}).get("status")
+    if state in LaneQueue.LIVE_STATUSES:
+        store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
+    return {"enfileirado": False, "motivo": None,
+            "decision_id": dd["decision_id"], "ja_existia": True,
+            "item_status": state}
 
 
 def reconcile_pending_enqueue(store: Any, *, limit: int = 50) -> dict[str, Any]:

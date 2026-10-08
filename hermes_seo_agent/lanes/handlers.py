@@ -197,8 +197,9 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # A escrita confirmada, seu outcome e o estado da decisão fecham em
             # uma única transação. Reprocessamentos só reutilizam o outcome.
             with store.transaction():
-                if action_fingerprint and not store.outcome_for_action(action_fingerprint):
-                    store.record_implemented_outcome(
+                outcome_id = store.outcome_for_action(action_fingerprint) if action_fingerprint else None
+                if action_fingerprint and not outcome_id:
+                    outcome_id = store.record_implemented_outcome(
                         url=url, action_type="title_engine",
                         implemented_action=after_value,
                         before={field: before_value}, after={field: after_value},
@@ -210,7 +211,8 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                         commit=False,
                     )
                 store.mark_title_decision_outcome(
-                    decision_id, status="executed", commit=False)
+                    decision_id, status="executed", outcome_id=outcome_id,
+                    commit=False)
                 store.close_title_checklist(
                     [url], status="done",
                     when=implemented_at,

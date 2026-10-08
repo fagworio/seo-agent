@@ -294,7 +294,10 @@ class OpportunityFeedService:
                 "pending_measurement" if decision_status == "executed" else decision_status)
             gsc = evidence.get("page") or evidence.get("gsc") or {}
             out.append(OpportunityDTO(
-                id=f"title_decision:{row[0]}", source="title_decision",
+                # O decision_id é a identidade canônica compartilhada com a
+                # fila e com work_item_lifecycle. O tipo da origem continua
+                # explícito para o frontend, sem criar um segundo ID lógico.
+                id=str(row[0]), source="title_decision",
                 type="title_engine", status=decision_status, url=row[1] or "",
                 title=row[2] or "", score=None,
                 evidence=detail or "Decisão persistida pelo motor de títulos.",

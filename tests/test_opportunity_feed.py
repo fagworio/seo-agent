@@ -117,6 +117,7 @@ def test_feed_exposes_title_decisions_with_queue_projection(tmp_path):
 
     assert item["source"] == "title_decision"
     assert item["projection"]["before"] == "Título antigo"
+    assert item["id"] == decision.decision_id
     assert item["projection"]["queue"]["status"] == "retry"
     assert item["recommendation"] == "Título novo"
 

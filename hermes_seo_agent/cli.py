@@ -137,6 +137,9 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--budget", type=int, default=0,
                            help="URL Inspection budget for this run (0 = config daily budget)")
             p.add_argument("--dry-run", action="store_true", help="preview the queue, no API calls")
+        if name == "audit":
+            p.add_argument("--url", dest="single_url", default="",
+                           help="auditar uma única URL (senão: fila incremental)")
         if name == "apply":
             p.add_argument("--limit-actions", type=int, default=0,
                            help="max safe_fix actions to execute (0 = config blast radius)")
@@ -879,7 +882,9 @@ def _cmd_audit(args: argparse.Namespace, config: Any) -> int:
             limit=limit,
             sweep_limit=getattr(config, "coverage_sweep_per_run", 100))
         coverage_before = state_storage.audit_coverage()
-    sample = [c["url"] for c in candidatos]
+        requested_url = str(getattr(args, "single_url", "") or "").strip()
+        sample = ([normalize_url(requested_url)] if requested_url
+                  else [c["url"] for c in candidatos])
     findings: list[dict[str, Any]] = []
     # Fetch tolerante por URL: uma página que falhe (SSRF bloqueado, limite de
     # tamanho, rede) não pode abortar o audit inteiro — entra como "não buscada".
@@ -1725,6 +1730,46 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     from .services.run_context import RunContext
     run_context = RunContext(config)
     try:
+        # A API apenas enfileira pedidos manuais. O mesmo worker do scheduler
+        # precisa consumi-los, inclusive os intents que não são o ciclo normal;
+        # caso contrário a tela de Runs ficava permanentemente em `queued`.
+        manual_dispatch = {
+            "technical": (_cmd_audit, lambda run: _ns(
+                limit=config.max_urls_per_run, single_url="", json=True,
+                markdown=False, _run_context=run_context, _incremental=False)),
+            "sitemap_indexing": (_cmd_inspect, lambda run: _ns(
+                budget=max(50, int(getattr(config, "url_inspection_daily_budget", 0) or 0) // 12),
+                dry_run=False, json=True, _run_context=run_context)),
+            "opportunities": (_cmd_opportunities, lambda run: _ns(
+                json=True, _run_context=run_context)),
+            "content": (_cmd_content_brief, lambda run: _ns(
+                single_url=str(run.get("target_url") or ""), store=True,
+                limit=20, json=True, _run_context=run_context)),
+            "specific_url": (_cmd_audit, lambda run: _ns(
+                limit=1, single_url=str(run.get("target_url") or ""),
+                json=True, markdown=False, _run_context=run_context,
+                _incremental=False)),
+        }
+        for intent, (worker, make_args) in manual_dispatch.items():
+            with Storage(config.sqlite_path) as manual_storage:
+                manual_service = AgentRunService(manual_storage)
+                manual_id = manual_service.claim_queued_run(
+                    "hermes-seo-agent", intent=intent)
+                manual_run = manual_service.get_run(manual_id) if manual_id else None
+            if not manual_id or manual_run is None:
+                continue
+            if intent == "specific_url" and not str(manual_run.get("target_url") or ""):
+                with Storage(config.sqlite_path) as manual_storage:
+                    AgentRunService(manual_storage).fail(
+                        manual_id, "specific_url exige target_url")
+                continue
+            ok = run_silently(worker, args=make_args(manual_run), config=config)
+            with Storage(config.sqlite_path) as manual_storage:
+                AgentRunService(manual_storage).complete(
+                    manual_id, status="success" if ok else "failed",
+                    summary={"intent": intent, "target_url": manual_run.get("target_url") or ""})
+            steps.append(f"manual-{intent}")
+
         # Vencimento por IDADE (idempotente), nunca por hora exata: com
         # `now.hour == 6` (default do --inspect-hours) um ciclo de 2h em
         # horários deslocados NUNCA casa — a coleta do GSC, a revalidação
@@ -1736,6 +1781,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 # Checkpoints de sucesso são a fonte da verdade. Mantemos a
                 # chave antiga como fallback para não tornar bancos existentes
                 # imediatamente elegíveis após o deploy.
+                retry_raw = str(_daily_state.get_setting(
+                    f"{key}:next_retry", "") or "")
+                if retry_raw:
+                    try:
+                        retry_at = datetime.datetime.fromisoformat(retry_raw)
+                        if retry_at.tzinfo is None:
+                            retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+                        if datetime.datetime.now(datetime.timezone.utc) < retry_at:
+                            return False
+                    except Exception:  # noqa: BLE001 — checkpoint inválido é elegível
+                        pass
                 raw = str(_daily_state.get_setting(
                     f"{key}:last_success",
                     _daily_state.get_setting(key, ""),
@@ -1754,7 +1810,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             def _mark(key: str, value: str | None = None) -> bool:
                 try:
                     _daily_state.set_setting(
-                        key, value or datetime.datetime.now(
+                        key, value if value is not None else datetime.datetime.now(
                             datetime.timezone.utc).isoformat())
                     return True
                 except Exception:  # noqa: BLE001

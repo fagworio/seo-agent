@@ -7,6 +7,7 @@ import json
 
 from hermes_seo_agent.cli import _cmd_schedule, _emit
 from hermes_seo_agent.config import Config
+from hermes_seo_agent.services.agent_runs import AgentRunService
 from hermes_seo_agent.storage.db import Storage
 
 
@@ -67,6 +68,33 @@ def test_schedule_includes_ga4_and_corpus_on_deep_weekday(
     assert "corpus-rebuild" in out["summary"]["steps"]
     assert captured["ga4"] is True
     assert captured["corpus"] == "rebuild"
+
+
+def test_schedule_consumes_specific_url_manual_run(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "manual-specific.db"
+    _now_patch(monkeypatch, hour=12)
+    config = _config(db)
+    with Storage(str(db)) as storage:
+        run_id = AgentRunService(storage).queue_run(
+            "hermes-seo-agent", intent="specific_url", mode="analyze",
+            target_url="https://x.com/manual/")
+
+    seen = []
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_audit",
+                        lambda args, config: seen.append(getattr(args, "single_url", "")))
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_refresh_data", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_inspect", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_post_audit", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_opportunities", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_corpus", lambda *a, **k: None)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_ga4", lambda *a, **k: None)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    capsys.readouterr()
+    with Storage(str(db)) as storage:
+        run = AgentRunService(storage).get_run(run_id)
+    assert run["status"] == "success"
+    assert "https://x.com/manual/" in seen
 
 
 def test_schedule_resumes_corpus_when_run_active(monkeypatch, capsys, tmp_path):

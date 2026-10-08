@@ -116,10 +116,23 @@ def build_cluster_index(storage: Any) -> dict[str, Any]:
     Evita reconstruir os índices de corpus/GSC (100k+ linhas) a cada cluster e
     evita refazer `latest_window_start`/`latest_ga4_window` por chamada.
     """
+    corpus_index = _build_corpus_entity_index(storage)
+    gsc_index = _build_gsc_entity_index(storage)
+    # Lookup direto URL -> entidade. O Page Explorer consulta páginas
+    # individualmente; reconstruir o topic graph inteiro para cada URL era um
+    # custo O(páginas * entidades) mesmo quando os índices já estavam prontos.
+    url_entities: dict[str, str] = {}
+    keys = sorted(set(corpus_index) | set(gsc_index),
+                  key=lambda key: (-len(corpus_index.get(key, set()) |
+                                    gsc_index.get(key, set())), key))
+    for key in keys:
+        for url in corpus_index.get(key, set()) | gsc_index.get(key, set()):
+            url_entities.setdefault(url, key)
     return {
-        "corpus_index": _build_corpus_entity_index(storage),
+        "corpus_index": corpus_index,
         "entity_counts": _build_corpus_entity_counts(storage),
-        "gsc_index": _build_gsc_entity_index(storage),
+        "gsc_index": gsc_index,
+        "url_entities": url_entities,
         "window": storage.latest_window_start(),
         "ga4_window": storage.latest_ga4_window(),
     }

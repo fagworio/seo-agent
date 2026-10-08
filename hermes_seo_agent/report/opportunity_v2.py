@@ -110,10 +110,14 @@ def page_rankability_v2(storage: Any, url: str, *,
     slug = " ".join(part for part in slug.split("/")[-1].replace("-", " ").split()
                     if part)[:4] or slug
     try:
-        # resolve o cluster a partir da própria URL (a página é um doc do corpus)
-        from .topics import build_topic_graph
-        graph = build_topic_graph(storage, min_urls=1, index=index)
-        entity = next((c["entity"] for c in graph if url in c.get("urls", [])), None)
+        # resolve o cluster a partir da própria URL (a página é um doc do corpus).
+        # build_cluster_index já mantém este lookup; o fallback preserva
+        # compatibilidade com índices antigos/construídos por consumidores.
+        entity = (index or {}).get("url_entities", {}).get(url)
+        if not entity:
+            from .topics import build_topic_graph
+            graph = build_topic_graph(storage, min_urls=1, index=index)
+            entity = next((c["entity"] for c in graph if url in c.get("urls", [])), None)
         if not entity:
             entity = resolve_cluster_entity(storage, slug, index=index)
         signals, _cov = build_cluster_signals(storage, entity, index=index)

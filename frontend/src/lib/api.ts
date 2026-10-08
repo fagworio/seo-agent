@@ -224,6 +224,8 @@ export interface TitleFunnel {
   stale?: number;
   blocked?: number;
   failed?: number;
+  manual_review?: number;
+  terminal?: number;
 }
 
 export interface ObservedImpact {

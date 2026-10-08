@@ -3710,6 +3710,10 @@ class Storage:
             return None
         import json as _json
 
+        raw_outcome_id = row[18]
+        normalized_outcome_id = (
+            int(raw_outcome_id) if raw_outcome_id is not None
+            and str(raw_outcome_id).isdigit() else raw_outcome_id)
         return {"decision_id": row[0], "url": row[1], "post_id": row[2],
                 "field": row[3], "before": row[4], "after": row[5],
                 "action_fingerprint": row[6], "decision_version": int(row[7] or 1),
@@ -3719,7 +3723,7 @@ class Storage:
                 "before_known": bool(row[12]),
                 "status": row[13], "not_executable_reason": row[14],
                 "decided_at": row[15], "enqueued_at": row[16],
-                "executed_at": row[17], "outcome_id": row[18]}
+                "executed_at": row[17], "outcome_id": normalized_outcome_id}
 
     def title_decision_by_url(self, url: str, after: str | None = None) -> dict[str, Any] | None:
         """Decisao mais recente da URL (opcionalmente de um `after` especifico)."""
@@ -3779,6 +3783,7 @@ class Storage:
     def mark_title_decision_outcome(self, decision_id: str, *,
                                     status: str,
                                     reason: str = "",
+                                    outcome_id: int | str | None = None,
                                     commit: bool = True) -> bool:
         """Registra o desfecho do worker sem reabrir uma decisão terminal.
 
@@ -3795,10 +3800,27 @@ class Storage:
         cur = self.conn.execute(
             "UPDATE title_decision SET status = ?, executed_at = ?, "
             "not_executable_reason = COALESCE(NULLIF(?, ''), not_executable_reason), "
-            "updated_at = ? WHERE decision_id = ? "
+            "outcome_id = COALESCE(?, outcome_id), updated_at = ? WHERE decision_id = ? "
             "AND status NOT IN ('executed', 'stale', 'rejected')",
-            (status, now, reason, now, decision_id),
+            (status, now, reason, outcome_id, now, decision_id),
         )
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
+    def mark_title_decision_review(self, decision_id: str, *,
+                                   status: str, reason: str = "",
+                                   commit: bool = True) -> bool:
+        """Registra rejeição/adiamento humano sem simular execução."""
+        if status not in {"rejected", "snoozed"}:
+            raise ValueError(f"status de revisão inválido: {status}")
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET status = ?, not_executable_reason = "
+            "COALESCE(NULLIF(?, ''), not_executable_reason), updated_at = ? "
+            "WHERE decision_id = ? AND status NOT IN "
+            "('executed', 'stale', 'rejected', 'superseded')",
+            (status, reason, now, decision_id))
         if commit:
             self.conn.commit()
         return bool(cur.rowcount)
