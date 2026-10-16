@@ -2627,6 +2627,67 @@ def _rotate_title_rows(rows: list[dict[str, Any]], last_url: str = "") -> tuple[
     return ordered, str((ordered[0].get("keys") or [""])[0])
 
 
+def _select_title_rows(rows: list[dict[str, Any]], *, last_url: str = "",
+                       limit: int, scan_limit: int, should_skip: Any) -> dict[str, Any]:
+    """Seleciona uma janela bounded do backlog sem consumir o próximo lote.
+
+    ``limit`` é o limite de análise efetiva. ``scan_limit`` existe apenas para
+    atravessar URLs bloqueadas pelos gates editoriais; ele nunca permite que a
+    lista de alvos cresça além de ``limit``. O cursor retornado representa a
+    última URL realmente percorrida, enquanto ``last_target_url`` permite medir
+    até onde a análise efetiva chegou.
+    """
+    ordered, rotation_start = _rotate_title_rows(rows, last_url)
+    # `_rotate_title_rows` é circular para visualização/compatibilidade, mas a
+    # janela de um ciclo não pode atravessar o fim e recomeçar no topo: isso
+    # duplicaria URLs quando o backlog tiver menos que dois lotes completos.
+    # No próximo ciclo, um cursor que chegou ao fim naturalmente recomeça em 0.
+    candidates = ordered
+    if last_url:
+        last_index = next(
+            (index for index, row in enumerate(rows)
+             if str((row.get("keys") or [""])[0]) == last_url),
+            None,
+        )
+        if last_index is not None and last_index + 1 < len(rows):
+            candidates = rows[last_index + 1:]
+        elif last_index is not None:
+            candidates = rows
+    bounded_limit = max(int(limit or 0), 0)
+    bounded_scan = max(int(scan_limit or 0), 0)
+    targets: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    scanned_urls: list[str] = []
+    if not bounded_limit or not bounded_scan:
+        return {"targets": targets, "skipped": skipped,
+                "scanned_urls": scanned_urls,
+                "last_scanned_url": None, "last_target_url": None,
+                "rotation_start": rotation_start}
+
+    for row in candidates:
+        if len(scanned_urls) >= bounded_scan or len(targets) >= bounded_limit:
+            break
+        url = str((row.get("keys") or [""])[0] or "")
+        if not url:
+            continue
+        scanned_urls.append(url)
+        skip, reason = should_skip(row)
+        if skip:
+            skipped.append({"url": url, "reason": reason})
+        else:
+            targets.append(row)
+
+    return {
+        "targets": targets,
+        "skipped": skipped,
+        "scanned_urls": scanned_urls,
+        "last_scanned_url": scanned_urls[-1] if scanned_urls else None,
+        "last_target_url": ((targets[-1].get("keys") or [""])[0]
+                            if targets else None),
+        "rotation_start": rotation_start,
+    }
+
+
 def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     """FASES 1–24: decisão de título por FAMÍLIAS de query (determinística).
 
@@ -2679,6 +2740,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     import re as _re
 
     warnings: list[str] = []
+    cursor_checkpoint_ready = True
     if not config.google_credentials:
         print(json.dumps({"status": "error",
                           "error": "GSC não configurado (GOOGLE_APPLICATION_CREDENTIALS)"},
@@ -2747,9 +2809,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     with Storage(config.sqlite_path) as store:
         analysis_cursor_before = store.get_setting(
             "title_engine:analysis_cursor", "")
-    ordered_anomalous, rotation_start_url = _rotate_title_rows(
-        anomalous, analysis_cursor_before)
-    last_considered_url = analysis_cursor_before
 
     query_map: dict[str, list[dict[str, Any]]] = {}
     for item in gqp:
@@ -2773,30 +2832,31 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     analysis_limit = (max(int(getattr(args, "analysis_limit", 0) or 0), 0)
                       or legacy_limit
                       or max(int(getattr(config, "title_analysis_limit", 50) or 50), 1))
-    cap = max(analysis_limit * 5, 150)
-    targets: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
+    # O orçamento de análise é independente do orçamento para atravessar URLs
+    # bloqueadas por gates. Antes, ``cap`` fazia o cursor saltar 5x mais URLs do
+    # que o motor efetivamente analisava e deixava a maior parte do backlog sem
+    # cobertura. Agora a seleção para assim que a janela efetiva está cheia.
+    scan_limit = max(analysis_limit * 5, 150)
+    selection: dict[str, Any]
     with Storage(config.sqlite_path) as store:
-        for row in ordered_anomalous:
-            if len(targets) >= cap:
-                break
-            url = (row.get("keys") or [""])[0]
-            last_considered_url = url
+        def _should_skip(row: dict[str, Any]) -> tuple[bool, str]:
+            url = str((row.get("keys") or [""])[0] or "")
             # FASE 9/10 (roadmap): quando o motor vai ESCREVER (--write, isto é
             # modo auto/approval), a revisão pendente NAO bloqueia a URL — o item
             # da Caixa é a decisão JA tomada, e quem a aplica é o executor de
             # títulos (montado logo abaixo, em decisions_to_actions). Sem esta
-            # saída o motor pulava a URL para sempre ("já existe revisão de
-            # título pendente") e nenhuma decisão saía da Caixa: era o deadlock
-            # que parava a trilhagem contínua.
-            skip, reason = store.title_review_skippable(
+            # saída a URL ficava presa para sempre no gate de revisão pendente.
+            return store.title_review_skippable(
                 url, measurement_days=config.editorial_measurement_min_days,
                 ignore_pending_review=bool(getattr(args, "write", False)
                                            or run_mode == "approval"))
-            if skip:
-                skipped.append({"url": url, "reason": reason})
-            else:
-                targets.append(row)
+
+        selection = _select_title_rows(
+            anomalous, last_url=analysis_cursor_before,
+            limit=analysis_limit, scan_limit=scan_limit,
+            should_skip=_should_skip)
+        targets: list[dict[str, Any]] = list(selection["targets"])
+        skipped: list[dict[str, Any]] = list(selection["skipped"])
         seen = {(r.get("keys") or [""])[0] for r in targets}
         try:
             reg_rows = store.conn.execute(
@@ -2806,7 +2866,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         except Exception:  # noqa: BLE001
             reg_rows = []
         for (url,) in reg_rows:
-            if url in seen or len(targets) >= cap:
+            if url in seen or len(targets) >= analysis_limit:
                 continue
             seen.add(url)
             known = pages_by_url.get(url)
@@ -2826,6 +2886,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                                                       impressions=0.0, ctr=0.0,
                                                       baseline=baseline)})
     targets = targets[:analysis_limit]
+    last_scanned_url = selection.get("last_scanned_url")
+    last_analyzed_url = ((targets[-1].get("keys") or [""])[0]
+                         if targets else selection.get("last_target_url"))
 
     import contextlib as _contextlib
     stack = _contextlib.ExitStack()
@@ -3253,12 +3316,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if shadow:
                 persist_report(store, shadow)
 
-    # Só avança depois que a análise terminou. Uma falha de GSC, WP ou HTML
-    # não consome a posição e pode ser repetida no próximo ciclo.
-    if last_considered_url and last_considered_url != analysis_cursor_before:
-        with Storage(config.sqlite_path) as store:
-            store.set_setting("title_engine:analysis_cursor", last_considered_url)
-
     if args.explain:
         for contract in contracts:
             if contract["decision"] == "review_title":
@@ -3396,6 +3453,13 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     f"7A enqueue falhou: {type(exc).__name__}: {exc}")
                 write_summary["queued"] = {
                     "error": f"{type(exc).__name__}: {exc}"}
+                cursor_checkpoint_ready = False
+            else:
+                # Uma decisão que falhou ao ser materializada ainda não pode
+                # consumir a posição do backlog. As demais decisões do lote
+                # continuam idempotentes e recuperáveis pela reconciliação.
+                if int((queued or {}).get("counts", {}).get("erros", 0) or 0):
+                    cursor_checkpoint_ready = False
         # FASE 10 (roadmap) — LIFECYCLE: o item resolvido sai da Caixa.
         # Sem isto a URL ficava 'pending' para sempre: o motor a re-analisava a
         # cada ciclo (o skip por pendencia existia para conter esse churn) e a
@@ -3501,14 +3565,26 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 f"lifecycle da Caixa falhou: {type(exc).__name__}: {exc}")
         write_result = write_summary
 
+    # O checkpoint fica depois da persistência das propostas/decisões e do
+    # lifecycle do lote. Se o enfileiramento falhar, a URL é reavaliada no
+    # próximo ciclo em vez de desaparecer atrás do cursor.
+    analysis_cursor_after = analysis_cursor_before
+    if (cursor_checkpoint_ready and last_scanned_url and
+            last_scanned_url != analysis_cursor_before):
+        with Storage(config.sqlite_path) as store:
+            store.set_setting("title_engine:analysis_cursor", last_scanned_url)
+        analysis_cursor_after = last_scanned_url
+
     result = {
         "status": "ok",
         "summary": {"command": "title-engine", "mode": run_mode,
                     "generation_mode": gen_mode,
                     "analysis_limit": analysis_limit,
                     "analysis_cursor_before": analysis_cursor_before,
-                    "analysis_cursor_after": last_considered_url,
-                    "analysis_rotation_start": rotation_start_url,
+                    "analysis_cursor_after": analysis_cursor_after,
+                    "analysis_last_analyzed_url": last_analyzed_url,
+                    "analysis_rotation_start": selection.get("rotation_start"),
+                    "analysis_scanned": len(selection.get("scanned_urls") or []),
                     "pages_analyzed": len(contracts),
                     "review_title": telemetry["review_title"],
                     "no_title_change": telemetry["no_title_change"],

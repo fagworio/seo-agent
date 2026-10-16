@@ -91,6 +91,25 @@ class _CrashAfterWseRequest:
         return "complete"
 
 
+class _UnknownAfterWseRequest(_CrashAfterWseRequest):
+    def rebuild_state(self) -> str:
+        return "unknown"
+
+
+class _NonzeroWse:
+    calls = 0
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    def rebuild(self, kind: str) -> dict[str, object]:
+        self.__class__.calls += 1
+        return {"executed": False, "kind": kind, "stderr": "WSE timeout"}
+
+    def rebuild_state(self) -> str:
+        return "complete"
+
+
 class _PreflightThenSuccess:
     calls = 0
 
@@ -372,6 +391,103 @@ def test_rebuild_intent_precedes_external_call_and_prevents_duplicate(
     with Storage(db) as store:
         assert store.title_decision(decision.decision_id)["publication_status"] == (
             "public_verified")
+
+
+def test_unknown_wse_state_checks_public_html_before_waiting(
+    monkeypatch, tmp_path
+):
+    """Estado WSE inconclusivo não impede uma publicação já visível."""
+    db = str(tmp_path / "title-rebuild-unknown.db")
+    config = Config(wordpress_url="http://localhost", sqlite_path=db,
+                    static_site_url="https://example.com", dry_run=False,
+                    title_engine_mode="auto", title_rebuild_kind="smart",
+                    wse_workdir=str(tmp_path))
+    fake_wp = _FakeWP()
+    fake_static = _FakeStatic(title="Título novo | Marca")
+    _UnknownAfterWseRequest.calls = 0
+
+    import hermes_seo_agent.connectors.static_site as static_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+    import hermes_seo_agent.tools.wse_trigger as wse_module
+
+    import hermes_seo_agent.config as config_module
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    monkeypatch.setattr(static_module, "StaticSiteClient", lambda cfg: fake_static)
+    monkeypatch.setattr(wse_module, "WseTrigger", _UnknownAfterWseRequest)
+
+    decision = make_decision(
+        url="https://example.com/post", post_id=7,
+        before="Título antigo", after="Título novo", confidence=0.9,
+        rollout={"writes_allowed": True},
+    )
+    payload = {**decision.as_dict(), "rebuild_kind": "smart"}
+    with Storage(db) as store:
+        persist_decision(store, decision)
+
+    with pytest.raises(KeyboardInterrupt):
+        handler_title_execution(
+            {"work_item_id": decision.decision_id, "payload": payload},
+            SimpleNamespace(db_path=db),
+        )
+
+    result = handler_title_execution(
+        {"work_item_id": decision.decision_id, "payload": payload},
+        SimpleNamespace(db_path=db),
+    )
+
+    assert result["status"] == "executed"
+    assert _UnknownAfterWseRequest.calls == 1
+    assert fake_wp.writes == [(7, {"rank_math_title": "Título novo"})]
+
+
+def test_nonzero_wse_result_preserves_intent_for_reconciliation(
+    monkeypatch, tmp_path
+):
+    """Falha externa incerta não limpa a intenção nem duplica o rebuild."""
+    db = str(tmp_path / "title-rebuild-nonzero.db")
+    config = Config(wordpress_url="http://localhost", sqlite_path=db,
+                    static_site_url="https://example.com", dry_run=False,
+                    title_engine_mode="auto", title_rebuild_kind="smart",
+                    wse_workdir=str(tmp_path))
+    fake_wp = _FakeWP()
+    fake_static = _FakeStatic(title="Título novo | Marca")
+    _NonzeroWse.calls = 0
+
+    import hermes_seo_agent.connectors.static_site as static_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+    import hermes_seo_agent.tools.wse_trigger as wse_module
+
+    import hermes_seo_agent.config as config_module
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    monkeypatch.setattr(static_module, "StaticSiteClient", lambda cfg: fake_static)
+    monkeypatch.setattr(wse_module, "WseTrigger", _NonzeroWse)
+
+    decision = make_decision(
+        url="https://example.com/post", post_id=7,
+        before="Título antigo", after="Título novo", confidence=0.9,
+        rollout={"writes_allowed": True},
+    )
+    payload = {**decision.as_dict(), "rebuild_kind": "smart"}
+    with Storage(db) as store:
+        persist_decision(store, decision)
+
+    with pytest.raises(RuntimeError, match="rebuild não executado"):
+        handler_title_execution(
+            {"work_item_id": decision.decision_id, "payload": payload},
+            SimpleNamespace(db_path=db),
+        )
+    with Storage(db) as store:
+        assert store.title_decision(decision.decision_id)["publication_status"] == (
+            "rebuild_requested")
+
+    result = handler_title_execution(
+        {"work_item_id": decision.decision_id, "payload": payload},
+        SimpleNamespace(db_path=db),
+    )
+    assert result["status"] == "executed"
+    assert _NonzeroWse.calls == 1
 
 
 def test_wse_preflight_failure_allows_safe_rebuild_retry(monkeypatch, tmp_path):

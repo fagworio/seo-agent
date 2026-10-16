@@ -253,6 +253,7 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # REST confirma apenas a escrita no WordPress. O HTML público é uma
             # fronteira separada: sem ela, a decisão não pode fechar como
             # executada nem gerar outcome mensurável.
+            wse_state_unknown = False
             if decision.get("publication_status") == "rebuild_requested":
                 # A intenção pode ter sido gravada antes de o processo cair,
                 # antes do WSE aceitar, ou depois de ele aceitar. Consultar o
@@ -275,8 +276,11 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                         decision_id, reason="WSE sem rebuild ativo")
                     decision["publication_status"] = "not_checked"
                 else:
-                    raise PublicVerificationPending(
-                        "estado do WSE inconclusivo; rebuild não reenviado")
+                    # O status do WSE pode estar indisponível mesmo quando a
+                    # publicação já chegou ao HTML. Não reenviar o rebuild:
+                    # primeiro verificamos a fronteira pública e só mantemos a
+                    # decisão em pending se o título ainda não estiver visível.
+                    wse_state_unknown = True
             needs_rebuild = rebuild_kind and (
                 decision.get("publication_status") not in {
                     "rebuild_requested", "public_pending", "public_verified"})
@@ -306,9 +310,12 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                 if not rebuild.get("executed"):
                     reason = (f"rebuild não executado: "
                               f"{rebuild.get('stderr') or rebuild}")
-                    # O processo terminou e confirmou falha antes do aceite;
-                    # a próxima tentativa pode corrigir o WSE e reenviar.
-                    store.reset_title_rebuild_request(decision_id, reason=reason)
+                    # Um retorno diferente de zero informa apenas que o
+                    # processo local terminou sem confirmar sucesso. Ele não
+                    # prova que o WSE não recebeu a solicitação (timeout,
+                    # wrapper ou falha após envio são indistinguíveis aqui).
+                    # Preserve a intenção para reconciliação e não emita um
+                    # segundo rebuild automaticamente.
                     raise RuntimeError(
                         reason)
                 # Marca a solicitação antes do readback. Retries durante a
@@ -337,6 +344,8 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                 if not title_matches_visible(after, visible):
                     reason = (f"HTML público pendente: HTTP {status_code}, "
                               f"título visível={visible!r}")
+                    if wse_state_unknown:
+                        reason = (f"estado do WSE inconclusivo; {reason}")
                     store.mark_title_public_pending(decision_id, reason=reason)
                     raise PublicVerificationPending(reason)
             except (PublicVerificationPending, PublicVerificationNotFound):
