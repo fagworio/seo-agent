@@ -70,6 +70,14 @@ def test_approval_persist_only_materializa_proposta_sem_liberar_escrita():
     assert out["action"]["fix"]["meta"]["rank_math_title"]
 
 
+def test_auto_persist_only_preserva_proposta_bloqueada_para_aprovacao():
+    """Rollout bloqueado deve virar decisão persistível, não desaparecer."""
+    contrato = _contract(rollout={"mode": "auto", "writes_allowed": False})
+    out = decisions_to_actions([contrato], persist_only=True)
+    assert out["counts"] == {"built": 1, "skipped": 0}
+    assert out["actions"][0]["url"] == contrato["url"]
+
+
 def test_aceita_as_tres_formas_de_candidato():
     for campo in (
         {"suggested_titles": ["Candidato A"]},

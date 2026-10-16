@@ -21,6 +21,8 @@ from .base import ConnectorError, HttpClient
 _SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
 _BASE = "https://searchconsole.googleapis.com/webmasters/v3"
 _BASE_V1 = "https://searchconsole.googleapis.com/v1"  # urlInspection lives here
+_SA_MAX_PAGE_SIZE = 25_000
+_SA_MAX_PAGES = 20
 
 
 class SearchConsoleClient:
@@ -55,18 +57,7 @@ class SearchConsoleClient:
         row_limit: int = 1000,
     ) -> list[dict[str, Any]]:
         """Rows: [{keys: [...], clicks, impressions, ctr, position}, ...]"""
-        payload: dict[str, Any] = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": list(dimensions),
-            "rowLimit": row_limit,
-        }
-        url = f"{_BASE}/sites/{_quoted(self.config.gsc_site_url)}/searchAnalytics/query"
-        response = self.http.post(url, json_body=payload, headers=self._headers())
-        if response.status_code != 200:
-            raise ConnectorError(f"searchAnalytics failed: HTTP {response.status_code} {response.text[:200]}")
-        data = response.json()
-        return data.get("rows", []) if isinstance(data, dict) else []
+        return self._sa_query(list(dimensions), start_date, end_date, row_limit)
 
     def search_analytics_discover_daily(
         self,
@@ -168,24 +159,62 @@ class SearchConsoleClient:
         filters: list[dict[str, Any]] | None = None,
         search_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": dimensions,
-            "rowLimit": row_limit,
-        }
-        if search_type:
-            # Search-type ("web"/"news"/"discover"/...) is a top-level field,
-            # NOT a dimension filter; with a type set only DATE is allowed.
-            payload["type"] = search_type
-        if filters:
-            payload["dimensionFilterGroups"] = [{"filters": filters}]
+        """Coleta uma janela em páginas bounded e deduplica chaves repetidas.
+
+        ``row_limit`` é o tamanho de cada página da API. O GSC aceita no
+        máximo 25.000 linhas por chamada; até ``_SA_MAX_PAGES`` chamadas são
+        feitas para cobrir janelas grandes sem criar um loop ilimitado. A
+        paginação para quando uma página vem incompleta, como recomendado pela
+        API, e usa ``startRow`` somente a partir da segunda chamada.
+        """
+        page_size = max(1, min(int(row_limit or 1), _SA_MAX_PAGE_SIZE))
         url = f"{_BASE}/sites/{_quoted(self.config.gsc_site_url)}/searchAnalytics/query"
-        response = self.http.post(url, json_body=payload, headers=self._headers())
-        if response.status_code != 200:
-            raise ConnectorError(f"searchAnalytics failed: HTTP {response.status_code} {response.text[:200]}")
-        data = response.json()
-        return data.get("rows", []) if isinstance(data, dict) else []
+        output: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for page in range(_SA_MAX_PAGES):
+            payload: dict[str, Any] = {
+                "startDate": start_date,
+                "endDate": end_date,
+                "dimensions": dimensions,
+                "rowLimit": page_size,
+            }
+            if page:
+                payload["startRow"] = page * page_size
+            if search_type:
+                # Search-type ("web"/"news"/"discover"/...) is a top-level
+                # field, NOT a dimension filter; with a type set only DATE is
+                # allowed.
+                payload["type"] = search_type
+            if filters:
+                payload["dimensionFilterGroups"] = [{"filters": filters}]
+            response = self.http.post(url, json_body=payload, headers=self._headers())
+            if response.status_code != 200:
+                raise ConnectorError(
+                    f"searchAnalytics failed: HTTP {response.status_code} "
+                    f"{response.text[:200]}"
+                )
+            data = response.json()
+            rows = data.get("rows", []) if isinstance(data, dict) else []
+            if not isinstance(rows, list) or not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                keys = row.get("keys")
+                if isinstance(keys, list):
+                    identity = ("keys", json.dumps(keys, ensure_ascii=False,
+                                                    separators=(",", ":")))
+                else:
+                    identity = ("row", json.dumps(row, ensure_ascii=False,
+                                                   sort_keys=True,
+                                                   separators=(",", ":")))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                output.append(row)
+            if len(rows) < page_size:
+                break
+        return output
 
     # -- URL Inspection ------------------------------------------------------
 

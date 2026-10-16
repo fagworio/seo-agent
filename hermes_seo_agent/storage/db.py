@@ -961,6 +961,33 @@ class Storage:
         )
         self.conn.commit()
 
+    def advance_setting_if_current(self, key: str, expected: str, value: str,
+                                   *, now: str | None = None) -> bool:
+        """Avança uma configuração somente se ninguém a moveu neste ciclo.
+
+        O compare-and-set é usado pelo cursor do title-engine. Duas execuções
+        concorrentes podem analisar a mesma janela, mas a segunda nunca pode
+        sobrescrever o checkpoint já gravado pela primeira com uma posição
+        antiga. A transação ``IMMEDIATE`` serializa a leitura e a atualização.
+        """
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.get_setting(key, "")
+            if current != expected:
+                self.conn.rollback()
+                return False
+            self.conn.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (key, value, now or _now()),
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def get_http_cache(self, url: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT url, etag, last_modified, status_code, body, content_hash, fetched_at FROM http_cache WHERE url = ?", (url,)).fetchone()
         if not row:

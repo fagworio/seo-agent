@@ -2740,7 +2740,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     import re as _re
 
     warnings: list[str] = []
-    cursor_checkpoint_ready = True
     if not config.google_credentials:
         print(json.dumps({"status": "error",
                           "error": "GSC não configurado (GOOGLE_APPLICATION_CREDENTIALS)"},
@@ -2748,6 +2747,11 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         return 2
 
     run_mode = (args.mode or config.title_engine_mode or "observe").lower()
+    # Uma execução manual em observe é diagnóstico puro. Só um ciclo que
+    # persistiu telemetria/propostas pode consumir a posição do scheduler.
+    cursor_checkpoint_ready = bool(
+        getattr(args, "persist", False) or getattr(args, "write", False)
+        or run_mode == "approval")
     gen_mode = (args.generation_mode or config.title_generation_mode or "deterministic").lower()
     top_n = int(args.top_families or config.title_top_families or 5)
     max_len = int(config.title_max_len or 60)
@@ -3383,7 +3387,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         built = decisions_to_actions(
             review_contracts, live_titles=live_titles,
             max_len=int(getattr(config, "title_max_len", 60) or 60),
-            persist_only=(run_mode == "approval"))
+            # Materializa também no auto uma proposta cujo rollout ficou
+            # bloqueado. `persist_actions` mantém o gate e não enfileira a
+            # escrita; a decisão fica disponível para aprovação supervisionada.
+            persist_only=bool(run_mode in {"approval", "auto"}))
         # Item 5/6 (Sprint 1.2) — snapshot GSC PRE no formato que `baseline_gsc()`
         # le: metricas PLANAS em `gsc` (o medidor compara campo a campo com a
         # janela seguinte) e metadados de janela em `_meta`.
@@ -3569,11 +3576,15 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     # lifecycle do lote. Se o enfileiramento falhar, a URL é reavaliada no
     # próximo ciclo em vez de desaparecer atrás do cursor.
     analysis_cursor_after = analysis_cursor_before
+    cursor_checkpointed = False
     if (cursor_checkpoint_ready and last_scanned_url and
             last_scanned_url != analysis_cursor_before):
         with Storage(config.sqlite_path) as store:
-            store.set_setting("title_engine:analysis_cursor", last_scanned_url)
-        analysis_cursor_after = last_scanned_url
+            cursor_checkpointed = store.advance_setting_if_current(
+                "title_engine:analysis_cursor", analysis_cursor_before,
+                last_scanned_url)
+        if cursor_checkpointed:
+            analysis_cursor_after = last_scanned_url
 
     result = {
         "status": "ok",
@@ -3585,6 +3596,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     "analysis_last_analyzed_url": last_analyzed_url,
                     "analysis_rotation_start": selection.get("rotation_start"),
                     "analysis_scanned": len(selection.get("scanned_urls") or []),
+                    "analysis_cursor_checkpointed": cursor_checkpointed,
                     "pages_analyzed": len(contracts),
                     "review_title": telemetry["review_title"],
                     "no_title_change": telemetry["no_title_change"],

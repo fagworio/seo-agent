@@ -42,6 +42,45 @@ def test_search_analytics(monkeypatch):
     assert rows[0]["impressions"] == 100
 
 
+def test_search_analytics_paginates_with_start_row_and_deduplicates(monkeypatch):
+    config = _make_config(monkeypatch)
+    monkeypatch.setenv("GSC_SITE_URL", "https://www.unicorniohater.com.br/")
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body)
+        start_row = int(body.get("startRow", 0))
+        if start_row == 0:
+            rows = [{"keys": ["q1", "https://x/a"]},
+                    {"keys": ["q2", "https://x/b"]}]
+        elif start_row == 2:
+            # A repeated boundary row must not inflate the result set.
+            rows = [{"keys": ["q2", "https://x/b"]},
+                    {"keys": ["q3", "https://x/c"]}]
+        else:
+            rows = []
+        return httpx.Response(200, json={"rows": rows})
+
+    client = _gsc_client(config, handler)
+    rows = client.search_analytics_query_page(
+        start_date="2026-01-01", end_date="2026-01-28", row_limit=2)
+
+    assert [row["keys"][0] for row in rows] == ["q1", "q2", "q3"]
+    assert [call.get("startRow", 0) for call in calls] == [0, 2, 4]
+    assert all(call["rowLimit"] == 2 for call in calls)
+
+
+def test_setting_checkpoint_is_compare_and_set(tmp_path):
+    with Storage(str(tmp_path / "checkpoint.db")) as storage:
+        storage.set_setting("title_engine:analysis_cursor", "old")
+        assert storage.advance_setting_if_current(
+            "title_engine:analysis_cursor", "old", "new") is True
+        assert storage.advance_setting_if_current(
+            "title_engine:analysis_cursor", "old", "stale") is False
+        assert storage.get_setting("title_engine:analysis_cursor") == "new"
+
+
 def test_inspect_url(monkeypatch):
     config = _make_config(monkeypatch)
 
