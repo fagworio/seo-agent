@@ -78,6 +78,15 @@ def test_auto_persist_only_preserva_proposta_bloqueada_para_aprovacao():
     assert out["actions"][0]["url"] == contrato["url"]
 
 
+def test_baixa_confianca_e_materializavel_sem_ser_executavel():
+    contrato = _contract(
+        confidence="low",
+        rollout={"mode": "auto", "writes_allowed": False},
+    )
+    out = decisions_to_actions([contrato], persist_only=True)
+    assert out["counts"] == {"built": 1, "skipped": 0}
+
+
 def test_aceita_as_tres_formas_de_candidato():
     for campo in (
         {"suggested_titles": ["Candidato A"]},

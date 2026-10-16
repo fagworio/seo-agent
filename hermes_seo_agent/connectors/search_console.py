@@ -37,6 +37,7 @@ class SearchConsoleClient:
         self.config = config
         self.token_provider = token_provider or _default_token_provider(config)
         self.http = http or HttpClient(timeout=config.http_timeout, budget=budget)
+        self.last_query_meta: dict[str, Any] = {}
 
     # -- auth ----------------------------------------------------------------
 
@@ -86,8 +87,11 @@ class SearchConsoleClient:
         end_date: str,
         row_limit: int = 25_000,
     ) -> list[dict[str, Any]]:
-        """Aggregated per-page rows (dimension=page): {keys:[page], clicks, impressions, ...}"""
-        return self._sa_query(["page"], start_date, end_date, row_limit)
+        """Coleta paginada de páginas para uma janela completa do GSC."""
+        return self._sa_query(
+            ["page"], start_date, end_date, row_limit,
+            page_size=row_limit, max_rows=None, max_pages=_SA_MAX_PAGES,
+        )
 
     def search_analytics_query_page(
         self,
@@ -96,8 +100,11 @@ class SearchConsoleClient:
         end_date: str,
         row_limit: int = 25_000,
     ) -> list[dict[str, Any]]:
-        """Rows with BOTH dimensions: {keys:[query, page], impressions, clicks, ...}"""
-        return self._sa_query(["query", "page"], start_date, end_date, row_limit)
+        """Coleta paginada de query×página para uma janela completa do GSC."""
+        return self._sa_query(
+            ["query", "page"], start_date, end_date, row_limit,
+            page_size=row_limit, max_rows=None, max_pages=_SA_MAX_PAGES,
+        )
 
     def search_analytics_page_device(
         self,
@@ -112,7 +119,10 @@ class SearchConsoleClient:
         query×página — é o que permite julgar CTR mobile contra o próprio
         segmento mobile em vez de uma média que esconde o problema.
         """
-        return self._sa_query(["page", "device"], start_date, end_date, row_limit)
+        return self._sa_query(
+            ["page", "device"], start_date, end_date, row_limit,
+            page_size=row_limit, max_rows=None, max_pages=_SA_MAX_PAGES,
+        )
 
     def top_queries(
         self,
@@ -158,20 +168,35 @@ class SearchConsoleClient:
         row_limit: int,
         filters: list[dict[str, Any]] | None = None,
         search_type: str | None = None,
+        page_size: int | None = None,
+        max_rows: int | None = None,
+        max_pages: int = 1,
     ) -> list[dict[str, Any]]:
         """Coleta uma janela em páginas bounded e deduplica chaves repetidas.
 
-        ``row_limit`` é o tamanho de cada página da API. O GSC aceita no
-        máximo 25.000 linhas por chamada; até ``_SA_MAX_PAGES`` chamadas são
-        feitas para cobrir janelas grandes sem criar um loop ilimitado. A
-        paginação para quando uma página vem incompleta, como recomendado pela
-        API, e usa ``startRow`` somente a partir da segunda chamada.
+        Por compatibilidade, uma chamada comum continua limitada a uma página
+        de ``row_limit`` linhas. Coletas em massa optam explicitamente por
+        ``page_size`` + ``max_pages`` e podem omitir ``max_rows``. O GSC aceita
+        no máximo 25.000 linhas por chamada; a paginação para quando uma página
+        vem incompleta e usa ``startRow`` somente a partir da segunda chamada.
+        O resultado continua sendo uma lista para não quebrar consumidores
+        existentes; ``last_query_meta`` expõe se o limite de páginas foi
+        atingido.
         """
-        page_size = max(1, min(int(row_limit or 1), _SA_MAX_PAGE_SIZE))
+        if page_size is None:
+            page_size = row_limit
+            max_rows = max_rows if max_rows is not None else row_limit
+        page_size = max(1, min(int(page_size or 1), _SA_MAX_PAGE_SIZE))
+        max_pages = max(1, min(int(max_pages or 1), _SA_MAX_PAGES))
+        if max_rows is not None:
+            max_rows = max(1, int(max_rows))
         url = f"{_BASE}/sites/{_quoted(self.config.gsc_site_url)}/searchAnalytics/query"
         output: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
-        for page in range(_SA_MAX_PAGES):
+        truncated = False
+        pages_fetched = 0
+        for page in range(max_pages):
+            pages_fetched += 1
             payload: dict[str, Any] = {
                 "startDate": start_date,
                 "endDate": end_date,
@@ -212,8 +237,25 @@ class SearchConsoleClient:
                     continue
                 seen.add(identity)
                 output.append(row)
+                if max_rows is not None and len(output) >= max_rows:
+                    output = output[:max_rows]
+                    if len(rows) >= page_size:
+                        truncated = True
+                    break
+            if max_rows is not None and len(output) >= max_rows:
+                break
             if len(rows) < page_size:
                 break
+        else:
+            truncated = True
+        self.last_query_meta = {
+            "pages_fetched": pages_fetched,
+            "page_size": page_size,
+            "max_rows": max_rows,
+            "max_pages": max_pages,
+            "rows": len(output),
+            "truncated": truncated,
+        }
         return output
 
     # -- URL Inspection ------------------------------------------------------

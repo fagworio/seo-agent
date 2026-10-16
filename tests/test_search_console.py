@@ -69,6 +69,27 @@ def test_search_analytics_paginates_with_start_row_and_deduplicates(monkeypatch)
     assert [row["keys"][0] for row in rows] == ["q1", "q2", "q3"]
     assert [call.get("startRow", 0) for call in calls] == [0, 2, 4]
     assert all(call["rowLimit"] == 2 for call in calls)
+    assert client.last_query_meta["truncated"] is False
+
+
+def test_search_analytics_remains_single_page_by_default(monkeypatch):
+    config = _make_config(monkeypatch)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"rows": [
+            {"keys": ["q1"]}, {"keys": ["q2"]},
+        ]})
+
+    client = _gsc_client(config, handler)
+    rows = client.search_analytics(
+        start_date="2026-01-01", end_date="2026-01-28", row_limit=2)
+
+    assert len(rows) == 2
+    assert calls == 1
+    assert client.last_query_meta["truncated"] is True
 
 
 def test_setting_checkpoint_is_compare_and_set(tmp_path):

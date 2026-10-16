@@ -130,7 +130,7 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
                 "rollout_mode": rollout.get("mode")}
 
     confidence = str(contract.get("confidence") or "low").strip().lower()
-    if confidence not in AUTO_CONFIDENCES:
+    if confidence not in AUTO_CONFIDENCES and not persist_only:
         return {"ok": False, "skip": SKIP_CONFIDENCE,
                 "detail": _REASON_TEXT[SKIP_CONFIDENCE], "confidence": confidence}
 
