@@ -809,6 +809,31 @@ def test_7a2_rollout_negado_registra_sem_enfileirar(tmp_path):
         assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
 
 
+def test_baixa_confianca_persiste_e_pode_ser_aprovada(tmp_path):
+    """A proposta low fica bloqueada até a aprovação humana explícita."""
+    db = str(tmp_path / "low-confidence-approval.db")
+    with Storage(db) as store:
+        contrato = _contrato(
+            confidence="low", confidence_detail={"score": 0.2},
+            rollout={"mode": "auto", "writes_allowed": False},
+        )
+        resultado = TD.persist_actions(
+            store, [_acao(conf=0.2)], contracts_by_url={URL: contrato},
+            live_titles={URL: LIVE})
+        assert resultado["counts"] == {
+            "criadas": 1, "executaveis": 0,
+            "sem_execucao": 1, "erros": 0,
+        }
+        decision = store.title_decision(resultado["criadas"][0])
+        assert decision["not_executable_reason"] == TD.NOT_EXEC_LOW_CONFIDENCE
+
+        approved = TD.enqueue_human_approved_execution(store, decision)
+        assert approved["enfileirado"] is True
+        saved = store.title_decision(decision["decision_id"])
+        assert saved["status"] == "enqueued"
+        assert saved["rollout"]["human_approved"] is True
+
+
 def test_7a2_uma_url_estranha_nao_derruba_o_lote(tmp_path):
     """Regra principal do roadmap: um item ruim nunca segura os outros."""
     db = str(tmp_path / "7a2c.db")

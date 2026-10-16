@@ -34,6 +34,29 @@ def test_run_context_reuses_gsc_query_pages(monkeypatch):
     ctx.close()
 
 
+def test_run_context_associa_metadados_gsc_a_janela(monkeypatch):
+    class FakeGSC:
+        def __init__(self, config, budget=None):
+            self.last_query_meta = {
+                "pages_fetched": 3, "rows": 42, "truncated": True,
+            }
+
+        def search_analytics_query_page(self, *, start_date, end_date, row_limit=25_000):
+            return [{"keys": ["q", "u"]}]
+
+    monkeypatch.setattr(
+        "hermes_seo_agent.connectors.search_console.SearchConsoleClient", FakeGSC)
+    cfg = SimpleNamespace(google_credentials="x", ga4_property_id="", sqlite_path=":memory:")
+    ctx = RunContext(cfg)
+    ctx.gsc_query_pages("2026-01-01", "2026-01-28")
+    meta = ctx.gsc_metadata("query_page", "2026-01-01", "2026-01-28")
+    assert meta["pages_fetched"] == 3
+    assert meta["rows"] == 42
+    assert meta["truncated"] is True
+    assert meta["window_start"] == "2026-01-01"
+    ctx.close()
+
+
 def test_run_context_caches_different_windows_separately(monkeypatch):
     class FakeGSC:
         def __init__(self, config, budget=None):

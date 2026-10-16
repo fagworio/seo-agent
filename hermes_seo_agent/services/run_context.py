@@ -73,6 +73,7 @@ class RunContext:
         self._gsc_by_page: dict[tuple[str, str, int], Any] = {}
         self._gsc_query_pages: dict[tuple[str, str, int], Any] = {}
         self._gsc_page_device: dict[tuple[str, str, int], Any] = {}
+        self._gsc_metadata: dict[tuple[str, str, str, int], dict[str, Any]] = {}
         self._ga4_organic: dict[tuple[str, str, int, str, bool], Any] = {}
         self._ga4_status: dict[tuple[str, str], Any] = {}
         self._crux = None
@@ -168,8 +169,11 @@ class RunContext:
             if self.search_console() is not None:
                 self._gsc_by_page[key] = self._gsc.search_analytics_by_page(
                     start_date=start, end_date=end, row_limit=row_limit)
+                self._save_gsc_metadata("by_page", start, end, row_limit)
             else:
                 self._gsc_by_page[key] = []
+                self._save_gsc_metadata("by_page", start, end, row_limit,
+                                       available=False)
         else:
             self._hit("dataset_cache_hit")
         return self._gsc_by_page[key]
@@ -181,8 +185,11 @@ class RunContext:
             if self.search_console() is not None:
                 self._gsc_page_device[key] = self._gsc.search_analytics_page_device(
                     start_date=start, end_date=end, row_limit=row_limit)
+                self._save_gsc_metadata("page_device", start, end, row_limit)
             else:
                 self._gsc_page_device[key] = []
+                self._save_gsc_metadata("page_device", start, end, row_limit,
+                                       available=False)
         return self._gsc_page_device[key]
 
     def gsc_query_pages(self, start: str, end: str, row_limit: int = 25_000):
@@ -191,11 +198,34 @@ class RunContext:
             if self.search_console() is not None:
                 self._gsc_query_pages[key] = self._gsc.search_analytics_query_page(
                     start_date=start, end_date=end, row_limit=row_limit)
+                self._save_gsc_metadata("query_page", start, end, row_limit)
             else:
                 self._gsc_query_pages[key] = []
+                self._save_gsc_metadata("query_page", start, end, row_limit,
+                                       available=False)
         else:
             self._hit("dataset_cache_hit")
         return self._gsc_query_pages[key]
+
+    def _save_gsc_metadata(self, dataset: str, start: str, end: str,
+                           row_limit: int, *, available: bool = True) -> None:
+        key = (dataset, start, end, row_limit)
+        meta = dict(getattr(self._gsc, "last_query_meta", {}) or {})
+        meta.setdefault("pages_fetched", 0)
+        meta.setdefault("rows", 0)
+        meta.setdefault("truncated", False)
+        meta["dataset"] = dataset
+        meta["window_start"] = start
+        meta["window_end"] = end
+        meta["row_limit"] = row_limit
+        meta["available"] = available
+        self._gsc_metadata[key] = meta
+
+    def gsc_metadata(self, dataset: str, start: str, end: str,
+                     row_limit: int = 25_000) -> dict[str, Any]:
+        """Metadados da coleta GSC associada à janela cacheada."""
+        return dict(self._gsc_metadata.get(
+            (dataset, start, end, row_limit), {}))
 
     def ga4_organic(self, start: str, end: str, *, row_limit: int = 25_000,
                     expected_domain: str = ""):

@@ -377,19 +377,24 @@ def test_p13_primeira_renovacao_e_sincronizada(tmp_path):
     hb.stop()
 
 
-def test_p13_handler_nao_roda_sem_posse_confirmada(tmp_path):
-    """Se a 1a renovacao falha, o handler NAO e executado e o item fica recuperavel."""
+def test_p13_handler_nao_roda_sem_heartbeat_confirmado(tmp_path, monkeypatch):
+    """Falha da primeira renovação é testada sem depender de temporização real."""
+    from hermes_seo_agent.lanes.worker import _Heartbeat
+
     db = str(tmp_path / "hb_nega.db")
     _povoar(db, LANE, 1)
     efeitos: list[int] = []
+
+    def falhar_start(self):
+        self.first_ok = False
+        self.error = "falha de heartbeat injetada"
+        return False
+
+    monkeypatch.setattr(_Heartbeat, "start", falhar_start)
     with Storage(db) as store:
         w = LaneWorker(store, LANE, worker_id="w", handler=lambda i: efeitos.append(1),
                        heartbeat=True, recover_first=False, lease_seconds=1)
-        # aponta o heartbeat para um banco impossivel, mantendo o do worker
-        original = w.store.path
-        w.store.path = "/proc/nao-existe-dir/x.db"
         run = w.run()
-        w.store.path = original
         st = LaneQueue(store).stats(lane=LANE)
     assert efeitos == [], "handler nao pode rodar sem posse confirmada"
     assert run.lost_lease == 1
