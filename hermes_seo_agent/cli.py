@@ -2259,7 +2259,7 @@ def _title_matches_visible(expected: str, visible: str) -> bool:
         return bool(exp) and exp == vis
     if exp == vis:
         return True
-    if exp in vis:
+    if vis.startswith(exp):
         # esperado é prefixo do renderizado: só vale se o resto for marca
         # (separador típico) — conteúdo extra real indica rebuild pendente.
         rest = vis[vis.index(exp) + len(exp):].lstrip()
@@ -3355,58 +3355,6 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     f"7A enqueue falhou: {type(exc).__name__}: {exc}")
                 write_summary["queued"] = {
                     "error": f"{type(exc).__name__}: {exc}"}
-        if built["actions"] and not owns and run_mode == "auto":
-            # P0.5 (Sprint 1.1) — politica PROPRIA do executor de titulos. Antes
-            # reutilizava MAX_SAFE_FIX_PER_CYCLE e depois ignorava valores >10 no
-            # `min(10, teto)` — configuracao enganosa. Agora o teto e explicito
-            # (TITLE_MAX_WRITES_PER_CYCLE) e respeitado como esta.
-            try:
-                teto = int(getattr(config, "title_max_writes_per_cycle", 10) or 10)
-            except (TypeError, ValueError):
-                teto = 10
-            from .executor.executor import Executor
-
-            cycle_id = f"title-engine-{uuid.uuid4().hex[:12]}"
-            with Storage(config.sqlite_path) as wp_store, \
-                    WordPressClient(config) as wp_client:
-                executor_client = Executor(config, wp_client, wp_store)
-
-                def _verify_title_persisted(fix: dict[str, Any], after: Any) -> bool:
-                    """Confirmacao REST pos-write: rele o post e confere o meta."""
-                    try:
-                        fresh = wp_client.get_post(fix["post_id"])
-                    except Exception:
-                        return False
-                    expected = (fix.get("meta") or {}).get("rank_math_title", "")
-                    return ((fresh.get("meta") or {}).get("rank_math_title")
-                            or "") == expected
-
-                try:
-                    outcome = executor_client.apply_safe_actions(
-                        built["actions"], cycle_id=cycle_id,
-                        max_actions=teto, verify=_verify_title_persisted)
-                    write_summary["executor"] = {
-                        "executed": len(outcome.get("executed") or []),
-                        "previewed": len(outcome.get("previewed") or []),
-                        "skipped": len(outcome.get("skipped") or []),
-                        "unverified": len(outcome.get("unverified") or []),
-                        "dry_run": outcome.get("dry_run"),
-                        # As URLs saem daqui para fechar a Caixa (Fase 10) e as
-                        # ACOES para criar o outcome medivel (P0.3) — sem elas o
-                        # feedback loop do Google nunca fecha.
-                        "executed_urls": [a.get("url") for a in
-                                          (outcome.get("executed") or [])],
-                        "executed_actions": list(outcome.get("executed") or []),
-                        "stale": len(outcome.get("stale") or []),
-                    }
-                    published_count = len(outcome.get("executed") or [])
-                except Exception as exc:
-                    # Regra principal do roadmap: falha de escrita de UMA URL nao
-                    # derruba o ciclo — o erro vira dado de observabilidade.
-                    write_summary["executor"] = {
-                        "error": f"{type(exc).__name__}: {exc}"}
-                    warnings.append(
-                        f"executor de titulos falhou: {type(exc).__name__}: {exc}")
         # FASE 10 (roadmap) — LIFECYCLE: o item resolvido sai da Caixa.
         # Sem isto a URL ficava 'pending' para sempre: o motor a re-analisava a
         # cada ciclo (o skip por pendencia existia para conter esse churn) e a

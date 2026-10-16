@@ -408,8 +408,10 @@ class LaneWorker:
                 run.lost_lease += 1
             run.items_com_erro.append(f"{wid}: skip ({exc})")
         except Exception as exc:                                    # noqa: BLE001
-            res = self.queue.fail(wid, self.worker_id, v, exc,
-                                  retry_in=self.retry_in)
+            res = self.queue.fail(
+                wid, self.worker_id, v, exc,
+                error_class=getattr(exc, "error_class", None),
+                retry_in=self.retry_in)
             if res.get("ok"):
                 run.failed += 1
                 run.items_com_erro.append(

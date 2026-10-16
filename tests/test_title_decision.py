@@ -55,7 +55,7 @@ def test_gate1_mesma_decisao_mesmo_fingerprint_e_enqueue_idempotente(tmp_path):
         assert store.conn.execute(
             "SELECT max_attempts FROM lane_queue WHERE work_item_id = ?",
             (d1.decision_id,),
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 3
 
 
 def test_gate1_mesma_url_outro_titulo_e_outra_acao(tmp_path):

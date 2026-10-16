@@ -16,7 +16,8 @@ from hermes_seo_agent.tools.wse_trigger import WseError, WseTrigger
 
 
 def _config(dry_run=True) -> Config:
-    return Config(wordpress_url="http://localhost", dry_run=dry_run)
+    return Config(wordpress_url="http://localhost", dry_run=dry_run,
+                  wse_workdir=".")
 
 
 # -- Wayback ----------------------------------------------------------------
@@ -120,6 +121,12 @@ def test_wse_missing_wp_cli(monkeypatch):
     monkeypatch.setattr("hermes_seo_agent.tools.wse_trigger.shutil.which", lambda name: None)
     trigger = WseTrigger(_config(dry_run=False))
     with pytest.raises(WseError):
+        trigger.rebuild("smart")
+
+
+def test_wse_requires_explicit_workdir():
+    trigger = WseTrigger(Config(wordpress_url="http://localhost", dry_run=False))
+    with pytest.raises(WseError, match="WSE_WORKDIR"):
         trigger.rebuild("smart")
 
 

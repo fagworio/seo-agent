@@ -158,6 +158,7 @@ Copie `.env.example` para `.env` e configure as credenciais:
 |---|---|
 | `WORDPRESS_URL` | `http://wordpress.dvl.to:8080` (Devilbox) ou `https://prod.unicorniohater.com.br` |
 | `WORDPRESS_APP_USER` / `WORDPRESS_APP_PASSWORD` | Application Passwords (Basic auth) — mesmo padrão do `unicornio-agent` |
+| `WSE_WP_CLI` / `WSE_WORKDIR` | executável WP-CLI e diretório absoluto da instalação WordPress usados pelo rebuild |
 | `STATIC_SITE_URL` | `https://www.unicorniohater.com.br` (ou `http://localhost:8081` local) |
 | `SITEMAP_URL` | `https://www.unicorniohater.com.br/sitemap_index.xml` |
 | `GSC_SITE_URL` | propriedade no Search Console (default `https://www.unicorniohater.com.br/`) |

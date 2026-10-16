@@ -27,12 +27,19 @@ from typing import Any, Callable
 from hermes_seo_agent.lanes import policy as P
 from hermes_seo_agent.lanes.worker import SkipItem, register_handler
 
-__all__ = ["handler_technical", "handler_dead_url", "handler_title_execution",
+__all__ = ["PublicVerificationPending", "handler_technical", "handler_dead_url",
+           "handler_title_execution",
            "register_default_handlers",
            "HANDLERS_REGISTRADOS"]
 
 # Nome lógico -> função, para o CLI poder listar/diagnosticar.
 HANDLERS_REGISTRADOS: dict[str, str] = {}
+
+
+class PublicVerificationPending(RuntimeError):
+    """WP foi confirmado, mas a publicação pública ainda não propagou."""
+
+    error_class = P.ERR_PUBLIC_PENDING
 
 
 def _db_path() -> str:
@@ -133,7 +140,8 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
     from hermes_seo_agent.executor.executor import Executor
     from hermes_seo_agent.storage.db import Storage
     from hermes_seo_agent.tools.wse_trigger import WseTrigger
-    from hermes_seo_agent.lanes.title_decision import _rollout_allows_write
+    from hermes_seo_agent.lanes.title_decision import (
+        NOT_EXEC_LOW_CONFIDENCE, _rollout_allows_write, production_ready)
 
     payload = item.get("payload") or {}
     decision_id = str(payload.get("decision_id") or item.get("work_item_id") or "")
@@ -166,10 +174,9 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
         },
     }
 
-    # Fail-closed para payloads antigos: uma decisão só fecha quando também foi
-    # confirmada no HTML público. Compatibilidade explícita continua possível
-    # apenas para um produtor que envie `public_verification: false`.
-    public_verification = bool(payload.get("public_verification", True))
+    if payload.get("public_verification") is False:
+        raise ValueError(
+            "title_execution exige confirmação do HTML público")
     rebuild_kind = str(payload.get("rebuild_kind") or
                        getattr(config, "title_rebuild_kind", "") or "").strip()
     public_verified_at: str | None = None
@@ -200,12 +207,27 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                 "title_execution diverge da decisão persistida: action_fingerprint")
         if not bool(decision.get("before_known", True)):
             raise RuntimeError("title_execution bloqueada: before desconhecido")
+        if bool(decision.get("requires_review")):
+            raise RuntimeError(
+                "title_execution bloqueada: decisão ainda exige revisão")
+        if decision.get("not_executable_reason"):
+            raise RuntimeError(
+                "title_execution bloqueada: decisão não executável")
         if not _rollout_allows_write(decision.get("rollout")):
             raise RuntimeError(
                 "title_execution bloqueada: decisão sem autorização persistida")
-        if str(decision.get("status") or "") in {"stale", "rejected", "superseded"}:
+        if str(decision.get("status") or "") not in {
+                "decided", "enqueued", "executed"}:
             raise RuntimeError(
-                f"title_execution bloqueada: decisão terminal ({decision.get('status')})")
+                f"title_execution bloqueada: decisão não autorizada ({decision.get('status')})")
+        ready, reason = production_ready(decision)
+        human_approved = bool((decision.get("rollout") or {}).get("human_approved"))
+        # A aprovação humana explícita pode abrir a amostra de baixa confiança,
+        # mas não relaxa alvo, precondição, título, status ou autorização. Todos
+        # esses gates já foram revalidados acima/por `production_ready`.
+        if not ready and not (human_approved and reason == NOT_EXEC_LOW_CONFIDENCE):
+            raise RuntimeError(
+                f"title_execution bloqueada: gate persistido ({reason})")
         executor = Executor(config, wp, store)
 
         def verify(fix: dict[str, Any], _after: Any) -> bool:
@@ -224,39 +246,42 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # REST confirma apenas a escrita no WordPress. O HTML público é uma
             # fronteira separada: sem ela, a decisão não pode fechar como
             # executada nem gerar outcome mensurável.
-            if public_verification:
-                needs_rebuild = rebuild_kind and (
-                    bool(outcome.get("executed")) or
-                    decision.get("publication_status") == "public_pending")
-                if needs_rebuild:
-                    try:
-                        rebuild = WseTrigger(config).rebuild(rebuild_kind)
-                        if not rebuild.get("executed"):
-                            raise RuntimeError(
-                                f"rebuild não executado: {rebuild.get('stderr') or rebuild}")
-                    except Exception as exc:
-                        reason = f"rebuild público pendente: {type(exc).__name__}: {exc}"
-                        store.mark_title_public_pending(decision_id, reason=reason)
-                        raise RuntimeError(reason) from exc
-                try:
-                    with StaticSiteClient(config) as static:
-                        page = static.fetch_page(url)
-                    visible = str(getattr(page, "title", "") or "")
-                    status_code = int(getattr(page, "status_code", 0) or 0)
-                    if status_code != 200 or not title_matches_visible(after, visible):
-                        reason = (f"HTML público pendente: HTTP {status_code}, "
-                                  f"título visível={visible!r}")
-                        store.mark_title_public_pending(decision_id, reason=reason)
-                        raise RuntimeError(reason)
-                except RuntimeError:
-                    raise
-                except Exception as exc:
-                    reason = f"verificação pública indisponível: {type(exc).__name__}: {exc}"
+            needs_rebuild = rebuild_kind and (
+                decision.get("publication_status") not in {
+                    "rebuild_requested", "public_pending", "public_verified"})
+            if needs_rebuild:
+                rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                if not rebuild.get("executed"):
+                    raise RuntimeError(
+                        f"rebuild não executado: {rebuild.get('stderr') or rebuild}")
+                # Marca a solicitação antes do readback. Retries durante a
+                # propagação consultam o HTML, mas não disparam outro rebuild.
+                store.mark_title_public_pending(
+                    decision_id, reason="rebuild público solicitado")
+            try:
+                with StaticSiteClient(config) as static:
+                    page = static.fetch_page(url)
+                visible = str(getattr(page, "title", "") or "")
+                status_code = int(getattr(page, "status_code", 0) or 0)
+                if status_code != 200:
+                    reason = (f"HTML público pendente: HTTP {status_code}, "
+                              f"título visível={visible!r}")
                     store.mark_title_public_pending(decision_id, reason=reason)
-                    raise RuntimeError(reason) from exc
-                store.mark_title_public_verified(decision_id, commit=False)
-                public_verified_at = _dt.datetime.now(
-                    _dt.timezone.utc).isoformat()
+                    raise RuntimeError(reason)
+                if not title_matches_visible(after, visible):
+                    reason = (f"HTML público pendente: HTTP {status_code}, "
+                              f"título visível={visible!r}")
+                    store.mark_title_public_pending(decision_id, reason=reason)
+                    raise PublicVerificationPending(reason)
+            except PublicVerificationPending:
+                raise
+            except Exception as exc:
+                reason = f"verificação pública indisponível: {type(exc).__name__}: {exc}"
+                store.mark_title_public_pending(decision_id, reason=reason)
+                raise RuntimeError(reason) from exc
+            store.mark_title_public_verified(decision_id, commit=False)
+            public_verified_at = _dt.datetime.now(
+                _dt.timezone.utc).isoformat()
             action_fingerprint = str(executed_action.get("fingerprint") or "")
             implemented_at = str(
                 public_verified_at or executed_action.get("executed_at")

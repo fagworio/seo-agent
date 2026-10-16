@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from ..config import Config
@@ -19,10 +20,12 @@ class WseError(RuntimeError):
 
 
 class WseTrigger:
-    def __init__(self, config: Config, *, wp_cli: str = "wp", workdir: str = "."):
+    def __init__(self, config: Config, *, wp_cli: str | None = None,
+                 workdir: str | None = None):
         self.config = config
-        self.wp_cli = wp_cli
-        self.workdir = workdir
+        self.wp_cli = wp_cli or str(getattr(config, "wse_wp_cli", "wp") or "wp")
+        self.workdir = (workdir if workdir is not None else
+                        str(getattr(config, "wse_workdir", "") or ""))
 
     def cdn_purge(self, url: str) -> dict[str, Any]:
         """Purge a URL (or '/'-all) from the Cloudflare CDN via wp wse."""
@@ -44,12 +47,17 @@ class WseTrigger:
         return self._run(["wse", "status", "--format=json"])
 
     def _run(self, args: list[str]) -> dict[str, Any]:
+        if not self.workdir:
+            raise WseError("WSE_WORKDIR não configurado")
+        workdir = Path(self.workdir).expanduser()
+        if not workdir.is_dir():
+            raise WseError(f"WSE_WORKDIR não é diretório: {workdir}")
         if not shutil.which(self.wp_cli):
             raise WseError(f"wp-cli ({self.wp_cli}) not found on PATH")
         try:
             proc = subprocess.run(
                 [self.wp_cli, *args],
-                cwd=self.workdir,
+                cwd=str(workdir),
                 capture_output=True,
                 text=True,
                 timeout=300,

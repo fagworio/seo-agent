@@ -40,7 +40,7 @@ def title_matches_visible(expected: str, visible: str) -> bool:
         return bool(exp) and exp == vis
     if exp == vis:
         return True
-    if exp in vis:
+    if vis.startswith(exp):
         rest = vis[vis.index(exp) + len(exp):].lstrip()
         return bool(rest) and rest[0] in {"|", "-", "—", "–", ":"}
     return False

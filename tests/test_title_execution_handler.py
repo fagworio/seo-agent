@@ -52,9 +52,13 @@ def test_title_execution_writes_and_confirms(monkeypatch, tmp_path):
 
     import hermes_seo_agent.config as config_module
     import hermes_seo_agent.connectors.wordpress as wp_module
+    import hermes_seo_agent.connectors.static_site as static_module
 
     monkeypatch.setattr(config_module, "load_config", lambda: config)
     monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    fake_static = _FakeStatic()
+    fake_static.title = "Título novo"
+    monkeypatch.setattr(static_module, "StaticSiteClient", lambda cfg: fake_static)
 
     decision = make_decision(
         url="https://example.com/post", post_id=7,
@@ -73,7 +77,7 @@ def test_title_execution_writes_and_confirms(monkeypatch, tmp_path):
             "field": "rank_math_title",
             "before": decision.before,
             "after": decision.after,
-            "public_verification": False,
+            "public_verification": True,
         },
     }, SimpleNamespace(db_path=str(db)))
 
@@ -113,7 +117,6 @@ def test_title_execution_marks_stale_without_writing(monkeypatch, tmp_path):
             "field": "rank_math_title",
             "before": decision.before,
             "after": decision.after,
-            "public_verification": False,
         },
     }, SimpleNamespace(db_path=str(db)))
 
@@ -145,6 +148,22 @@ def test_title_execution_observe_never_writes(monkeypatch, tmp_path):
     assert fake_wp.writes == []
 
 
+def test_title_execution_rejects_public_verification_opt_out(monkeypatch, tmp_path):
+    config = Config(wordpress_url="http://localhost", sqlite_path=str(tmp_path / "optout.db"),
+                    dry_run=False, title_engine_mode="auto")
+    import hermes_seo_agent.config as config_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    with pytest.raises(ValueError, match="confirmação do HTML público"):
+        handler_title_execution({
+            "work_item_id": "decision-optout",
+            "payload": {"decision_id": "decision-optout",
+                        "url": "https://example.com/post", "post_id": 7,
+                        "field": "rank_math_title", "before": "old",
+                        "after": "new", "public_verification": False},
+        }, SimpleNamespace(db_path=str(tmp_path / "optout.db")))
+
+
 def test_title_execution_revalidates_persisted_rollout(monkeypatch, tmp_path):
     db = tmp_path / "title-worker-authorization.db"
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
@@ -163,13 +182,13 @@ def test_title_execution_revalidates_persisted_rollout(monkeypatch, tmp_path):
     with Storage(str(db)) as store:
         persist_decision(store, decision)
 
-    with pytest.raises(RuntimeError, match="sem autorização persistida"):
+    with pytest.raises(RuntimeError, match="não executável|sem autorização persistida"):
         handler_title_execution({
             "work_item_id": decision.decision_id,
             "payload": {"decision_id": decision.decision_id,
                         "url": decision.url, "post_id": decision.post_id,
                         "field": "rank_math_title", "before": decision.before,
-                        "after": decision.after, "public_verification": False},
+                        "after": decision.after, "public_verification": True},
         }, SimpleNamespace(db_path=str(db)))
     assert fake_wp.writes == []
 

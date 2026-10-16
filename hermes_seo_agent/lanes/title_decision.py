@@ -41,7 +41,6 @@ __all__ = [
     "DECISION_VERSION",
     "DEFAULT_FIELD",
     "MAX_TITLE_LEN",
-    "PUBLIC_VERIFICATION_MAX_ATTEMPTS",
     "MIN_CONFIDENCE",
     "NotExecutable",
     "TitleDecision",
@@ -67,11 +66,6 @@ DECISION_VERSION = 1
 
 DEFAULT_FIELD = "rank_math_title"
 MAX_TITLE_LEN = 60
-
-# O build estático/CDN é externo ao worker e pode demorar mais que os retries
-# comuns. Zero significa retry com backoff sem promover automaticamente para
-# manual_review; o item continua observável como `retry`/`public_pending`.
-PUBLIC_VERIFICATION_MAX_ATTEMPTS = 0
 
 # Abaixo disso a decisao e' registrada mas NAO entra na execucao automatica (gate 6).
 MIN_CONFIDENCE = 0.35
@@ -306,10 +300,9 @@ def execution_item(d: TitleDecision | dict[str, Any]) -> dict[str, Any]:
         "evidence": d.get("evidence") or {},
         "rollout": d.get("rollout") or {},
         "confidence": d.get("confidence"),
-        # Decisões novas precisam provar o HTML público antes de fechar como
-        # executadas. Payloads legados sem a chave continuam compatíveis no
-        # worker; o motor sempre passa por este construtor.
-        "public_verification": bool(d.get("public_verification", True)),
+        # Toda execução de título precisa provar o HTML público. O campo fica no
+        # payload para observabilidade, mas não é uma permissão configurável.
+        "public_verification": True,
         "rebuild_kind": str(d.get("rebuild_kind") or ""),
     }
 
@@ -335,11 +328,8 @@ def enqueue_execution(store: Any, d: TitleDecision | dict[str, Any], *,
 
     payload = execution_item(dd)
     q = LaneQueue(store)
-    criado = q.enqueue(
-        "title_execution", dd["decision_id"], url=dd["url"], payload=payload,
-        priority=priority,
-        max_attempts=(PUBLIC_VERIFICATION_MAX_ATTEMPTS
-                      if payload.get("public_verification", True) else 3))
+    criado = q.enqueue("title_execution", dd["decision_id"], url=dd["url"],
+                       payload=payload, priority=priority)
     if criado:
         store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
         return {"enfileirado": True, "motivo": None, "ja_existia": False,
@@ -411,11 +401,8 @@ def enqueue_human_approved_execution(store: Any, d: dict[str, Any], *,
         (json.dumps(approved_rollout, ensure_ascii=False), now, dd["decision_id"]))
     q = LaneQueue(store)
     payload = execution_item(dd)
-    created = q.enqueue(
-        "title_execution", dd["decision_id"], url=dd["url"], payload=payload,
-        priority=priority,
-        max_attempts=(PUBLIC_VERIFICATION_MAX_ATTEMPTS
-                      if payload.get("public_verification", True) else 3))
+    created = q.enqueue("title_execution", dd["decision_id"], url=dd["url"],
+                        payload=payload, priority=priority)
     if created:
         store.mark_title_decision_enqueued(dd["decision_id"], status="enqueued")
         return {"enfileirado": True, "motivo": None,

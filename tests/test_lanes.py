@@ -192,16 +192,17 @@ def test_esgotar_tentativas_manda_para_manual_review_sem_loop(tmp_path):
         assert q.claim(LANE, "w-final", now=P.plus_seconds(t, 86400)) == []
 
 
-def test_max_attempts_zero_mantem_retry_de_propagacao(tmp_path):
-    """Efeitos externos assíncronos não viram manual review após três tentativas."""
+def test_public_pending_mantem_retry_de_propagacao(tmp_path):
+    """Só a publicação pendente não vira manual review após três tentativas."""
     with Storage(str(tmp_path / "unbounded-retry.db")) as store:
         q = LaneQueue(store)
-        q.enqueue(LANE, "wi-public", url="https://x/1", max_attempts=0, now=T0)
+        q.enqueue(LANE, "wi-public", url="https://x/1", max_attempts=3, now=T0)
         t = T0
         for i in range(1, 5):
             item = q.claim(LANE, f"w-public-{i}", now=t)[0]
             res = q.fail("wi-public", f"w-public-{i}", item["lease_version"],
-                         "HTML público pendente", now=t)
+                         "HTML público pendente", error_class=P.ERR_PUBLIC_PENDING,
+                         now=t)
             assert res["status"] == P.ST_RETRY
             t = P.plus_seconds(t, P.backoff_seconds(i, seed="wi-public") + 1)
         assert q.get("wi-public")["status"] == P.ST_RETRY

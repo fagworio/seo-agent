@@ -21,7 +21,7 @@ Como isso é obtido, concretamente:
 * **Fencing token** (`lease_version`): só quem possui a versão ATUAL conclui ou
   escreve. Um worker que voltou de um crash não sobrescreve o sucessor.
 * **Retry classificado** (`classify_error` + `backoff_seconds`): cada falha vira
-  `retryable | terminal | stale | manual_review`, com backoff exponencial e
+  `retryable | public_pending | terminal | stale | manual_review`, com backoff exponencial e
   jitter determinístico — nunca "falhou, tenta de novo imediatamente".
 """
 from __future__ import annotations
@@ -77,12 +77,13 @@ FINAL: tuple[str, ...] = (ST_DONE, ST_STALE, ST_TERMINAL, ST_MANUAL_REVIEW)
 # -- classificação de erro ---------------------------------------------------
 
 ERR_RETRYABLE = "retryable"
+ERR_PUBLIC_PENDING = "public_pending"
 ERR_TERMINAL = "terminal"
 ERR_STALE = "stale"
 ERR_MANUAL_REVIEW = "manual_review"
 
 ALL_ERROR_CLASSES: tuple[str, ...] = (
-    ERR_RETRYABLE, ERR_TERMINAL, ERR_STALE, ERR_MANUAL_REVIEW,
+    ERR_RETRYABLE, ERR_PUBLIC_PENDING, ERR_TERMINAL, ERR_STALE, ERR_MANUAL_REVIEW,
 )
 
 _RETRYABLE_HINTS = (
@@ -98,14 +99,16 @@ _STALE_HINTS = ("staleaction", "stale", "already executed", "precondition")
 
 
 def classify_error(exc: BaseException | str, *, kind: str | None = None) -> str:
-    """Classifica a falha em `retryable | terminal | stale | manual_review`.
+    """Classifica a falha em `retryable | public_pending | terminal | stale | manual_review`.
 
     A classificação decide o destino do item, então ela é explícita:
 
     * `stale` — a ação já foi aplicada (fingerprint executado) ou a precondição
       mudou. NÃO reexecutar: repetir aqui é justamente a escrita duplicada.
     * `retryable` — transitório (rede, timeout, rate-limit, 5xx). Volta com
-      backoff; depois de `max_attempts` vira `manual_review` (nunca loop infinito).
+      backoff; depois de `max_attempts` vira `manual_review`.
+    * `public_pending` — WordPress já foi confirmado, mas o HTML público ainda
+      não propagou. Volta com backoff sem consumir o limite de falhas da fila.
     * `terminal` — definitivo e conhecido; sai da fila para sempre.
     * `manual_review` — precisa de decisão humana (auth/permissão, payload
       inválido, 404/410 em URL que deveria existir).
