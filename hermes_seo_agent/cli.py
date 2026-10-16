@@ -2688,7 +2688,40 @@ def _select_title_rows(rows: list[dict[str, Any]], *, last_url: str = "",
     }
 
 
+_TITLE_ENGINE_LEASE_KEY = "title_engine:run"
+_TITLE_ENGINE_LEASE_TTL_SECONDS = 2 * 60 * 60
+
+
 def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
+    """Run one title-engine cycle under an exclusive SQLite lease."""
+    owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+    store = Storage(config.sqlite_path)
+    acquired = False
+    try:
+        acquired = store.acquire_named_lease(
+            _TITLE_ENGINE_LEASE_KEY, owner,
+            ttl_seconds=_TITLE_ENGINE_LEASE_TTL_SECONDS)
+        if not acquired:
+            _emit({
+                "status": "ok",
+                "summary": {
+                    "command": "title-engine",
+                    "status": "skipped",
+                    "reason": "analysis_in_progress",
+                },
+                "findings": [],
+                "safe_actions": [],
+                "approval_required": [],
+            }, force_json=True)
+            return 0
+        return _cmd_title_engine_impl(args, config)
+    finally:
+        if acquired:
+            store.release_named_lease(_TITLE_ENGINE_LEASE_KEY, owner)
+        store.close()
+
+
+def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
     """FASES 1–24: decisão de título por FAMÍLIAS de query (determinística).
 
     Substitui "a melhor query individual" por: famílias -> share de demanda ->

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import json
 from pathlib import Path
 from typing import Any
 
@@ -57,15 +58,32 @@ class WseTrigger:
         permanecem ``unknown`` para que o caller não reenvie uma solicitação
         potencialmente duplicada.
         """
+        return str(self.rebuild_info().get("state") or "unknown")
+
+    def rebuild_info(self) -> dict[str, Any]:
+        """Return the WSE state and operation identity, when exposed.
+
+        The WSE plugin has changed the nesting of its JSON responses between
+        versions. We therefore inspect only well-known status/id fields and
+        keep an unknown result conservative: callers must not issue a second
+        rebuild when they cannot prove which operation is active.
+        """
         result = self.status()
         if not result.get("executed"):
-            return "unknown"
+            return {"state": "unknown", "operation_id": None, "raw": None}
         raw = str(result.get("stdout") or "")
         try:
-            import json
             payload = json.loads(raw) if raw else {}
         except (TypeError, ValueError):
-            return "unknown"
+            return {"state": "unknown", "operation_id": None, "raw": None}
+        return {
+            "state": self._classify_payload(payload),
+            "operation_id": self._extract_operation_id(payload),
+            "raw": payload,
+        }
+
+    @classmethod
+    def _classify_payload(cls, payload: Any) -> str:
         values: list[str] = []
         stack = [payload]
         while stack:
@@ -89,6 +107,38 @@ class WseTrigger:
         if any(token in text for token in ("idle", "failed", "failure", "error")):
             return "idle"
         return "unknown"
+
+    @classmethod
+    def _extract_operation_id(cls, payload: Any) -> str | None:
+        keys = {"operation_id", "operationid", "job_id", "jobid", "request_id",
+                "requestid", "rebuild_id", "rebuildid"}
+        stack = [(payload, None)]
+        while stack:
+            current, scope = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    normalized = str(key).lower().replace("-", "_")
+                    scoped_id = normalized == "id" and scope in {
+                        "job", "operation", "rebuild", "request"}
+                    if (normalized in keys or scoped_id) and value not in (None, ""):
+                        return str(value)
+                    if isinstance(value, (dict, list)):
+                        stack.append((value, normalized))
+            elif isinstance(current, list):
+                stack.extend((value, scope) for value in current)
+        return None
+
+    @classmethod
+    def extract_operation_id(cls, result: dict[str, Any]) -> str | None:
+        """Extract an operation id from a successful ``rebuild`` response."""
+        raw = str(result.get("stdout") or "")
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return cls._extract_operation_id(payload)
 
     def _run(self, args: list[str]) -> dict[str, Any]:
         if not self.workdir:

@@ -74,7 +74,15 @@ class _FakeWse:
 
     def rebuild(self, kind: str) -> dict[str, object]:
         self.calls.append(kind)
-        return {"executed": True, "kind": kind}
+        return {
+            "executed": True,
+            "kind": kind,
+            "stdout": '{"operation_id": "wse-42"}',
+        }
+
+    @staticmethod
+    def extract_operation_id(result: dict[str, object]) -> str | None:
+        return "wse-42" if result.get("stdout") else None
 
 
 class _CrashAfterWseRequest:
@@ -213,6 +221,8 @@ def test_approval_worker_retries_public_propagation_without_duplicate_effects(
     assert item["status"] == "done"
     assert saved["status"] == "executed"
     assert saved["publication_status"] == "public_verified"
+    assert saved["publication_operation_id"] == "wse-42"
+    assert saved["publication_rebuild_kind"] == "smart"
     assert saved["outcome_id"] is not None
 
 

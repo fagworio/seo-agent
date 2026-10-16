@@ -102,6 +102,18 @@ def test_setting_checkpoint_is_compare_and_set(tmp_path):
         assert storage.get_setting("title_engine:analysis_cursor") == "new"
 
 
+def test_named_lease_blocks_live_owner_and_recovers_after_expiry(tmp_path):
+    with Storage(str(tmp_path / "lease.db")) as storage:
+        assert storage.acquire_named_lease("title_engine:run", "owner-a",
+                                          ttl_seconds=60) is True
+        assert storage.acquire_named_lease("title_engine:run", "owner-b",
+                                          ttl_seconds=60) is False
+        assert storage.release_named_lease("title_engine:run", "owner-b") is False
+        assert storage.release_named_lease("title_engine:run", "owner-a") is True
+        assert storage.acquire_named_lease("title_engine:run", "owner-b",
+                                          ttl_seconds=60) is True
+
+
 def test_inspect_url(monkeypatch):
     config = _make_config(monkeypatch)
 

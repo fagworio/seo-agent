@@ -152,6 +152,24 @@ def test_wse_executes_command(monkeypatch):
     assert calls[0][1:] == ["wse", "rebuild", "smart"]
 
 
+def test_wse_correlates_operation_id_from_rebuild_response():
+    result = {"executed": True, "stdout": '{"job": {"id": "job-42"}}'}
+    assert WseTrigger.extract_operation_id(result) == "job-42"
+
+
+def test_wse_rebuild_info_classifies_state_and_operation(monkeypatch):
+    trigger = WseTrigger(_config(dry_run=False))
+    monkeypatch.setattr(trigger, "status", lambda: {
+        "executed": True,
+        "stdout": '{"job": {"id": "job-42", "status": "running"}}',
+    })
+    assert trigger.rebuild_info() == {
+        "state": "active",
+        "operation_id": "job-42",
+        "raw": {"job": {"id": "job-42", "status": "running"}},
+    }
+
+
 # -- Notifier ---------------------------------------------------------------
 
 def test_notifier_threshold_not_reached():

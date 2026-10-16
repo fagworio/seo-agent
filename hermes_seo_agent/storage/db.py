@@ -8,12 +8,13 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -692,6 +693,9 @@ CREATE TABLE IF NOT EXISTS title_decision (
     publication_status TEXT NOT NULL DEFAULT 'not_checked',
     publication_checked_at TEXT,
     publication_error TEXT,
+    publication_operation_id TEXT,
+    publication_rebuild_kind TEXT,
+    publication_requested_at TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_title_decision_url ON title_decision(url);
@@ -873,6 +877,9 @@ class Storage:
                 ("publication_status", "TEXT NOT NULL DEFAULT 'not_checked'"),
                 ("publication_checked_at", "TEXT"),
                 ("publication_error", "TEXT"),
+                ("publication_operation_id", "TEXT"),
+                ("publication_rebuild_kind", "TEXT"),
+                ("publication_requested_at", "TEXT"),
             ],
         }
         editorial_extra = [
@@ -984,6 +991,59 @@ class Storage:
             )
             self.conn.commit()
             return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def acquire_named_lease(self, key: str, owner: str, *,
+                            ttl_seconds: int = 3600) -> bool:
+        """Acquire a short-lived exclusive lease stored in ``app_settings``.
+
+        The lease is backed by the same SQLite transaction used by the
+        title-engine cursor. A stale lease can be recovered after its TTL,
+        while a live lease makes a concurrent run exit without duplicate work.
+        """
+        now = time.time()
+        expires_at = now + max(1, int(ttl_seconds))
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            raw = self.get_setting(key, "")
+            try:
+                current = json.loads(raw) if raw else {}
+            except (TypeError, ValueError):
+                current = {}
+            current_owner = str(current.get("owner") or "")
+            current_expiry = float(current.get("expires_at") or 0)
+            if current_owner and current_expiry > now and current_owner != owner:
+                self.conn.rollback()
+                return False
+            self.conn.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (key, json.dumps({"owner": owner, "expires_at": expires_at}), _now()),
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def release_named_lease(self, key: str, owner: str) -> bool:
+        """Release ``key`` only when it is still owned by ``owner``."""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            raw = self.get_setting(key, "")
+            try:
+                current = json.loads(raw) if raw else {}
+            except (TypeError, ValueError):
+                current = {}
+            if str(current.get("owner") or "") != owner:
+                self.conn.rollback()
+                return False
+            cur = self.conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+            self.conn.commit()
+            return bool(cur.rowcount)
         except Exception:
             self.conn.rollback()
             raise
@@ -3748,7 +3808,8 @@ class Storage:
             "action_fingerprint, decision_version, evidence_json, rollout_json, "
             "confidence, requires_review, before_known, status, "
             "not_executable_reason, decided_at, enqueued_at, executed_at, "
-            "outcome_id, publication_status, publication_checked_at, publication_error "
+            "outcome_id, publication_status, publication_checked_at, publication_error, "
+            "publication_operation_id, publication_rebuild_kind, publication_requested_at "
             "FROM title_decision WHERE decision_id = ?",
             (decision_id,)).fetchone()
         if row is None:
@@ -3771,9 +3832,13 @@ class Storage:
                 "executed_at": row[17], "outcome_id": normalized_outcome_id,
                 "publication_status": row[19] or "not_checked",
                 "publication_checked_at": row[20],
-                "publication_error": row[21]}
+                "publication_error": row[21],
+                "publication_operation_id": row[22],
+                "publication_rebuild_kind": row[23],
+                "publication_requested_at": row[24]}
 
     def mark_title_rebuild_requested(self, decision_id: str, *, reason: str,
+                                     kind: str | None = None,
                                      commit: bool = True) -> bool:
         """Persiste a intenção antes de chamar o rebuild externo.
 
@@ -3785,10 +3850,12 @@ class Storage:
         now = _now()
         cur = self.conn.execute(
             "UPDATE title_decision SET publication_status = 'rebuild_requested', "
-            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "publication_checked_at = ?, publication_error = ?, "
+            "publication_operation_id = NULL, publication_rebuild_kind = ?, "
+            "publication_requested_at = ?, updated_at = ? "
             "WHERE decision_id = ? AND status NOT IN "
             "('executed', 'stale', 'rejected', 'superseded')",
-            (now, str(reason)[:500], now, decision_id))
+            (now, str(reason)[:500], kind, now, now, decision_id))
         if commit:
             self.conn.commit()
         return bool(cur.rowcount)
@@ -3799,10 +3866,27 @@ class Storage:
         now = _now()
         cur = self.conn.execute(
             "UPDATE title_decision SET publication_status = 'not_checked', "
-            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "publication_checked_at = ?, publication_error = ?, "
+            "publication_operation_id = NULL, publication_rebuild_kind = NULL, "
+            "publication_requested_at = NULL, updated_at = ? "
             "WHERE decision_id = ? AND publication_status = 'rebuild_requested' "
             "AND status NOT IN ('executed', 'stale', 'rejected', 'superseded')",
             (now, str(reason)[:500], now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
+    def record_title_rebuild_operation(self, decision_id: str, operation_id: str,
+                                      *, reason: str = "", commit: bool = True) -> bool:
+        """Bind the persisted rebuild intent to the operation accepted by WSE."""
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET publication_operation_id = ?, "
+            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "WHERE decision_id = ? AND publication_status = 'rebuild_requested' "
+            "AND status NOT IN ('executed', 'stale', 'rejected', 'superseded')",
+            (str(operation_id)[:255], now, str(reason)[:500] or None, now, decision_id),
+        )
         if commit:
             self.conn.commit()
         return bool(cur.rowcount)

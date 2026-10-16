@@ -254,12 +254,31 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # fronteira separada: sem ela, a decisão não pode fechar como
             # executada nem gerar outcome mensurável.
             wse_state_unknown = False
+            wse_trigger = WseTrigger(config)
             if decision.get("publication_status") == "rebuild_requested":
                 # A intenção pode ter sido gravada antes de o processo cair,
                 # antes do WSE aceitar, ou depois de ele aceitar. Consultar o
                 # estado distingue esses casos sem reenviar cegamente.
                 try:
-                    rebuild_state = WseTrigger(config).rebuild_state()
+                    if hasattr(wse_trigger, "rebuild_info"):
+                        rebuild_info = wse_trigger.rebuild_info()
+                    else:
+                        # Compatibilidade com doubles antigos e integrações que
+                        # ainda expõem apenas o classificador de estado.
+                        rebuild_info = {
+                            "state": wse_trigger.rebuild_state(),
+                            "operation_id": None,
+                        }
+                    rebuild_state = str(rebuild_info.get("state") or "unknown")
+                    persisted_operation_id = decision.get("publication_operation_id")
+                    observed_operation_id = rebuild_info.get("operation_id")
+                    if persisted_operation_id and (
+                            not observed_operation_id or
+                            str(observed_operation_id) != str(persisted_operation_id)):
+                        # Um status de outro rebuild não pode reconciliar esta
+                        # decisão; o HTML ainda pode confirmar a publicação,
+                        # mas nunca autorizamos uma nova chamada aqui.
+                        rebuild_state = "unknown"
                 except WsePreflightError as exc:
                     rebuild_state = "idle"
                     store.reset_title_rebuild_request(
@@ -289,9 +308,10 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                 # processo morrer depois que o WSE aceitar a solicitação, o
                 # retry verá `rebuild_requested` e não emitirá outro rebuild.
                 store.mark_title_rebuild_requested(
-                    decision_id, reason="rebuild público solicitado")
+                    decision_id, kind=rebuild_kind,
+                    reason="rebuild público solicitado")
                 try:
-                    rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                    rebuild = wse_trigger.rebuild(rebuild_kind)
                 except WsePreflightError as exc:
                     # A configuração local falhou antes de qualquer contato
                     # externo. Remover a intenção permite corrigir WSE_WORKDIR
@@ -318,6 +338,14 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                     # segundo rebuild automaticamente.
                     raise RuntimeError(
                         reason)
+                extract_operation_id = getattr(WseTrigger, "extract_operation_id", None)
+                operation_id = (extract_operation_id(rebuild)
+                                if extract_operation_id is not None else None)
+                if operation_id:
+                    store.record_title_rebuild_operation(
+                        decision_id, operation_id,
+                        reason="operação WSE correlacionada")
+                    decision["publication_operation_id"] = operation_id
                 # Marca a solicitação antes do readback. Retries durante a
                 # propagação consultam o HTML, mas não disparam outro rebuild.
                 store.mark_title_public_pending(
