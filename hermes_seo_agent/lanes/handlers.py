@@ -27,7 +27,8 @@ from typing import Any, Callable
 from hermes_seo_agent.lanes import policy as P
 from hermes_seo_agent.lanes.worker import SkipItem, register_handler
 
-__all__ = ["PublicVerificationPending", "handler_technical", "handler_dead_url",
+__all__ = ["PublicVerificationPending", "PublicVerificationNotFound",
+           "handler_technical", "handler_dead_url",
            "handler_title_execution",
            "register_default_handlers",
            "HANDLERS_REGISTRADOS"]
@@ -40,6 +41,12 @@ class PublicVerificationPending(RuntimeError):
     """WP foi confirmado, mas a publicação pública ainda não propagou."""
 
     error_class = P.ERR_PUBLIC_PENDING
+
+
+class PublicVerificationNotFound(RuntimeError):
+    """O HTML respondeu 404 durante a janela curta de propagação."""
+
+    error_class = P.ERR_PUBLIC_NOT_FOUND
 
 
 def _db_path() -> str:
@@ -250,10 +257,24 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                 decision.get("publication_status") not in {
                     "rebuild_requested", "public_pending", "public_verified"})
             if needs_rebuild:
-                rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                # A intenção persistida vem ANTES da chamada externa. Se o
+                # processo morrer depois que o WSE aceitar a solicitação, o
+                # retry verá `rebuild_requested` e não emitirá outro rebuild.
+                store.mark_title_rebuild_requested(
+                    decision_id, reason="rebuild público solicitado")
+                try:
+                    rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                except Exception as exc:
+                    reason = (f"rebuild indisponível: {type(exc).__name__}: "
+                              f"{exc}")
+                    store.mark_title_public_pending(decision_id, reason=reason)
+                    raise RuntimeError(reason) from exc
                 if not rebuild.get("executed"):
+                    reason = (f"rebuild não executado: "
+                              f"{rebuild.get('stderr') or rebuild}")
+                    store.mark_title_public_pending(decision_id, reason=reason)
                     raise RuntimeError(
-                        f"rebuild não executado: {rebuild.get('stderr') or rebuild}")
+                        reason)
                 # Marca a solicitação antes do readback. Retries durante a
                 # propagação consultam o HTML, mas não disparam outro rebuild.
                 store.mark_title_public_pending(
@@ -267,18 +288,27 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                     reason = (f"HTML público pendente: HTTP {status_code}, "
                               f"título visível={visible!r}")
                     store.mark_title_public_pending(decision_id, reason=reason)
+                    if status_code == 404:
+                        # 404 imediatamente após o rebuild pode ser a janela de
+                        # publicação. É retryable com teto, ao contrário de
+                        # 5xx/rede, que permanecem public_pending sem esgotar a
+                        # fila enquanto o site se recupera.
+                        raise PublicVerificationNotFound(reason)
+                    if status_code >= 500 or status_code in {
+                            408, 429}:
+                        raise PublicVerificationPending(reason)
                     raise RuntimeError(reason)
                 if not title_matches_visible(after, visible):
                     reason = (f"HTML público pendente: HTTP {status_code}, "
                               f"título visível={visible!r}")
                     store.mark_title_public_pending(decision_id, reason=reason)
                     raise PublicVerificationPending(reason)
-            except PublicVerificationPending:
+            except (PublicVerificationPending, PublicVerificationNotFound):
                 raise
             except Exception as exc:
                 reason = f"verificação pública indisponível: {type(exc).__name__}: {exc}"
                 store.mark_title_public_pending(decision_id, reason=reason)
-                raise RuntimeError(reason) from exc
+                raise PublicVerificationPending(reason) from exc
             store.mark_title_public_verified(decision_id, commit=False)
             public_verified_at = _dt.datetime.now(
                 _dt.timezone.utc).isoformat()

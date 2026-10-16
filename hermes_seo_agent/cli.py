@@ -175,6 +175,8 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument("--persist", action="store_true",
                            help="persiste candidatos como ações safe_fix (pending) + checklist")
         if name == "title-engine":
+            p.add_argument("--analysis-limit", type=int, default=0,
+                           help="máximo de URLs analisadas (0 = config TITLE_ANALYSIS_LIMIT)")
             p.add_argument("--min-impressions", type=int, default=100,
                            help="impressões mínimas da página para entrar na análise")
             p.add_argument("--query-min-impressions", type=float, default=10.0,
@@ -1942,8 +1944,8 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     escreve = engine_mode == "auto"
                     title_ok = _run_stage(
                         _cmd_title_engine, "title-engine", retry_hours=20,
-                        args=_ns(limit=int(getattr(
-                            config, "title_max_writes_per_cycle", 10) or 10),
+                        args=_ns(limit=0, analysis_limit=int(getattr(
+                            config, "title_analysis_limit", 50) or 50),
                                  min_impressions=100.0,
                                  query_min_impressions=10.0, top_families=0,
                                  mode=engine_mode, generation_mode="",
@@ -2739,7 +2741,14 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         if key:
             pages_by_url[key] = row
 
-    cap = max((args.limit or 30) * 5, 150)
+    # `--limit` continua sendo um atalho compatível para limitar a análise em
+    # execuções manuais. O schedule usa `TITLE_ANALYSIS_LIMIT` explicitamente,
+    # deixando `TITLE_MAX_WRITES_PER_CYCLE` reservado ao worker de publicação.
+    legacy_limit = max(int(getattr(args, "limit", 0) or 0), 0)
+    analysis_limit = (max(int(getattr(args, "analysis_limit", 0) or 0), 0)
+                      or legacy_limit
+                      or max(int(getattr(config, "title_analysis_limit", 50) or 50), 1))
+    cap = max(analysis_limit * 5, 150)
     targets: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     with Storage(config.sqlite_path) as store:
@@ -2767,7 +2776,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             reg_rows = store.conn.execute(
                 "SELECT url FROM improvement_checklist WHERE item = 'title_regression' "
                 "AND status = 'pending' AND url IS NOT NULL ORDER BY id DESC LIMIT ?",
-                (max(int(args.limit or 30), 30),)).fetchall()
+                (max(analysis_limit, 30),)).fetchall()
         except Exception:  # noqa: BLE001
             reg_rows = []
         for (url,) in reg_rows:
@@ -2790,7 +2799,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                             "_baseline": _ctr_verdict(None, position=None,
                                                       impressions=0.0, ctr=0.0,
                                                       baseline=baseline)})
-    targets = targets[: max(int(args.limit or 30), 1)]
+    targets = targets[:analysis_limit]
 
     import contextlib as _contextlib
     stack = _contextlib.ExitStack()
@@ -3464,6 +3473,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         "status": "ok",
         "summary": {"command": "title-engine", "mode": run_mode,
                     "generation_mode": gen_mode,
+                    "analysis_limit": analysis_limit,
                     "pages_analyzed": len(contracts),
                     "review_title": telemetry["review_title"],
                     "no_title_change": telemetry["no_title_change"],

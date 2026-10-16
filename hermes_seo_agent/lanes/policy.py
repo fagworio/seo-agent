@@ -78,12 +78,14 @@ FINAL: tuple[str, ...] = (ST_DONE, ST_STALE, ST_TERMINAL, ST_MANUAL_REVIEW)
 
 ERR_RETRYABLE = "retryable"
 ERR_PUBLIC_PENDING = "public_pending"
+ERR_PUBLIC_NOT_FOUND = "public_not_found"
 ERR_TERMINAL = "terminal"
 ERR_STALE = "stale"
 ERR_MANUAL_REVIEW = "manual_review"
 
 ALL_ERROR_CLASSES: tuple[str, ...] = (
-    ERR_RETRYABLE, ERR_PUBLIC_PENDING, ERR_TERMINAL, ERR_STALE, ERR_MANUAL_REVIEW,
+    ERR_RETRYABLE, ERR_PUBLIC_PENDING, ERR_PUBLIC_NOT_FOUND, ERR_TERMINAL,
+    ERR_STALE, ERR_MANUAL_REVIEW,
 )
 
 _RETRYABLE_HINTS = (
@@ -109,6 +111,8 @@ def classify_error(exc: BaseException | str, *, kind: str | None = None) -> str:
       backoff; depois de `max_attempts` vira `manual_review`.
     * `public_pending` — WordPress já foi confirmado, mas o HTML público ainda
       não propagou. Volta com backoff sem consumir o limite de falhas da fila.
+    * `public_not_found` — o HTML público respondeu 404 durante a janela curta
+      de propagação. Retenta até `max_attempts` e então vai para `manual_review`.
     * `terminal` — definitivo e conhecido; sai da fila para sempre.
     * `manual_review` — precisa de decisão humana (auth/permissão, payload
       inválido, 404/410 em URL que deveria existir).

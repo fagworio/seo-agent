@@ -11,7 +11,7 @@ def _clean_env(monkeypatch):
                 "WORDPRESS_APP_PASSWORD", "STATIC_SITE_URL", "SITEMAP_URL",
                 "DRY_RUN", "GOOGLE_API_KEY", "PAGESPEED_API_KEY",
                 "CRUX_API_KEY", "GA4_PROPERTY_ID", "GOOGLE_APPLICATION_CREDENTIALS",
-                "MAX_EXTERNAL_CALLS"):
+                "MAX_EXTERNAL_CALLS", "TITLE_ANALYSIS_LIMIT"):
         monkeypatch.delenv(key, raising=False)
     # Point the .env loader at a missing file so a local .env never leaks in.
     monkeypatch.setenv("SEO_ENV_FILE", "/nonexistent/seo-agent.env")
@@ -21,6 +21,14 @@ def test_defaults_are_dry_run():
     cfg = load_config()
     assert cfg.dry_run is True
     assert cfg.wordpress_url == "http://wordpress.dvl.to:8080"
+    assert cfg.title_analysis_limit == 50
+
+
+def test_title_analysis_limit_reads_env_separately_from_writes(monkeypatch):
+    monkeypatch.setenv("TITLE_ANALYSIS_LIMIT", "250")
+    cfg = load_config()
+    assert cfg.title_analysis_limit == 250
+    assert cfg.title_max_writes_per_cycle == 10
 
 
 def test_write_mode_requires_credentials(monkeypatch):

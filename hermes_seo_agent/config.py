@@ -73,6 +73,9 @@ class Config:
     # Antes o caminho novo reutilizava MAX_SAFE_FIX_PER_CYCLE e ainda ignorava
     # valores acima de 10 (min(10, teto)) — configuracao enganosa.
     title_max_writes_per_cycle: int = 10
+    # Teto de URLs analisadas pelo motor por ciclo. Separado do teto de
+    # escritas: analisar mais oportunidades não libera mais publicações.
+    title_analysis_limit: int = 50
 
     # 7A.2 — a decisao de titulo vai para a FILA em vez de o motor escrever direto
     # no WordPress. Default True: o caminho direto (title-engine -> Executor ->
@@ -345,6 +348,7 @@ def load_config() -> Config:
         wse_workdir=_env("WSE_WORKDIR", "").strip(),
         title_engine_in_schedule=_bool("TITLE_ENGINE_IN_SCHEDULE", True),
         title_max_writes_per_cycle=_int("TITLE_MAX_WRITES_PER_CYCLE", 10, 0, 100),
+        title_analysis_limit=_int("TITLE_ANALYSIS_LIMIT", 50, 1, 10_000),
         title_decision_owns_writes=_bool("TITLE_DECISION_OWNS_WRITES", True),
         title_direct_writes_allowed=_bool("TITLE_DIRECT_WRITES_ALLOWED", False),
         max_queries_per_source=_int("MAX_QUERIES_PER_SOURCE", 500, 1, 100_000),

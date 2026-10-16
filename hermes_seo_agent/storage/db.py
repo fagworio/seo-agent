@@ -3734,6 +3734,26 @@ class Storage:
                 "publication_checked_at": row[20],
                 "publication_error": row[21]}
 
+    def mark_title_rebuild_requested(self, decision_id: str, *, reason: str,
+                                     commit: bool = True) -> bool:
+        """Persiste a intenção antes de chamar o rebuild externo.
+
+        ``rebuild_requested`` é uma barreira de idempotência: se o processo
+        morrer depois que o WSE aceitar a chamada, o próximo worker reconcilia
+        apenas o HTML público e não dispara um segundo rebuild sem uma nova
+        decisão explícita.
+        """
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET publication_status = 'rebuild_requested', "
+            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "WHERE decision_id = ? AND status NOT IN "
+            "('executed', 'stale', 'rejected', 'superseded')",
+            (now, str(reason)[:500], now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
     def mark_title_public_pending(self, decision_id: str, *, reason: str,
                                   commit: bool = True) -> bool:
         """Registra WP verificado, mas HTML público ainda não propagado."""

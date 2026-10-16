@@ -164,10 +164,13 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
     )
     # F21/F22: o shadow do motor de título entra no ciclo diário (observe+persist)
     title_engine_calls = []
+    config = dataclasses.replace(config, title_analysis_limit=42,
+                                 title_max_writes_per_cycle=7)
     monkeypatch.setattr(
         "hermes_seo_agent.cli._cmd_title_engine",
         lambda args, config: title_engine_calls.append(
-            (args.mode, args.shadow, args.persist, args.write)))
+            (args.mode, args.shadow, args.persist, args.write,
+             args.analysis_limit, args.limit)))
 
     assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
     result = json.loads(capsys.readouterr().out)
@@ -175,7 +178,7 @@ def test_daily_schedule_collects_gsc_revalidates_and_records_run(monkeypatch, ca
     assert ("outcomes", "revalidate-due") in calls
     assert "gsc-demand" in result["summary"]["steps"]
     # shadow automático: observa, compara e persiste — NUNCA publica título
-    assert title_engine_calls == [("observe", True, True, False)]
+    assert title_engine_calls == [("observe", True, True, False, 42, 0)]
     assert "title-engine-observe" in result["summary"]["steps"]
     assert worker_calls == []
     with Storage(str(db)) as storage:
