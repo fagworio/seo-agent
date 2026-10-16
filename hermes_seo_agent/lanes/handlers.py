@@ -269,36 +269,46 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                             "state": wse_trigger.rebuild_state(),
                             "operation_id": None,
                         }
-                    rebuild_state = str(rebuild_info.get("state") or "unknown")
                     persisted_operation_id = decision.get("publication_operation_id")
-                    observed_operation_id = rebuild_info.get("operation_id")
-                    if persisted_operation_id and (
-                            not observed_operation_id or
-                            str(observed_operation_id) != str(persisted_operation_id)):
-                        # Um status de outro rebuild não pode reconciliar esta
-                        # decisão; o HTML ainda pode confirmar a publicação,
-                        # mas nunca autorizamos uma nova chamada aqui.
-                        rebuild_state = "unknown"
+                    operations = rebuild_info.get("operations") or []
+                    if persisted_operation_id and operations:
+                        matching = [op for op in operations
+                                    if str(op.get("operation_id") or "") ==
+                                    str(persisted_operation_id)]
+                        # O estado só é válido quando vem da mesma operação
+                        # persistida; um agregado de jobs não pode reconciliar
+                        # esta decisão por coincidência de status.
+                        rebuild_state = (str(matching[0].get("state") or "unknown")
+                                         if len(matching) == 1 else "unknown")
+                    elif persisted_operation_id:
+                        observed_operation_id = rebuild_info.get("operation_id")
+                        rebuild_state = (
+                            str(rebuild_info.get("state") or "unknown")
+                            if observed_operation_id and
+                            str(observed_operation_id) == str(persisted_operation_id)
+                            else "unknown")
+                    elif operations:
+                        # Decisões legadas sem ID só podem aceitar um retorno
+                        # que contenha exatamente uma operação.
+                        rebuild_state = (str(operations[0].get("state") or "unknown")
+                                         if len(operations) == 1 else "unknown")
+                    else:
+                        rebuild_state = str(rebuild_info.get("state") or "unknown")
                 except WsePreflightError as exc:
-                    rebuild_state = "idle"
-                    store.reset_title_rebuild_request(
-                        decision_id,
-                        reason=f"reconciliação WSE sem preflight: {exc}")
+                    rebuild_state = "unknown"
+                    wse_state_unknown = True
                 except Exception:
                     rebuild_state = "unknown"
+                    wse_state_unknown = True
                 if rebuild_state in {"active", "complete"}:
                     store.mark_title_public_pending(
                         decision_id, reason=f"WSE reconciliado: {rebuild_state}")
                     decision["publication_status"] = "public_pending"
-                elif rebuild_state == "idle":
-                    store.reset_title_rebuild_request(
-                        decision_id, reason="WSE sem rebuild ativo")
-                    decision["publication_status"] = "not_checked"
                 else:
                     # O status do WSE pode estar indisponível mesmo quando a
-                    # publicação já chegou ao HTML. Não reenviar o rebuild:
-                    # primeiro verificamos a fronteira pública e só mantemos a
-                    # decisão em pending se o título ainda não estiver visível.
+                    # publicação já chegou ao HTML. Nem falha de consulta nem
+                    # `idle` provam que a solicitação original não foi aceita;
+                    # preservar a intenção impede um rebuild duplicado.
                     wse_state_unknown = True
             needs_rebuild = rebuild_kind and (
                 decision.get("publication_status") not in {

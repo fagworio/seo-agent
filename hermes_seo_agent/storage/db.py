@@ -969,7 +969,9 @@ class Storage:
         self.conn.commit()
 
     def advance_setting_if_current(self, key: str, expected: str, value: str,
-                                   *, now: str | None = None) -> bool:
+                                   *, now: str | None = None,
+                                   lease_key: str | None = None,
+                                   lease_owner: str | None = None) -> bool:
         """Avança uma configuração somente se ninguém a moveu neste ciclo.
 
         O compare-and-set é usado pelo cursor do title-engine. Duas execuções
@@ -981,6 +983,10 @@ class Storage:
             self.conn.execute("BEGIN IMMEDIATE")
             current = self.get_setting(key, "")
             if current != expected:
+                self.conn.rollback()
+                return False
+            if lease_key and lease_owner and not self._named_lease_owned(
+                    self.get_setting(lease_key, ""), lease_owner):
                 self.conn.rollback()
                 return False
             self.conn.execute(
@@ -995,6 +1001,24 @@ class Storage:
             self.conn.rollback()
             raise
 
+    @staticmethod
+    def _decode_named_lease(raw: str) -> dict[str, Any]:
+        try:
+            value = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            value = {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _named_lease_owned(raw: str, owner: str, *, now: float | None = None) -> bool:
+        value = Storage._decode_named_lease(raw)
+        try:
+            expires_at = float(value.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        return (str(value.get("owner") or "") == owner and
+                expires_at > (now if now is not None else time.time()))
+
     def acquire_named_lease(self, key: str, owner: str, *,
                             ttl_seconds: int = 3600) -> bool:
         """Acquire a short-lived exclusive lease stored in ``app_settings``.
@@ -1008,20 +1032,48 @@ class Storage:
         try:
             self.conn.execute("BEGIN IMMEDIATE")
             raw = self.get_setting(key, "")
-            try:
-                current = json.loads(raw) if raw else {}
-            except (TypeError, ValueError):
-                current = {}
+            current = self._decode_named_lease(raw)
             current_owner = str(current.get("owner") or "")
-            current_expiry = float(current.get("expires_at") or 0)
+            try:
+                current_expiry = float(current.get("expires_at") or 0)
+            except (TypeError, ValueError):
+                current_expiry = 0
             if current_owner and current_expiry > now and current_owner != owner:
                 self.conn.rollback()
                 return False
+            generation = int(current.get("generation") or 0) + 1
+            if current_owner == owner and current_expiry > now:
+                generation = int(current.get("generation") or 1)
             self.conn.execute(
                 "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
                 "updated_at = excluded.updated_at",
-                (key, json.dumps({"owner": owner, "expires_at": expires_at}), _now()),
+                (key, json.dumps({"owner": owner, "fencing_token": owner,
+                                  "generation": generation, "expires_at": expires_at}),
+                 _now()),
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def renew_named_lease(self, key: str, owner: str, *,
+                          ttl_seconds: int = 3600) -> bool:
+        """Extend a live lease without allowing an expired owner to revive it."""
+        now = time.time()
+        expires_at = now + max(1, int(ttl_seconds))
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            raw = self.get_setting(key, "")
+            if not self._named_lease_owned(raw, owner, now=now):
+                self.conn.rollback()
+                return False
+            current = self._decode_named_lease(raw)
+            current["expires_at"] = expires_at
+            self.conn.execute(
+                "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = ?",
+                (json.dumps(current), _now(), key),
             )
             self.conn.commit()
             return True
@@ -1034,10 +1086,7 @@ class Storage:
         try:
             self.conn.execute("BEGIN IMMEDIATE")
             raw = self.get_setting(key, "")
-            try:
-                current = json.loads(raw) if raw else {}
-            except (TypeError, ValueError):
-                current = {}
+            current = self._decode_named_lease(raw)
             if str(current.get("owner") or "") != owner:
                 self.conn.rollback()
                 return False

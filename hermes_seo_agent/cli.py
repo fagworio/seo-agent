@@ -20,6 +20,7 @@ import datetime
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import date, timedelta
 from typing import Any
@@ -1693,6 +1694,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 for key in totals:
                     totals[key] += int(summary.get(key, summary.get("audited_urls", 0) if key == "urls" else 0) or 0)
                 payload_status = str(payload.get("status") or "").lower()
+                operational_status = str(summary.get("status") or payload_status).lower()
+                if operational_status == "skipped_locked":
+                    errors.append(
+                        f"{func.__name__}: skipped_locked (lease ocupado)"
+                    )
+                    return False
                 if payload_status in {"error", "partial", "failed"}:
                     errors.append(
                         f"{func.__name__}: status {payload_status}"
@@ -2690,6 +2697,11 @@ def _select_title_rows(rows: list[dict[str, Any]], *, last_url: str = "",
 
 _TITLE_ENGINE_LEASE_KEY = "title_engine:run"
 _TITLE_ENGINE_LEASE_TTL_SECONDS = 2 * 60 * 60
+_TITLE_ENGINE_LEASE_HEARTBEAT_SECONDS = 30
+
+
+class TitleEngineLeaseLost(RuntimeError):
+    """The title engine lost its fencing lease before a durable effect."""
 
 
 def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
@@ -2703,10 +2715,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             ttl_seconds=_TITLE_ENGINE_LEASE_TTL_SECONDS)
         if not acquired:
             _emit({
-                "status": "ok",
+                "status": "skipped_locked",
                 "summary": {
                     "command": "title-engine",
-                    "status": "skipped",
+                    "status": "skipped_locked",
                     "reason": "analysis_in_progress",
                 },
                 "findings": [],
@@ -2714,14 +2726,34 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 "approval_required": [],
             }, force_json=True)
             return 0
-        return _cmd_title_engine_impl(args, config)
+        last_heartbeat = 0.0
+
+        def lease_guard() -> None:
+            nonlocal last_heartbeat
+            now = time.monotonic()
+            if (last_heartbeat and
+                    now - last_heartbeat < _TITLE_ENGINE_LEASE_HEARTBEAT_SECONDS):
+                return
+            if not store.renew_named_lease(
+                    _TITLE_ENGINE_LEASE_KEY, owner,
+                    ttl_seconds=_TITLE_ENGINE_LEASE_TTL_SECONDS):
+                raise TitleEngineLeaseLost(
+                    "title-engine perdeu o lease de análise; efeitos interrompidos")
+            last_heartbeat = now
+
+        lease_guard()
+        return _cmd_title_engine_impl(
+            args, config, lease_guard=lease_guard,
+            lease_fence=(_TITLE_ENGINE_LEASE_KEY, owner))
     finally:
         if acquired:
             store.release_named_lease(_TITLE_ENGINE_LEASE_KEY, owner)
         store.close()
 
 
-def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
+def _cmd_title_engine_impl(args: argparse.Namespace, config: Any, *,
+                           lease_guard: Any = None,
+                           lease_fence: tuple[str, str] | None = None) -> int:
     """FASES 1–24: decisão de título por FAMÍLIAS de query (determinística).
 
     Substitui "a melhor query individual" por: famílias -> share de demanda ->
@@ -2772,12 +2804,17 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
 
     import re as _re
 
+    def _guard_lease() -> None:
+        if lease_guard is not None:
+            lease_guard()
+
     warnings: list[str] = []
     if not config.google_credentials:
         print(json.dumps({"status": "error",
                           "error": "GSC não configurado (GOOGLE_APPLICATION_CREDENTIALS)"},
                          ensure_ascii=False))
         return 2
+    _guard_lease()
 
     run_mode = (args.mode or config.title_engine_mode or "observe").lower()
     # Uma execução manual em observe é diagnóstico puro. Só um ciclo que
@@ -2809,6 +2846,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
     except ConnectorError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         return 2
+    _guard_lease()
 
     with Storage(config.sqlite_path) as store:
         # BASELINE TEMPORALMENTE CONSISTENTE: contexto de CTR calculado das
@@ -2846,6 +2884,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
     with Storage(config.sqlite_path) as store:
         analysis_cursor_before = store.get_setting(
             "title_engine:analysis_cursor", "")
+    _guard_lease()
 
     query_map: dict[str, list[dict[str, Any]]] = {}
     for item in gqp:
@@ -2960,6 +2999,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
             trends = {}
 
         for row in targets:
+            _guard_lease()
             url = (row.get("keys") or [""])[0]
             page = static.fetch_page(url)
             post = wp.get_post_by_slug(url.rstrip("/").split("/")[-1])
@@ -3063,6 +3103,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
                     cluster_signals, topic_score = {}, None
             rankability: dict[str, float] = {}
             for family in relevant:
+                _guard_lease()
                 real_signals: dict[str, Any] | None = None
                 if not args.no_deep_signals:
                     try:
@@ -3157,6 +3198,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
             def _evaluate_title(cand: dict[str, Any], ctx: dict[str, Any], /,
                                 **_kw: Any) -> dict[str, Any]:
                 """Mede cada título gerado e re-pontua SOBRE O TEXTO (FASE 7/15)."""
+                _guard_lease()
                 generated_titles = generate_candidates(
                     entity=entity, candidate=cand, current_title=current,
                     evidence_intents=cand.get("intents") or [],
@@ -3218,6 +3260,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
             diag["semantic_measured_count"] = semantic_measured
             diag["semantic_relevant_count"] = len(relevant)
             diag["semantic_evidence_input"] = _semantic_evidence_input
+            _guard_lease()
             contract = decide_title(
                 url=url, title=current,
                 page={"impressions": float(row.get("impressions", 0) or 0),
@@ -3240,6 +3283,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
                 signal_window_aligned=bool(signal_window.get("aligned")),
                 weights=weights, weights_version=weights_version,
                 min_family_impressions=min_query_impressions)
+            _guard_lease()
             contract["topic_authority"] = topic_score
             # Auditabilidade da escolha de entidade: origem vem do PRÓPRIO
             # resolver (canônica plausível > entidade do título > família), sem
@@ -3336,6 +3380,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
 
             if args.persist and contract["decision"] == "review_title" and not any(
                     c.get("url") == url for c in cases):
+                _guard_lease()
                 case = shadow_outcome_case(contract, source="title_engine")
                 persisted.append({"url": url, "outcome_id": persist_case(
                     store, case, keyword=entity)})
@@ -3348,6 +3393,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
         sample = stratified_sample(contracts, per_stratum=args.sample_per_decision)
 
     if args.persist:
+        _guard_lease()
         with Storage(config.sqlite_path) as store:
             store.save_signal("title_engine_telemetry", telemetry)
             if shadow:
@@ -3364,6 +3410,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
     # contrato de rollout continua bloqueando a fila; a aprovação humana altera
     # a decisão persistida e só então cria `title_execution`.
     if args.write or run_mode == "approval":
+        _guard_lease()
         fixes = [{"url": c["url"], "current_title": (c.get("current_title") or {}).get("title"),
                   "suggested_titles": c["suggested_titles"],
                   "decision": c["decision"], "confidence": c["confidence"],
@@ -3394,6 +3441,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
             try:
                 with WordPressClient(config) as _wp:
                     for _c in review_contracts:
+                        _guard_lease()
                         _u = str(_c.get("url") or "")
                         _pid = ((_c.get("page") or {}).get("post_id")
                                 or _c.get("post_id"))
@@ -3469,6 +3517,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
                 "execução direta removida; decisões seguem pela fila")
             owns = True
         if owns and built["actions"]:
+            _guard_lease()
             try:
                 from .lanes.title_decision import persist_actions
                 with Storage(config.sqlite_path) as q_store:
@@ -3524,6 +3573,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
             fechados = {"done": 0, "superseded": 0}
             outcomes_criados = 0
             if executadas or sem_mudanca:
+                _guard_lease()
                 agora = _dt_life.datetime.now(_dt_life.timezone.utc).isoformat()
                 with Storage(config.sqlite_path) as store_life:
                     # P0.6 (Sprint 1.2) — ORDEM: primeiro o OUTCOME, depois o
@@ -3534,6 +3584,7 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
                     # com commit=False e um commit por URL: sem estado parcial.
                     falhas: list[dict[str, Any]] = []
                     for acao in acoes_executadas:
+                        _guard_lease()
                         url_acao = str(acao.get("url") or "")
                         if not url_acao:
                             continue
@@ -3612,13 +3663,17 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any) -> int:
     cursor_checkpointed = False
     if (cursor_checkpoint_ready and last_scanned_url and
             last_scanned_url != analysis_cursor_before):
+        _guard_lease()
         with Storage(config.sqlite_path) as store:
             cursor_checkpointed = store.advance_setting_if_current(
                 "title_engine:analysis_cursor", analysis_cursor_before,
-                last_scanned_url)
+                last_scanned_url,
+                lease_key=lease_fence[0] if lease_fence else None,
+                lease_owner=lease_fence[1] if lease_fence else None)
         if cursor_checkpointed:
             analysis_cursor_after = last_scanned_url
 
+    _guard_lease()
     result = {
         "status": "ok",
         "summary": {"command": "title-engine", "mode": run_mode,

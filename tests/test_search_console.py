@@ -102,16 +102,27 @@ def test_setting_checkpoint_is_compare_and_set(tmp_path):
         assert storage.get_setting("title_engine:analysis_cursor") == "new"
 
 
-def test_named_lease_blocks_live_owner_and_recovers_after_expiry(tmp_path):
+def test_named_lease_blocks_live_owner_and_recovers_after_expiry(monkeypatch, tmp_path):
+    import hermes_seo_agent.storage.db as db_module
+
+    clock = [100.0]
+    monkeypatch.setattr(db_module.time, "time", lambda: clock[0])
     with Storage(str(tmp_path / "lease.db")) as storage:
         assert storage.acquire_named_lease("title_engine:run", "owner-a",
-                                          ttl_seconds=60) is True
+                                          ttl_seconds=10) is True
         assert storage.acquire_named_lease("title_engine:run", "owner-b",
-                                          ttl_seconds=60) is False
+                                          ttl_seconds=10) is False
+        assert storage.renew_named_lease("title_engine:run", "owner-a",
+                                         ttl_seconds=10) is True
         assert storage.release_named_lease("title_engine:run", "owner-b") is False
-        assert storage.release_named_lease("title_engine:run", "owner-a") is True
+        clock[0] = 111.0
+        assert storage.renew_named_lease("title_engine:run", "owner-a",
+                                         ttl_seconds=10) is False
         assert storage.acquire_named_lease("title_engine:run", "owner-b",
-                                          ttl_seconds=60) is True
+                                          ttl_seconds=10) is True
+        assert storage.advance_setting_if_current(
+            "title_engine:analysis_cursor", "", "stale-owner",
+            lease_key="title_engine:run", lease_owner="owner-a") is False
 
 
 def test_inspect_url(monkeypatch):

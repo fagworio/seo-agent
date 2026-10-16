@@ -7,9 +7,9 @@ reimplementing purge/rebuild — dry-run blocks the actual command.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
-import json
 from pathlib import Path
 from typing import Any
 
@@ -76,11 +76,29 @@ class WseTrigger:
             payload = json.loads(raw) if raw else {}
         except (TypeError, ValueError):
             return {"state": "unknown", "operation_id": None, "raw": None}
+        operations = self._operation_records(payload)
         return {
-            "state": self._classify_payload(payload),
-            "operation_id": self._extract_operation_id(payload),
+            "state": (operations[0]["state"] if len(operations) == 1
+                       else (self._classify_payload(payload)
+                             if not operations else "unknown")),
+            "operation_id": (operations[0]["operation_id"]
+                             if len(operations) == 1 else None),
+            "operations": operations,
             "raw": payload,
         }
+
+    @classmethod
+    def _classify_values(cls, values: list[str]) -> str:
+        text = " ".join(values)
+        if any(token in text for token in
+               ("running", "pending", "queued", "building", "in_progress")):
+            return "active"
+        if any(token in text for token in
+               ("complete", "completed", "success", "succeeded", "done")):
+            return "complete"
+        if any(token in text for token in ("idle", "failed", "failure", "error")):
+            return "idle"
+        return "unknown"
 
     @classmethod
     def _classify_payload(cls, payload: Any) -> str:
@@ -97,36 +115,46 @@ class WseTrigger:
                         stack.append(value)
             elif isinstance(current, list):
                 stack.extend(current)
-        text = " ".join(values)
-        if any(token in text for token in
-               ("running", "pending", "queued", "building", "in_progress")):
-            return "active"
-        if any(token in text for token in
-               ("complete", "completed", "success", "succeeded", "done")):
-            return "complete"
-        if any(token in text for token in ("idle", "failed", "failure", "error")):
-            return "idle"
-        return "unknown"
+        return cls._classify_values(values)
 
     @classmethod
-    def _extract_operation_id(cls, payload: Any) -> str | None:
+    def _operation_records(cls, payload: Any) -> list[dict[str, Any]]:
         keys = {"operation_id", "operationid", "job_id", "jobid", "request_id",
                 "requestid", "rebuild_id", "rebuildid"}
+        status_keys = {"status", "state", "phase", "rebuild_status", "job_status"}
         stack = [(payload, None)]
+        records: list[dict[str, Any]] = []
         while stack:
             current, scope = stack.pop()
             if isinstance(current, dict):
+                operation_id: str | None = None
+                states: list[str] = []
                 for key, value in current.items():
                     normalized = str(key).lower().replace("-", "_")
                     scoped_id = normalized == "id" and scope in {
-                        "job", "operation", "rebuild", "request"}
+                        "job", "jobs", "operation", "operations", "rebuild",
+                        "rebuilds", "request", "requests"}
                     if (normalized in keys or scoped_id) and value not in (None, ""):
-                        return str(value)
+                        operation_id = str(value)
+                    if normalized in status_keys:
+                        states.append(str(value).strip().lower())
                     if isinstance(value, (dict, list)):
                         stack.append((value, normalized))
+                if operation_id:
+                    records.append({"operation_id": operation_id,
+                                    "state": cls._classify_values(states),
+                                    "raw": current})
             elif isinstance(current, list):
                 stack.extend((value, scope) for value in current)
-        return None
+        unique: dict[str, dict[str, Any]] = {}
+        for record in records:
+            unique.setdefault(record["operation_id"], record)
+        return list(unique.values())
+
+    @classmethod
+    def _extract_operation_id(cls, payload: Any) -> str | None:
+        records = cls._operation_records(payload)
+        return records[0]["operation_id"] if len(records) == 1 else None
 
     @classmethod
     def extract_operation_id(cls, result: dict[str, Any]) -> str | None:

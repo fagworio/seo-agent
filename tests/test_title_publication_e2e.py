@@ -104,6 +104,16 @@ class _UnknownAfterWseRequest(_CrashAfterWseRequest):
         return "unknown"
 
 
+class _StatusUnavailableAfterWseRequest(_CrashAfterWseRequest):
+    def rebuild_state(self) -> str:
+        raise WsePreflightError("wp-cli temporariamente indisponível")
+
+
+class _IdleAfterWseRequest(_CrashAfterWseRequest):
+    def rebuild_state(self) -> str:
+        return "idle"
+
+
 class _NonzeroWse:
     calls = 0
 
@@ -449,6 +459,56 @@ def test_unknown_wse_state_checks_public_html_before_waiting(
     assert result["status"] == "executed"
     assert _UnknownAfterWseRequest.calls == 1
     assert fake_wp.writes == [(7, {"rank_math_title": "Título novo"})]
+
+
+@pytest.mark.parametrize("wse_cls", [_StatusUnavailableAfterWseRequest, _IdleAfterWseRequest])
+def test_uncertain_wse_reconciliation_preserves_intent_without_rebuild(
+        monkeypatch, tmp_path, wse_cls):
+    """Consulta indisponível/idle não prova que o rebuild não foi aceito."""
+    db = str(tmp_path / f"title-rebuild-uncertain-{wse_cls.__name__}.db")
+    config = Config(wordpress_url="http://localhost", sqlite_path=db,
+                    static_site_url="https://example.com", dry_run=False,
+                    title_engine_mode="auto", title_rebuild_kind="smart",
+                    wse_workdir=str(tmp_path))
+    fake_wp = _FakeWP()
+    fake_static = _FakeStatic()
+    wse_cls.calls = 0
+
+    import hermes_seo_agent.config as config_module
+    import hermes_seo_agent.connectors.static_site as static_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+    import hermes_seo_agent.tools.wse_trigger as wse_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    monkeypatch.setattr(static_module, "StaticSiteClient", lambda cfg: fake_static)
+    monkeypatch.setattr(wse_module, "WseTrigger", wse_cls)
+
+    decision = make_decision(
+        url="https://example.com/post", post_id=7,
+        before="Título antigo", after="Título novo", confidence=0.9,
+        rollout={"writes_allowed": True},
+    )
+    payload = {**decision.as_dict(), "rebuild_kind": "smart"}
+    with Storage(db) as store:
+        persist_decision(store, decision)
+
+    with pytest.raises(KeyboardInterrupt):
+        handler_title_execution(
+            {"work_item_id": decision.decision_id, "payload": payload},
+            SimpleNamespace(db_path=db),
+        )
+
+    with pytest.raises(RuntimeError, match="HTML público pendente"):
+        handler_title_execution(
+            {"work_item_id": decision.decision_id, "payload": payload},
+            SimpleNamespace(db_path=db),
+        )
+
+    assert wse_cls.calls == 1
+    with Storage(db) as store:
+        saved = store.title_decision(decision.decision_id)
+    assert saved["publication_status"] == "public_pending"
 
 
 def test_nonzero_wse_result_preserves_intent_for_reconciliation(

@@ -166,8 +166,28 @@ def test_wse_rebuild_info_classifies_state_and_operation(monkeypatch):
     assert trigger.rebuild_info() == {
         "state": "active",
         "operation_id": "job-42",
+        "operations": [{
+            "operation_id": "job-42",
+            "state": "active",
+            "raw": {"id": "job-42", "status": "running"},
+        }],
         "raw": {"job": {"id": "job-42", "status": "running"}},
     }
+
+
+def test_wse_rebuild_info_does_not_mix_multiple_operations():
+    trigger = WseTrigger(_config(dry_run=False))
+    payload = {
+        "jobs": [
+            {"id": "old", "status": "complete"},
+            {"id": "current", "status": "running"},
+        ]
+    }
+    trigger.status = lambda: {"executed": True, "stdout": json.dumps(payload)}
+    info = trigger.rebuild_info()
+    assert info["state"] == "unknown"
+    assert info["operation_id"] is None
+    assert {op["operation_id"] for op in info["operations"]} == {"old", "current"}
 
 
 # -- Notifier ---------------------------------------------------------------
