@@ -639,6 +639,29 @@ def test_aprovacao_humana_supervisionada_constroi_primeira_amostra(tmp_path):
         assert saved["rollout"]["human_approved"] is True
 
 
+def test_reanalise_nao_revoga_aprovacao_humana_em_andamento(tmp_path):
+    """O produtor de evidência não pode desfazer uma aprovação já enfileirada."""
+    db = str(tmp_path / "approval-preserved.db")
+    with Storage(db) as store:
+        original = _decisao(
+            confidence=0.1, requires_review=True,
+            rollout={"mode": "approval", "writes_allowed": False})
+        TD.persist_decision(store, original)
+        TD.enqueue_human_approved_execution(
+            store, store.title_decision(original.decision_id))
+
+        # Simula a próxima análise persistindo novamente a proposta original.
+        TD.persist_decision(store, original)
+
+        saved = store.title_decision(original.decision_id)
+        assert saved["status"] == "enqueued"
+        assert saved["requires_review"] is False
+        assert saved["not_executable_reason"] is None
+        assert saved["rollout"]["human_approved"] is True
+        assert saved["rollout"]["writes_allowed"] is True
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+
+
 def test_outcome_id_fica_vinculado_a_decisao(tmp_path):
     db = str(tmp_path / "outcome-link.db")
     with Storage(db) as store:

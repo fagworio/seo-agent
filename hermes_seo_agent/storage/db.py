@@ -3678,6 +3678,18 @@ class Storage:
 
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         antes = self.title_decision(decision_id)
+        rollout_to_store = dict(rollout or {})
+        requires_review_to_store = bool(requires_review)
+        not_executable_to_store = not_executable_reason
+        # Reanálises são produtoras de evidência, não revogadoras de
+        # autorização. Uma aprovação humana válida precisa sobreviver ao
+        # próximo ciclo enquanto a decisão ainda estiver em trânsito. A
+        # revogação continua explícita via mark_title_decision_review().
+        if (antes and antes.get("status") in {"decided", "enqueued"}
+                and bool((antes.get("rollout") or {}).get("human_approved"))):
+            rollout_to_store = dict(antes.get("rollout") or {})
+            requires_review_to_store = bool(antes.get("requires_review"))
+            not_executable_to_store = antes.get("not_executable_reason")
         self.conn.execute(
             "INSERT INTO title_decision (decision_id, url, post_id, field, before, "
             "after, action_fingerprint, decision_version, evidence_json, "
@@ -3694,9 +3706,9 @@ class Storage:
             (decision_id, url, post_id, field, before, after, action_fingerprint,
              int(decision_version),
              _json.dumps(evidence or {}, ensure_ascii=False),
-             _json.dumps(rollout or {}, ensure_ascii=False), confidence,
-             1 if requires_review else 0, 1 if before_known else 0, status,
-             not_executable_reason, decided_at or now, now))
+             _json.dumps(rollout_to_store, ensure_ascii=False), confidence,
+             1 if requires_review_to_store else 0, 1 if before_known else 0, status,
+             not_executable_to_store, decided_at or now, now))
         if commit:
             self.conn.commit()
         return {"decision_id": decision_id, "url": url,
@@ -3749,6 +3761,20 @@ class Storage:
             "publication_checked_at = ?, publication_error = ?, updated_at = ? "
             "WHERE decision_id = ? AND status NOT IN "
             "('executed', 'stale', 'rejected', 'superseded')",
+            (now, str(reason)[:500], now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
+    def reset_title_rebuild_request(self, decision_id: str, *, reason: str,
+                                    commit: bool = True) -> bool:
+        """Remove a request that failed comprovadamente no preflight local."""
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET publication_status = 'not_checked', "
+            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "WHERE decision_id = ? AND publication_status = 'rebuild_requested' "
+            "AND status NOT IN ('executed', 'stale', 'rejected', 'superseded')",
             (now, str(reason)[:500], now, decision_id))
         if commit:
             self.conn.commit()

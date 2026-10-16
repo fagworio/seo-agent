@@ -146,7 +146,7 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
     from hermes_seo_agent.connectors.static_site import StaticSiteClient, title_matches_visible
     from hermes_seo_agent.executor.executor import Executor
     from hermes_seo_agent.storage.db import Storage
-    from hermes_seo_agent.tools.wse_trigger import WseTrigger
+    from hermes_seo_agent.tools.wse_trigger import WsePreflightError, WseTrigger
     from hermes_seo_agent.lanes.title_decision import (
         NOT_EXEC_LOW_CONFIDENCE, _rollout_allows_write, production_ready)
 
@@ -253,6 +253,30 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # REST confirma apenas a escrita no WordPress. O HTML público é uma
             # fronteira separada: sem ela, a decisão não pode fechar como
             # executada nem gerar outcome mensurável.
+            if decision.get("publication_status") == "rebuild_requested":
+                # A intenção pode ter sido gravada antes de o processo cair,
+                # antes do WSE aceitar, ou depois de ele aceitar. Consultar o
+                # estado distingue esses casos sem reenviar cegamente.
+                try:
+                    rebuild_state = WseTrigger(config).rebuild_state()
+                except WsePreflightError as exc:
+                    rebuild_state = "idle"
+                    store.reset_title_rebuild_request(
+                        decision_id,
+                        reason=f"reconciliação WSE sem preflight: {exc}")
+                except Exception:
+                    rebuild_state = "unknown"
+                if rebuild_state in {"active", "complete"}:
+                    store.mark_title_public_pending(
+                        decision_id, reason=f"WSE reconciliado: {rebuild_state}")
+                    decision["publication_status"] = "public_pending"
+                elif rebuild_state == "idle":
+                    store.reset_title_rebuild_request(
+                        decision_id, reason="WSE sem rebuild ativo")
+                    decision["publication_status"] = "not_checked"
+                else:
+                    raise PublicVerificationPending(
+                        "estado do WSE inconclusivo; rebuild não reenviado")
             needs_rebuild = rebuild_kind and (
                 decision.get("publication_status") not in {
                     "rebuild_requested", "public_pending", "public_verified"})
@@ -264,15 +288,27 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                     decision_id, reason="rebuild público solicitado")
                 try:
                     rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                except WsePreflightError as exc:
+                    # A configuração local falhou antes de qualquer contato
+                    # externo. Remover a intenção permite corrigir WSE_WORKDIR
+                    # ou PATH e tentar o rebuild de forma segura.
+                    reason = (f"rebuild não iniciado: {type(exc).__name__}: "
+                              f"{exc}")
+                    store.reset_title_rebuild_request(decision_id, reason=reason)
+                    raise RuntimeError(reason) from exc
                 except Exception as exc:
                     reason = (f"rebuild indisponível: {type(exc).__name__}: "
                               f"{exc}")
-                    store.mark_title_public_pending(decision_id, reason=reason)
+                    # Timeout/processo interrompido pode ter sido aceito pelo
+                    # WSE. A intenção permanece `rebuild_requested`; não
+                    # reenviar cegamente é mais seguro que duplicar o rebuild.
                     raise RuntimeError(reason) from exc
                 if not rebuild.get("executed"):
                     reason = (f"rebuild não executado: "
                               f"{rebuild.get('stderr') or rebuild}")
-                    store.mark_title_public_pending(decision_id, reason=reason)
+                    # O processo terminou e confirmou falha antes do aceite;
+                    # a próxima tentativa pode corrigir o WSE e reenviar.
+                    store.reset_title_rebuild_request(decision_id, reason=reason)
                     raise RuntimeError(
                         reason)
                 # Marca a solicitação antes do readback. Retries durante a

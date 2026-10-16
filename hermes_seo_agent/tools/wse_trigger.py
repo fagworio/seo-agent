@@ -19,6 +19,10 @@ class WseError(RuntimeError):
     """Raised when wp-cli is missing or the command fails."""
 
 
+class WsePreflightError(WseError):
+    """Falha comprovada antes de qualquer chamada ao WSE."""
+
+
 class WseTrigger:
     def __init__(self, config: Config, *, wp_cli: str | None = None,
                  workdir: str | None = None):
@@ -46,14 +50,54 @@ class WseTrigger:
     def status(self) -> dict[str, Any]:
         return self._run(["wse", "status", "--format=json"])
 
+    def rebuild_state(self) -> str:
+        """Classifica o estado do WSE para reconciliar uma chamada incerta.
+
+        O plugin pode variar os nomes dos campos; estados não reconhecidos
+        permanecem ``unknown`` para que o caller não reenvie uma solicitação
+        potencialmente duplicada.
+        """
+        result = self.status()
+        if not result.get("executed"):
+            return "unknown"
+        raw = str(result.get("stdout") or "")
+        try:
+            import json
+            payload = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            return "unknown"
+        values: list[str] = []
+        stack = [payload]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if key.lower() in {"status", "state", "phase", "rebuild_status",
+                                       "job_status"}:
+                        values.append(str(value).strip().lower())
+                    elif isinstance(value, (dict, list)):
+                        stack.append(value)
+            elif isinstance(current, list):
+                stack.extend(current)
+        text = " ".join(values)
+        if any(token in text for token in
+               ("running", "pending", "queued", "building", "in_progress")):
+            return "active"
+        if any(token in text for token in
+               ("complete", "completed", "success", "succeeded", "done")):
+            return "complete"
+        if any(token in text for token in ("idle", "failed", "failure", "error")):
+            return "idle"
+        return "unknown"
+
     def _run(self, args: list[str]) -> dict[str, Any]:
         if not self.workdir:
-            raise WseError("WSE_WORKDIR não configurado")
+            raise WsePreflightError("WSE_WORKDIR não configurado")
         workdir = Path(self.workdir).expanduser()
         if not workdir.is_dir():
-            raise WseError(f"WSE_WORKDIR não é diretório: {workdir}")
+            raise WsePreflightError(f"WSE_WORKDIR não é diretório: {workdir}")
         if not shutil.which(self.wp_cli):
-            raise WseError(f"wp-cli ({self.wp_cli}) not found on PATH")
+            raise WsePreflightError(f"wp-cli ({self.wp_cli}) not found on PATH")
         try:
             proc = subprocess.run(
                 [self.wp_cli, *args],

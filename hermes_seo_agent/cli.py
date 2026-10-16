@@ -2608,6 +2608,25 @@ def _cmd_title_opportunities(args: argparse.Namespace, config: Any) -> int:
     return 0
 
 
+def _rotate_title_rows(rows: list[dict[str, Any]], last_url: str = "") -> tuple[
+        list[dict[str, Any]], str | None]:
+    """Começa após a última URL analisada e devolve a ordem circular.
+
+    O marcador é a URL, não um índice: mudanças de impressões ou inserções no
+    resultado do GSC não fazem o cursor voltar silenciosamente ao topo.
+    """
+    if not rows:
+        return [], None
+    start = 0
+    if last_url:
+        for index, row in enumerate(rows):
+            if str((row.get("keys") or [""])[0]) == last_url:
+                start = (index + 1) % len(rows)
+                break
+    ordered = rows[start:] + rows[:start]
+    return ordered, str((ordered[0].get("keys") or [""])[0])
+
+
 def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     """FASES 1–24: decisão de título por FAMÍLIAS de query (determinística).
 
@@ -2725,6 +2744,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                 or args.include_non_anomalous):
             anomalous.append(row)
     anomalous.sort(key=lambda r: float(r.get("impressions", 0)), reverse=True)
+    with Storage(config.sqlite_path) as store:
+        analysis_cursor_before = store.get_setting(
+            "title_engine:analysis_cursor", "")
+    ordered_anomalous, rotation_start_url = _rotate_title_rows(
+        anomalous, analysis_cursor_before)
+    last_considered_url = analysis_cursor_before
 
     query_map: dict[str, list[dict[str, Any]]] = {}
     for item in gqp:
@@ -2752,10 +2777,11 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     targets: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     with Storage(config.sqlite_path) as store:
-        for row in anomalous:
+        for row in ordered_anomalous:
             if len(targets) >= cap:
                 break
             url = (row.get("keys") or [""])[0]
+            last_considered_url = url
             # FASE 9/10 (roadmap): quando o motor vai ESCREVER (--write, isto é
             # modo auto/approval), a revisão pendente NAO bloqueia a URL — o item
             # da Caixa é a decisão JA tomada, e quem a aplica é o executor de
@@ -3227,6 +3253,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             if shadow:
                 persist_report(store, shadow)
 
+    # Só avança depois que a análise terminou. Uma falha de GSC, WP ou HTML
+    # não consome a posição e pode ser repetida no próximo ciclo.
+    if last_considered_url and last_considered_url != analysis_cursor_before:
+        with Storage(config.sqlite_path) as store:
+            store.set_setting("title_engine:analysis_cursor", last_considered_url)
+
     if args.explain:
         for contract in contracts:
             if contract["decision"] == "review_title":
@@ -3474,6 +3506,9 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         "summary": {"command": "title-engine", "mode": run_mode,
                     "generation_mode": gen_mode,
                     "analysis_limit": analysis_limit,
+                    "analysis_cursor_before": analysis_cursor_before,
+                    "analysis_cursor_after": last_considered_url,
+                    "analysis_rotation_start": rotation_start_url,
                     "pages_analyzed": len(contracts),
                     "review_title": telemetry["review_title"],
                     "no_title_change": telemetry["no_title_change"],

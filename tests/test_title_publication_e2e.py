@@ -26,6 +26,7 @@ from hermes_seo_agent.lanes.title_decision import (
 )
 from hermes_seo_agent.lanes.worker import LaneWorker
 from hermes_seo_agent.storage.db import Storage
+from hermes_seo_agent.tools.wse_trigger import WsePreflightError
 
 
 class _FakeWP:
@@ -85,6 +86,22 @@ class _CrashAfterWseRequest:
     def rebuild(self, kind: str) -> dict[str, object]:
         self.__class__.calls += 1
         raise KeyboardInterrupt("process interrupted after WSE request")
+
+    def rebuild_state(self) -> str:
+        return "complete"
+
+
+class _PreflightThenSuccess:
+    calls = 0
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    def rebuild(self, kind: str) -> dict[str, object]:
+        self.__class__.calls += 1
+        if self.__class__.calls == 1:
+            raise WsePreflightError("WSE_WORKDIR não é diretório")
+        return {"executed": True, "kind": kind}
 
 
 def _worker(db: str, config: Config, worker_id: str) -> dict:
@@ -355,3 +372,52 @@ def test_rebuild_intent_precedes_external_call_and_prevents_duplicate(
     with Storage(db) as store:
         assert store.title_decision(decision.decision_id)["publication_status"] == (
             "public_verified")
+
+
+def test_wse_preflight_failure_allows_safe_rebuild_retry(monkeypatch, tmp_path):
+    """Falha local comprovada não deixa a decisão presa em public_pending."""
+    db = str(tmp_path / "title-rebuild-preflight.db")
+    config = Config(wordpress_url="http://localhost", sqlite_path=db,
+                    static_site_url="https://example.com", dry_run=False,
+                    title_engine_mode="auto", title_rebuild_kind="smart",
+                    wse_workdir=str(tmp_path))
+    fake_wp = _FakeWP()
+    fake_static = _FakeStatic(title="Título novo | Marca")
+    _PreflightThenSuccess.calls = 0
+
+    import hermes_seo_agent.config as config_module
+    import hermes_seo_agent.connectors.static_site as static_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+    import hermes_seo_agent.tools.wse_trigger as wse_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    monkeypatch.setattr(static_module, "StaticSiteClient", lambda cfg: fake_static)
+    monkeypatch.setattr(wse_module, "WseTrigger", _PreflightThenSuccess)
+
+    decision = make_decision(
+        url="https://example.com/post", post_id=7,
+        before="Título antigo", after="Título novo", confidence=0.9,
+        rollout={"writes_allowed": True},
+    )
+    payload = {**decision.as_dict(), "rebuild_kind": "smart"}
+    with Storage(db) as store:
+        persist_decision(store, decision)
+
+    with pytest.raises(RuntimeError, match="rebuild não iniciado"):
+        handler_title_execution(
+            {"work_item_id": decision.decision_id, "payload": payload},
+            SimpleNamespace(db_path=db),
+        )
+    with Storage(db) as store:
+        assert store.title_decision(decision.decision_id)["publication_status"] == (
+            "not_checked")
+
+    result = handler_title_execution(
+        {"work_item_id": decision.decision_id, "payload": payload},
+        SimpleNamespace(db_path=db),
+    )
+
+    assert result["status"] == "executed"
+    assert _PreflightThenSuccess.calls == 2
+    assert fake_wp.writes == [(7, {"rank_math_title": "Título novo"})]

@@ -90,6 +90,9 @@ No motor de títulos, `TITLE_ANALYSIS_LIMIT` controla quantas URLs entram na
 análise de cada ciclo (padrão 50), enquanto `TITLE_MAX_WRITES_PER_CYCLE`
 controla quantas publicações o worker pode executar (padrão 10). Analisar mais
 oportunidades não libera mais escritas automaticamente.
+O cursor `title_engine:analysis_cursor` também é persistido no SQLite para que
+ciclos sucessivos avancem pelas URLs ordenadas, em vez de recomeçarem sempre
+pelas mesmas páginas de maior impressão.
 
 ## Roadmap editorial (ROADMAP_EDITORIAL.md)
 
