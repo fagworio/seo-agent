@@ -13,7 +13,7 @@ from typing import Any
 
 # Bump quando _SCHEMA ou _migrate() mudarem (migrations versionadas por
 # PRAGMA user_version: rodam UMA vez por banco, não a cada Storage()).
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 # Lifecycle canônico de work item: estados terminais e o que cada um ainda pode
 # virar. Um terminal NÃO regride/volta para a fila (evita ação duplicada);
@@ -689,6 +689,9 @@ CREATE TABLE IF NOT EXISTS title_decision (
     enqueued_at TEXT,
     executed_at TEXT,
     outcome_id TEXT,
+    publication_status TEXT NOT NULL DEFAULT 'not_checked',
+    publication_checked_at TEXT,
+    publication_error TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_title_decision_url ON title_decision(url);
@@ -867,6 +870,9 @@ class Storage:
             # Backfill para 1: as decisoes ja' gravadas vieram de leitura do motor.
             "title_decision": [
                 ("before_known", "INTEGER NOT NULL DEFAULT 1"),
+                ("publication_status", "TEXT NOT NULL DEFAULT 'not_checked'"),
+                ("publication_checked_at", "TEXT"),
+                ("publication_error", "TEXT"),
             ],
         }
         editorial_extra = [
@@ -3703,7 +3709,7 @@ class Storage:
             "action_fingerprint, decision_version, evidence_json, rollout_json, "
             "confidence, requires_review, before_known, status, "
             "not_executable_reason, decided_at, enqueued_at, executed_at, "
-            "outcome_id "
+            "outcome_id, publication_status, publication_checked_at, publication_error "
             "FROM title_decision WHERE decision_id = ?",
             (decision_id,)).fetchone()
         if row is None:
@@ -3723,7 +3729,37 @@ class Storage:
                 "before_known": bool(row[12]),
                 "status": row[13], "not_executable_reason": row[14],
                 "decided_at": row[15], "enqueued_at": row[16],
-                "executed_at": row[17], "outcome_id": normalized_outcome_id}
+                "executed_at": row[17], "outcome_id": normalized_outcome_id,
+                "publication_status": row[19] or "not_checked",
+                "publication_checked_at": row[20],
+                "publication_error": row[21]}
+
+    def mark_title_public_pending(self, decision_id: str, *, reason: str,
+                                  commit: bool = True) -> bool:
+        """Registra WP verificado, mas HTML público ainda não propagado."""
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET publication_status = 'public_pending', "
+            "publication_checked_at = ?, publication_error = ?, updated_at = ? "
+            "WHERE decision_id = ? AND status NOT IN "
+            "('executed', 'stale', 'rejected', 'superseded')",
+            (now, str(reason)[:500], now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
+
+    def mark_title_public_verified(self, decision_id: str,
+                                   *, commit: bool = True) -> bool:
+        """Confirma que o título esperado está visível no site público."""
+        now = _now()
+        cur = self.conn.execute(
+            "UPDATE title_decision SET publication_status = 'public_verified', "
+            "publication_checked_at = ?, publication_error = NULL, updated_at = ? "
+            "WHERE decision_id = ? AND status NOT IN ('stale', 'rejected', 'superseded')",
+            (now, now, decision_id))
+        if commit:
+            self.conn.commit()
+        return bool(cur.rowcount)
 
     def title_decision_by_url(self, url: str, after: str | None = None) -> dict[str, Any] | None:
         """Decisao mais recente da URL (opcionalmente de um `after` especifico)."""

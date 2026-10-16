@@ -58,6 +58,10 @@ class Config:
     title_engine_mode: str = "observe"
     title_top_families: int = 5
     title_max_len: int = 60
+    # Verificação do título no HTML público é carregada no payload da decisão.
+    # O rebuild fica opt-in porque cada instalação pode usar um runner diferente;
+    # quando configurado, a fila dispara o WP Static Engine antes do readback.
+    title_rebuild_kind: str = ""
     # Roda o shadow mode do motor de título dentro do `schedule` (F21/F22):
     # observa, compara com o motor atual e persiste — nunca publica.
     title_engine_in_schedule: bool = True
@@ -332,6 +336,7 @@ def load_config() -> Config:
         title_engine_mode=_env("TITLE_ENGINE_MODE", "observe").strip().lower() or "observe",
         title_top_families=_int("TITLE_TOP_FAMILIES", 5, 1, 20),
         title_max_len=_int("TITLE_MAX_LEN", 60, 20, 200),
+        title_rebuild_kind=_env("TITLE_REBUILD_KIND", "").strip().lower(),
         title_engine_in_schedule=_bool("TITLE_ENGINE_IN_SCHEDULE", True),
         title_max_writes_per_cycle=_int("TITLE_MAX_WRITES_PER_CYCLE", 10, 0, 100),
         title_decision_owns_writes=_bool("TITLE_DECISION_OWNS_WRITES", True),

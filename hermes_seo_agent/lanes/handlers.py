@@ -129,8 +129,10 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
     """
     from hermes_seo_agent.config import load_config
     from hermes_seo_agent.connectors.wordpress import WordPressClient
+    from hermes_seo_agent.connectors.static_site import StaticSiteClient, title_matches_visible
     from hermes_seo_agent.executor.executor import Executor
     from hermes_seo_agent.storage.db import Storage
+    from hermes_seo_agent.tools.wse_trigger import WseTrigger
 
     payload = item.get("payload") or {}
     decision_id = str(payload.get("decision_id") or item.get("work_item_id") or "")
@@ -160,6 +162,10 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
         },
     }
 
+    public_verification = bool(payload.get("public_verification", False))
+    rebuild_kind = str(payload.get("rebuild_kind") or
+                       getattr(config, "title_rebuild_kind", "") or "").strip()
+
     with Storage(db_path) as store, WordPressClient(config) as wp:
         executor = Executor(config, wp, store)
 
@@ -176,6 +182,41 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # ou a confirmação. Recupera o registro durável em vez de reescrever.
             executed_action = store.executed_action_for_work_item(decision_id)
         if executed_action is not None:
+            # REST confirma apenas a escrita no WordPress. O HTML público é uma
+            # fronteira separada: sem ela, a decisão não pode fechar como
+            # executada nem gerar outcome mensurável.
+            if public_verification:
+                decision = store.title_decision(decision_id) or {}
+                needs_rebuild = rebuild_kind and (
+                    bool(outcome.get("executed")) or
+                    decision.get("publication_status") == "public_pending")
+                if needs_rebuild:
+                    try:
+                        rebuild = WseTrigger(config).rebuild(rebuild_kind)
+                        if not rebuild.get("executed"):
+                            raise RuntimeError(
+                                f"rebuild não executado: {rebuild.get('stderr') or rebuild}")
+                    except Exception as exc:
+                        reason = f"rebuild público pendente: {type(exc).__name__}: {exc}"
+                        store.mark_title_public_pending(decision_id, reason=reason)
+                        raise RuntimeError(reason) from exc
+                try:
+                    with StaticSiteClient(config) as static:
+                        page = static.fetch_page(url)
+                    visible = str(getattr(page, "title", "") or "")
+                    status_code = int(getattr(page, "status_code", 0) or 0)
+                    if status_code != 200 or not title_matches_visible(after, visible):
+                        reason = (f"HTML público pendente: HTTP {status_code}, "
+                                  f"título visível={visible!r}")
+                        store.mark_title_public_pending(decision_id, reason=reason)
+                        raise RuntimeError(reason)
+                except RuntimeError:
+                    raise
+                except Exception as exc:
+                    reason = f"verificação pública indisponível: {type(exc).__name__}: {exc}"
+                    store.mark_title_public_pending(decision_id, reason=reason)
+                    raise RuntimeError(reason) from exc
+                store.mark_title_public_verified(decision_id, commit=False)
             action_fingerprint = str(executed_action.get("fingerprint") or "")
             implemented_at = str(
                 executed_action.get("executed_at")

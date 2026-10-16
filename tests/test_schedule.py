@@ -212,6 +212,28 @@ def test_schedule_does_not_advance_gsc_checkpoint_when_title_stage_fails(
         assert worker_calls == [True]
 
 
+def test_schedule_drena_aprovacoes_fora_do_modo_auto(monkeypatch, capsys, tmp_path):
+    """Uma decisão aprovada não pode ficar presa porque o rollout é approval."""
+    db = tmp_path / "approval-worker.db"
+    _now_patch(monkeypatch, hour=12)
+    config = dataclasses.replace(_config(db), title_engine_mode="approval")
+    for name in ("_cmd_audit", "_cmd_refresh_data", "_cmd_inspect",
+                 "_cmd_post_audit", "_cmd_opportunities", "_cmd_ga4",
+                 "_cmd_corpus"):
+        monkeypatch.setattr(f"hermes_seo_agent.cli.{name}", lambda *a, **k: None)
+
+    worker_calls = []
+    monkeypatch.setattr(
+        "hermes_seo_agent.cli._cmd_lanes_run",
+        lambda args, config: worker_calls.append(args.lane) or 0,
+    )
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0),
+                         config) == 0
+    json.loads(capsys.readouterr().out)
+    assert worker_calls == ["title_execution"]
+
+
 def test_schedule_treats_json_error_as_failed_stage(monkeypatch, capsys, tmp_path):
     db = tmp_path / "json-error.db"
     _now_patch(monkeypatch, hour=6)

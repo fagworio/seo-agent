@@ -11,6 +11,7 @@ import re
 import gzip
 import hashlib
 import json
+import unicodedata
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -20,6 +21,29 @@ from ..config import Config
 from .base import ConnectorError, HttpClient
 
 _SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+
+
+def title_matches_visible(expected: str, visible: str) -> bool:
+    """Confere título publicado, tolerando sufixo de marca/template.
+
+    Não aceita conteúdo antigo como prefixo do novo: isso evita classificar um
+    rebuild pendente como sucesso só porque o título esperado é menor.
+    """
+    def norm(value: str) -> str:
+        value = (value or "").lower().strip()
+        value = "".join(char for char in unicodedata.normalize("NFKD", value)
+                        if not unicodedata.combining(char))
+        return re.sub(r"\s+", " ", value)
+
+    exp, vis = norm(expected), norm(visible)
+    if len(exp) < 3 or len(vis) < 3:
+        return bool(exp) and exp == vis
+    if exp == vis or vis in exp:
+        return True
+    if exp in vis:
+        rest = vis[vis.index(exp) + len(exp):].lstrip()
+        return bool(rest) and rest[0] in {"|", "-", "—", "–", ":"}
+    return False
 
 
 class PageSnapshot:

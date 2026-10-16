@@ -1969,15 +1969,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         # Pending title work is independent of the GSC checkpoint. A temporary
         # collection failure must not strand decisions already eligible to run.
-        if str(getattr(config, "title_engine_mode", "observe") or "observe").lower() == "auto":
-            _run_stage(
-                _cmd_lanes_run, "title-worker", retry_hours=1,
-                args=_ns(lane="title_execution", worker_id=None,
-                          lease_seconds=300, limit=None,
-                          max_items=getattr(config, "title_max_writes_per_cycle", 10),
-                          no_heartbeat=False, json=True),
-                config=config)
-            steps.append("title-worker")
+        # A fila contém decisões já autorizadas, inclusive aprovações humanas.
+        # O modo que originou a decisão não pode impedir o worker de drená-la;
+        # a autorização continua sendo validada no payload/handler.
+        _run_stage(
+            _cmd_lanes_run, "title-worker", retry_hours=1,
+            args=_ns(lane="title_execution", worker_id=None,
+                      lease_seconds=300, limit=None,
+                      max_items=getattr(config, "title_max_writes_per_cycle", 10),
+                      no_heartbeat=False, json=True),
+            config=config)
+        steps.append("title-worker")
 
         # 3) Weekly deep report + opportunities + deep post-audit.
         if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):

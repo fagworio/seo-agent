@@ -300,6 +300,11 @@ def execution_item(d: TitleDecision | dict[str, Any]) -> dict[str, Any]:
         "evidence": d.get("evidence") or {},
         "rollout": d.get("rollout") or {},
         "confidence": d.get("confidence"),
+        # Decisões novas precisam provar o HTML público antes de fechar como
+        # executadas. Payloads legados sem a chave continuam compatíveis no
+        # worker; o motor sempre passa por este construtor.
+        "public_verification": bool(d.get("public_verification", True)),
+        "rebuild_kind": str(d.get("rebuild_kind") or ""),
     }
 
 
