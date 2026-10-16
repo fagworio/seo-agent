@@ -47,7 +47,7 @@ class _FakeStatic:
 def test_title_execution_writes_and_confirms(monkeypatch, tmp_path):
     db = tmp_path / "title-worker.db"
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
-                    dry_run=False)
+                    dry_run=False, title_engine_mode="auto")
     fake_wp = _FakeWP()
 
     import hermes_seo_agent.config as config_module
@@ -73,6 +73,7 @@ def test_title_execution_writes_and_confirms(monkeypatch, tmp_path):
             "field": "rank_math_title",
             "before": decision.before,
             "after": decision.after,
+            "public_verification": False,
         },
     }, SimpleNamespace(db_path=str(db)))
 
@@ -85,7 +86,7 @@ def test_title_execution_writes_and_confirms(monkeypatch, tmp_path):
 def test_title_execution_marks_stale_without_writing(monkeypatch, tmp_path):
     db = tmp_path / "title-worker-stale.db"
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
-                    dry_run=False)
+                    dry_run=False, title_engine_mode="auto")
     fake_wp = _FakeWP()
     fake_wp.title = "Título alterado por humano"
 
@@ -112,6 +113,7 @@ def test_title_execution_marks_stale_without_writing(monkeypatch, tmp_path):
             "field": "rank_math_title",
             "before": decision.before,
             "after": decision.after,
+            "public_verification": False,
         },
     }, SimpleNamespace(db_path=str(db)))
 
@@ -121,12 +123,64 @@ def test_title_execution_marks_stale_without_writing(monkeypatch, tmp_path):
         assert store.title_decision(decision.decision_id)["status"] == "stale"
 
 
+def test_title_execution_observe_never_writes(monkeypatch, tmp_path):
+    db = tmp_path / "title-worker-observe.db"
+    config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
+                    dry_run=False, title_engine_mode="observe")
+    fake_wp = _FakeWP()
+    import hermes_seo_agent.config as config_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+
+    with pytest.raises(RuntimeError, match="TITLE_ENGINE_MODE=observe"):
+        handler_title_execution({
+            "work_item_id": "decision-observe",
+            "payload": {"decision_id": "decision-observe",
+                        "url": "https://example.com/post", "post_id": 7,
+                        "field": "rank_math_title", "before": "old",
+                        "after": "new"},
+        }, SimpleNamespace(db_path=str(db)))
+    assert fake_wp.writes == []
+
+
+def test_title_execution_revalidates_persisted_rollout(monkeypatch, tmp_path):
+    db = tmp_path / "title-worker-authorization.db"
+    config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
+                    dry_run=False, title_engine_mode="auto")
+    fake_wp = _FakeWP()
+    import hermes_seo_agent.config as config_module
+    import hermes_seo_agent.connectors.wordpress as wp_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(wp_module, "WordPressClient", lambda cfg: fake_wp)
+    decision = make_decision(
+        url="https://example.com/post", post_id=7,
+        before="Título antigo", after="Título novo", confidence=0.9,
+        rollout={"mode": "approval", "writes_allowed": False},
+    )
+    with Storage(str(db)) as store:
+        persist_decision(store, decision)
+
+    with pytest.raises(RuntimeError, match="sem autorização persistida"):
+        handler_title_execution({
+            "work_item_id": decision.decision_id,
+            "payload": {"decision_id": decision.decision_id,
+                        "url": decision.url, "post_id": decision.post_id,
+                        "field": "rank_math_title", "before": decision.before,
+                        "after": decision.after, "public_verification": False},
+        }, SimpleNamespace(db_path=str(db)))
+    assert fake_wp.writes == []
+
+
 def test_title_execution_waits_for_public_html_and_recovers_without_rewrite(
         monkeypatch, tmp_path):
     """REST confirmado não fecha o ciclo enquanto o rebuild não propagou."""
     db = tmp_path / "title-worker-public.db"
     config = Config(wordpress_url="http://localhost", sqlite_path=str(db),
-                    static_site_url="https://example.com", dry_run=False)
+                    static_site_url="https://example.com", dry_run=False,
+                    title_engine_mode="auto")
     fake_wp = _FakeWP()
     fake_static = _FakeStatic()
 

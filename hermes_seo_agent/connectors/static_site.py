@@ -38,7 +38,7 @@ def title_matches_visible(expected: str, visible: str) -> bool:
     exp, vis = norm(expected), norm(visible)
     if len(exp) < 3 or len(vis) < 3:
         return bool(exp) and exp == vis
-    if exp == vis or vis in exp:
+    if exp == vis:
         return True
     if exp in vis:
         rest = vis[vis.index(exp) + len(exp):].lstrip()

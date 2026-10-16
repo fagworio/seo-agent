@@ -100,7 +100,8 @@ def _current_title(contract: dict[str, Any]) -> str:
 
 
 def decision_to_action(contract: dict[str, Any], *, live_title: str | None = None,
-                       max_len: int = 65) -> dict[str, Any]:
+                       max_len: int = 65,
+                       persist_only: bool = False) -> dict[str, Any]:
     """Converte um contrato do motor em SafeAction (ou num motivo de recusa).
 
     Devolve sempre um dict:
@@ -118,11 +119,12 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
                 "detail": _REASON_TEXT[SKIP_DECISION], "decision": decision}
 
     # P0.1 (Sprint 1.1) — o ROLLOUT manda. `observe` e `approval` NAO escrevem:
-    # sem `writes_allowed` nenhuma acao eh criada, por mais alta que seja a
-    # confianca. Antes esta checagem nao existia e o modo `approval` escrevia
-    # automaticamente — o scheduler passava write=True nele e nada aqui barrava.
+    # sem `writes_allowed` nenhuma acao EXECUTAVEL e criada, por mais alta que
+    # seja a confianca. `persist_only` e a unica excecao: permite materializar a
+    # proposta na tabela de decisoes para a aprovacao humana, mas o gate de
+    # `production_ready()` continua recusando a fila ate a aprovacao.
     rollout = contract.get("rollout") or {}
-    if not rollout.get("writes_allowed"):
+    if not rollout.get("writes_allowed") and not persist_only:
         return {"ok": False, "skip": SKIP_ROLLOUT,
                 "detail": _REASON_TEXT[SKIP_ROLLOUT],
                 "rollout_mode": rollout.get("mode")}
@@ -205,7 +207,8 @@ def decision_to_action(contract: dict[str, Any], *, live_title: str | None = Non
 
 def decisions_to_actions(contracts: list[dict[str, Any]], *,
                          live_titles: dict[str, str] | None = None,
-                         max_len: int = 65) -> dict[str, Any]:
+                         max_len: int = 65,
+                         persist_only: bool = False) -> dict[str, Any]:
     """Converte varios contratos, isolando falhas (regra principal do roadmap).
 
     Uma URL que recusa nunca impede as outras: cada contrato vira acao ou um
@@ -223,8 +226,9 @@ def decisions_to_actions(contracts: list[dict[str, Any]], *,
             continue
         url = str(contract.get("url") or "")
         try:
-            outcome = decision_to_action(contract, live_title=live_titles.get(url),
-                                         max_len=max_len)
+            outcome = decision_to_action(
+                contract, live_title=live_titles.get(url), max_len=max_len,
+                persist_only=persist_only)
         except Exception as exc:  # nunca derrubar o lote por um contrato estranho
             skipped.append({"url": url, "skip": "erro_inesperado",
                             "detail": f"{type(exc).__name__}: {exc}"})

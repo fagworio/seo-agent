@@ -133,6 +133,7 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
     from hermes_seo_agent.executor.executor import Executor
     from hermes_seo_agent.storage.db import Storage
     from hermes_seo_agent.tools.wse_trigger import WseTrigger
+    from hermes_seo_agent.lanes.title_decision import _rollout_allows_write
 
     payload = item.get("payload") or {}
     decision_id = str(payload.get("decision_id") or item.get("work_item_id") or "")
@@ -147,6 +148,9 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
         raise ValueError(f"campo de título não suportado: {field}")
 
     config = load_config()
+    mode = str(getattr(config, "title_engine_mode", "observe") or "observe").strip().lower()
+    if mode == "observe":
+        raise RuntimeError("title_execution bloqueada: TITLE_ENGINE_MODE=observe")
     if config.dry_run:
         raise RuntimeError("TITLE_ENGINE_MODE=auto incompatível com DRY_RUN")
     db_path = getattr(ctx, "db_path", None) or config.sqlite_path
@@ -162,11 +166,46 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
         },
     }
 
-    public_verification = bool(payload.get("public_verification", False))
+    # Fail-closed para payloads antigos: uma decisão só fecha quando também foi
+    # confirmada no HTML público. Compatibilidade explícita continua possível
+    # apenas para um produtor que envie `public_verification: false`.
+    public_verification = bool(payload.get("public_verification", True))
     rebuild_kind = str(payload.get("rebuild_kind") or
                        getattr(config, "title_rebuild_kind", "") or "").strip()
+    public_verified_at: str | None = None
 
     with Storage(db_path) as store, WordPressClient(config) as wp:
+        decision = store.title_decision(decision_id)
+        if decision is None:
+            raise RuntimeError(f"title_decision inexistente: {decision_id}")
+        if str(decision.get("url") or "") != url:
+            raise ValueError("title_execution diverge da decisão persistida: url")
+        try:
+            payload_post_id = int(post_id)
+            decision_post_id = int(decision.get("post_id") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("title_execution com post_id inválido") from exc
+        if payload_post_id != decision_post_id:
+            raise ValueError(
+                "title_execution diverge da decisão persistida: post_id")
+        for name, received in (("field", field), ("before", before),
+                               ("after", after)):
+            if str(decision.get(name) or "") != received:
+                raise ValueError(
+                    f"title_execution diverge da decisão persistida: {name}")
+        persisted_fingerprint = str(decision.get("action_fingerprint") or "")
+        payload_fingerprint = str(payload.get("action_fingerprint") or "")
+        if payload_fingerprint and payload_fingerprint != persisted_fingerprint:
+            raise ValueError(
+                "title_execution diverge da decisão persistida: action_fingerprint")
+        if not bool(decision.get("before_known", True)):
+            raise RuntimeError("title_execution bloqueada: before desconhecido")
+        if not _rollout_allows_write(decision.get("rollout")):
+            raise RuntimeError(
+                "title_execution bloqueada: decisão sem autorização persistida")
+        if str(decision.get("status") or "") in {"stale", "rejected", "superseded"}:
+            raise RuntimeError(
+                f"title_execution bloqueada: decisão terminal ({decision.get('status')})")
         executor = Executor(config, wp, store)
 
         def verify(fix: dict[str, Any], _after: Any) -> bool:
@@ -186,7 +225,6 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
             # fronteira separada: sem ela, a decisão não pode fechar como
             # executada nem gerar outcome mensurável.
             if public_verification:
-                decision = store.title_decision(decision_id) or {}
                 needs_rebuild = rebuild_kind and (
                     bool(outcome.get("executed")) or
                     decision.get("publication_status") == "public_pending")
@@ -217,9 +255,11 @@ def handler_title_execution(item: dict[str, Any], ctx: Any = None) -> dict[str, 
                     store.mark_title_public_pending(decision_id, reason=reason)
                     raise RuntimeError(reason) from exc
                 store.mark_title_public_verified(decision_id, commit=False)
+                public_verified_at = _dt.datetime.now(
+                    _dt.timezone.utc).isoformat()
             action_fingerprint = str(executed_action.get("fingerprint") or "")
             implemented_at = str(
-                executed_action.get("executed_at")
+                public_verified_at or executed_action.get("executed_at")
                 or _dt.datetime.now(_dt.timezone.utc).isoformat()
             )
             evidence = payload.get("evidence") or {}

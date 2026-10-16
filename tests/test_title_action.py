@@ -62,6 +62,14 @@ def test_confianca_high_tambem_escreve():
     assert decision_to_action(_contract(confidence="high"))["ok"] is True
 
 
+def test_approval_persist_only_materializa_proposta_sem_liberar_escrita():
+    contrato = _contract(rollout={"mode": "approval", "writes_allowed": False})
+    assert decision_to_action(contrato)["skip"] == SKIP_ROLLOUT
+    out = decision_to_action(contrato, persist_only=True)
+    assert out["ok"] is True
+    assert out["action"]["fix"]["meta"]["rank_math_title"]
+
+
 def test_aceita_as_tres_formas_de_candidato():
     for campo in (
         {"suggested_titles": ["Candidato A"]},

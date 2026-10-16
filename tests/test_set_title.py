@@ -236,3 +236,4 @@ def test_title_matches_visible_tolerates_brand_suffix(tmp_path, monkeypatch, cap
     assert _title_matches_visible("Título Novo SEO", "Título Novo SEO | Unicórnio Hater")
     assert _title_matches_visible("Título Novo SEO", "titulo novo seo - marca")
     assert not _title_matches_visible("Título Novo SEO", "Título Antigo | Unicórnio Hater")
+    assert not _title_matches_visible("Título Novo SEO mais longo", "Título Novo SEO")

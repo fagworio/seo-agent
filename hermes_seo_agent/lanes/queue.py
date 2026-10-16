@@ -23,7 +23,8 @@ Garantias e o que cada uma custa:
   claim E na recuperação) barra o worker antigo.
 * **Retry com backoff, não loop** — a falha é classificada e agenda
   `next_attempt_at`; depois de `max_attempts` o item sai da fila para
-  `manual_review`.
+  `manual_review`. `max_attempts=0` é reservado para efeitos externos
+  assíncronos que precisam aguardar propagação sem virar manual review.
 
 Padrão de commit (o mesmo do `Storage`): TODA mutação aceita `commit: bool = True`
 e faz `if commit: self.conn.commit()`. `commit=False` existe para composição
@@ -305,7 +306,7 @@ class LaneQueue:
             status, next_at = P.ST_TERMINAL, None
         elif klass == P.ERR_MANUAL_REVIEW:
             status, next_at = P.ST_MANUAL_REVIEW, None
-        elif attempt >= max_attempts:
+        elif max_attempts > 0 and attempt >= max_attempts:
             status, next_at = P.ST_MANUAL_REVIEW, None
         else:
             delay = (int(retry_in) if retry_in is not None

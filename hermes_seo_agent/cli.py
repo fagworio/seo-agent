@@ -1969,17 +1969,20 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         # Pending title work is independent of the GSC checkpoint. A temporary
         # collection failure must not strand decisions already eligible to run.
-        # A fila contém decisões já autorizadas, inclusive aprovações humanas.
-        # O modo que originou a decisão não pode impedir o worker de drená-la;
-        # a autorização continua sendo validada no payload/handler.
-        _run_stage(
-            _cmd_lanes_run, "title-worker", retry_hours=1,
-            args=_ns(lane="title_execution", worker_id=None,
-                      lease_seconds=300, limit=None,
-                      max_items=getattr(config, "title_max_writes_per_cycle", 10),
-                      no_heartbeat=False, json=True),
-            config=config)
-        steps.append("title-worker")
+        # `observe`, porém, é uma garantia operacional de nenhuma escrita: não
+        # basta o handler recusar depois que o worker já reivindicou o item.
+        title_mode = str(getattr(config, "title_engine_mode", "observe") or "observe").strip().lower()
+        if title_mode in {"approval", "auto"}:
+            _run_stage(
+                _cmd_lanes_run, "title-worker", retry_hours=1,
+                args=_ns(lane="title_execution", worker_id=None,
+                          lease_seconds=300, limit=None,
+                          max_items=getattr(config, "title_max_writes_per_cycle", 10),
+                          no_heartbeat=False, json=True),
+                config=config)
+            steps.append("title-worker")
+        else:
+            steps.append("title-worker-skipped-observe")
 
         # 3) Weekly deep report + opportunities + deep post-audit.
         if now.weekday() == args.deep_weekday and now.hour == min(inspect_hours or {6}):
@@ -2255,9 +2258,6 @@ def _title_matches_visible(expected: str, visible: str) -> bool:
     if len(exp) < 3 or len(vis) < 3:
         return bool(exp) and exp == vis
     if exp == vis:
-        return True
-    if vis in exp:
-        # renderizado é um prefixo/truncamento do esperado — aceita.
         return True
     if exp in vis:
         # esperado é prefixo do renderizado: só vale se o resto for marca
@@ -2756,7 +2756,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             # que parava a trilhagem contínua.
             skip, reason = store.title_review_skippable(
                 url, measurement_days=config.editorial_measurement_min_days,
-                ignore_pending_review=bool(getattr(args, "write", False)))
+                ignore_pending_review=bool(getattr(args, "write", False)
+                                           or run_mode == "approval"))
             if skip:
                 skipped.append({"url": url, "reason": reason})
             else:
@@ -3224,7 +3225,10 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
 
     write_result: dict[str, Any] = {}
     published_count = 0
-    if args.write:
+    # Approval precisa persistir a proposta mesmo sem habilitar escrita. O
+    # contrato de rollout continua bloqueando a fila; a aprovação humana altera
+    # a decisão persistida e só então cria `title_execution`.
+    if args.write or run_mode == "approval":
         fixes = [{"url": c["url"], "current_title": (c.get("current_title") or {}).get("title"),
                   "suggested_titles": c["suggested_titles"],
                   "decision": c["decision"], "confidence": c["confidence"],
@@ -3280,7 +3284,8 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     "contrato — precondition mais fraca")
         built = decisions_to_actions(
             review_contracts, live_titles=live_titles,
-            max_len=int(getattr(config, "title_max_len", 60) or 60))
+            max_len=int(getattr(config, "title_max_len", 60) or 60),
+            persist_only=(run_mode == "approval"))
         # Item 5/6 (Sprint 1.2) — snapshot GSC PRE no formato que `baseline_gsc()`
         # le: metricas PLANAS em `gsc` (o medidor compara campo a campo com a
         # janela seguinte) e metadados de janela em `_meta`.
@@ -3314,20 +3319,16 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
         # enquanto o 7B nao existir ninguem executa (WordPress intocado). Isto
         # elimina o caminho direto title-engine -> Executor -> WordPress, que era
         # o ultimo lugar onde uma decisao podia virar escrita sem passar pela
-        # fila. Ligado por `title_decision_owns_writes` (default True) para poder
-        # voltar ao executor direto por config, sem mexer em codigo.
+        # fila. O antigo escape para o Executor direto foi removido: ele podia
+        # atualizar o WordPress sem passar pela verificação pública do worker.
         queued: dict[str, Any] | None = None
         owns = bool(getattr(config, "title_decision_owns_writes", True))
-        if not owns and not bool(getattr(config, "title_direct_writes_allowed",
-                                        False)):
-            # FAIL-CLOSED: um unico booleano bastava para reabrir motor -> Executor
-            # -> WordPress e burlar toda a garantia de lanes/fencing. Agora exige
-            # DUAS autorizacoes explicitas; com so' uma, o caminho direto fica
-            # bloqueado e o aviso sai no relatorio.
+        if not owns:
+            # FAIL-CLOSED: manter qualquer combinação legada de flags capaz de
+            # burlar lanes/fencing e a confirmação no HTML público seria inseguro.
             warnings.append(
-                "7A: caminho direto BLOQUEADO (fail-closed) — "
-                "TITLE_DECISION_OWNS_WRITES=0 exige "
-                "TITLE_DIRECT_WRITES_ALLOWED=1")
+                "7A: TITLE_DECISION_OWNS_WRITES=0 foi ignorado — "
+                "execução direta removida; decisões seguem pela fila")
             owns = True
         if owns and built["actions"]:
             try:
@@ -3354,7 +3355,7 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
                     f"7A enqueue falhou: {type(exc).__name__}: {exc}")
                 write_summary["queued"] = {
                     "error": f"{type(exc).__name__}: {exc}"}
-        if built["actions"] and not owns:
+        if built["actions"] and not owns and run_mode == "auto":
             # P0.5 (Sprint 1.1) — politica PROPRIA do executor de titulos. Antes
             # reutilizava MAX_SAFE_FIX_PER_CYCLE e depois ignorava valores >10 no
             # `min(10, teto)` — configuracao enganosa. Agora o teto e explicito
