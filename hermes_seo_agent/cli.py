@@ -3619,6 +3619,11 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any, *,
                     "sem_execucao_detalhe": queued["sem_execucao"][:20],
                     "erros_detalhe": queued["erros"][:20],
                 }
+            except TitleEngineLeaseLost:
+                # A lost fencing lease is a control-flow boundary, not an
+                # item-scoped enqueue error. Let the caller stop this engine
+                # run and classify it as lease loss instead of continuing.
+                raise
             except Exception as exc:
                 # Regra principal do roadmap: falha ao enfileirar nao derruba o
                 # ciclo — mas PRECISA ficar visivel, senao as decisoes somem em
