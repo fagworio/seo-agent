@@ -20,6 +20,7 @@ import datetime
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import date, timedelta
@@ -1660,7 +1661,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 mode="analyze", started_by="system",
             )
 
-    def run_silently(func, **kw) -> bool:
+    def run_silently(func, **kw) -> str:
         """Run an internal command swallowing stdout while preserving failures."""
         global _LAST_EMITTED_RESULT
         _LAST_EMITTED_RESULT = None
@@ -1696,25 +1697,22 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 payload_status = str(payload.get("status") or "").lower()
                 operational_status = str(summary.get("status") or payload_status).lower()
                 if operational_status == "skipped_locked":
-                    errors.append(
-                        f"{func.__name__}: skipped_locked (lease ocupado)"
-                    )
-                    return False
+                    return "deferred"
                 if payload_status in {"error", "partial", "failed"}:
                     errors.append(
                         f"{func.__name__}: status {payload_status}"
                         + (f" ({payload.get('error')})" if payload.get("error") else "")
                     )
-                    return False
+                    return "failed"
             except Exception:
                 pass
             if isinstance(code, int) and code != 0:
                 errors.append(f"{func.__name__}: exit {code}")
-                return False
-            return True
+                return "failed"
+            return "success"
         except Exception as exc:  # scheduler must always close its run
             errors.append(f"{func.__name__}: {exc}")
-            return False
+            return "failed"
 
     def record_stage(stage: str, status: str, detail: dict[str, Any] | None = None) -> None:
         """Persist the same stage list that the scheduler reports in its summary."""
@@ -1775,8 +1773,11 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             ok = run_silently(worker, args=make_args(manual_run), config=config)
             with Storage(config.sqlite_path) as manual_storage:
                 AgentRunService(manual_storage).complete(
-                    manual_id, status="success" if ok else "failed",
-                    summary={"intent": intent, "target_url": manual_run.get("target_url") or ""})
+                    manual_id,
+                    status=("success" if ok == "success"
+                            else "partial" if ok == "deferred" else "failed"),
+                    summary={"intent": intent, "target_url": manual_run.get("target_url") or "",
+                             "outcome": ok})
             steps.append(f"manual-{intent}")
 
         # Vencimento por IDADE (idempotente), nunca por hora exata: com
@@ -1850,22 +1851,43 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     errors.append(f"checkpoint-{stage}: persist failed")
                 return ok
 
+            def _defer_checkpoint(stage: str, *, detail: str,
+                                  retry_hours: float = 1.0) -> None:
+                """Record contention without turning it into a stage failure.
+
+                A deferred title run must remain eligible for a near-term retry:
+                it cannot advance ``last_success`` or inherit the GSC failure
+                backoff of twenty hours merely because another worker owns the
+                lease.
+                """
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                _mark(f"{stage}:last_attempt", now_utc.isoformat())
+                _mark(f"{stage}:last_error", detail[:500])
+                _mark(f"{stage}:next_retry", (
+                    now_utc + datetime.timedelta(hours=retry_hours)).isoformat())
+
             def _run_stage(func, stage: str, *, retry_hours: float = 1.0,
-                           **kw) -> bool:
+                           **kw) -> str:
                 if cancellation_requested():
                     raise _ScheduleCancelled()
                 before_errors = len(errors)
                 result = run_silently(func, **kw)
-                if result:
+                if result == "success":
                     _checkpoint(stage, success=True, retry_hours=retry_hours)
                     record_stage(stage, "success")
-                    return True
+                    return "success"
+                if result == "deferred":
+                    detail = f"{func.__name__}: deferred (lease ocupado)"
+                    _defer_checkpoint(stage, detail=detail,
+                                      retry_hours=min(retry_hours, 1.0))
+                    record_stage(stage, "deferred", {"reason": "lease ocupado"})
+                    return "deferred"
                 detail = "; ".join(errors[before_errors:]) or (
                     f"{func.__name__}: unsuccessful")
                 _checkpoint(stage, success=False, error=detail,
                             retry_hours=retry_hours)
                 record_stage(stage, "failed", {"error": detail})
-                return False
+                return "failed"
 
             _gsc_daily = _due("gsc:last_daily", 20)
             _ga4_daily = _due("ga4:last_daily", 20)
@@ -1900,28 +1922,40 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             # travava o scheduler por dezenas de minutos. Distribuído pelos
             # ciclos do dia (~12), o mesmo budget é consumido sem bloquear.
             _inspect_budget = max(50, int(getattr(config, "url_inspection_daily_budget", 0) or 0) // 12)
-            gsc_ok = _run_stage(
+            _gsc_inspect_result = _run_stage(
                 _cmd_inspect, "gsc-inspect", retry_hours=20,
                 args=_ns(budget=_inspect_budget, dry_run=False, json=True,
                          _run_context=run_context), config=config)
+            gsc_ok = _gsc_inspect_result == "success"
+            gsc_deferred = _gsc_inspect_result == "deferred"
+            gsc_failed = _gsc_inspect_result == "failed"
             if config.google_credentials:
-                gsc_ok = _run_stage(
+                _gsc_stage_result = _run_stage(
                     _cmd_demand, "gsc-demand", retry_hours=20,
                     args=_ns(store=True, min_impressions=0,
-                             _run_context=run_context), config=config) and gsc_ok
-                gsc_ok = _run_stage(
+                             _run_context=run_context), config=config)
+                gsc_deferred = gsc_deferred or _gsc_stage_result == "deferred"
+                gsc_failed = gsc_failed or _gsc_stage_result == "failed"
+                gsc_ok = gsc_ok and _gsc_stage_result == "success"
+                _gsc_stage_result = _run_stage(
                     _cmd_outcomes, "gsc-revalidate-7d", retry_hours=20,
                     args=_ns(action="revalidate-due", limit=200,
-                             _run_context=run_context), config=config) and gsc_ok
+                             _run_context=run_context), config=config)
+                gsc_deferred = gsc_deferred or _gsc_stage_result == "deferred"
+                gsc_failed = gsc_failed or _gsc_stage_result == "failed"
+                gsc_ok = gsc_ok and _gsc_stage_result == "success"
                 steps.append("gsc-demand")
                 steps.append("revalidate-7d")
                 # Marco de 1 MES: reavalia ~28 dias depois — se o desempenho
                 # PIOROU, abre a retriagem (title_regression); se nao, o titulo
                 # segue bloqueado (nunca retratado sem piora comprovada).
-                gsc_ok = _run_stage(
+                _gsc_stage_result = _run_stage(
                     _cmd_outcomes, "gsc-revalidate-28d", retry_hours=20,
                     args=_ns(action="revalidate-due", limit=200, measure_days=28,
-                             _run_context=run_context), config=config) and gsc_ok
+                             _run_context=run_context), config=config)
+                gsc_deferred = gsc_deferred or _gsc_stage_result == "deferred"
+                gsc_failed = gsc_failed or _gsc_stage_result == "failed"
+                gsc_ok = gsc_ok and _gsc_stage_result == "success"
                 steps.append("revalidate-28d")
                 # F21/F22 — SHADOW MODE automático: o motor de FAMÍLIAS roda em
                 # paralelo ao motor atual sobre os MESMOS dados que o Hermes
@@ -1949,7 +1983,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     # Caixa, mas `decision_to_action` exige
                     # `rollout.writes_allowed=true` — que so existe em `auto`.
                     escreve = engine_mode == "auto"
-                    title_ok = _run_stage(
+                    title_result = _run_stage(
                         _cmd_title_engine, "title-engine", retry_hours=20,
                         args=_ns(limit=0, analysis_limit=int(getattr(
                             config, "title_analysis_limit", 50) or 50),
@@ -1962,10 +1996,17 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                                  include_non_anomalous=False,
                                  no_deep_signals=False,
                                  _run_context=run_context), config=config)
-                    gsc_ok = title_ok and gsc_ok
+                    gsc_deferred = gsc_deferred or title_result == "deferred"
+                    gsc_failed = gsc_failed or title_result == "failed"
+                    gsc_ok = gsc_ok and title_result == "success"
                     steps.append(f"title-engine-{engine_mode}")
                 if gsc_ok:
                     _checkpoint("gsc", success=True, retry_hours=20)
+                elif gsc_deferred and not gsc_failed:
+                    _defer_checkpoint(
+                        "gsc", detail="GSC/title deferred (lease ocupado)",
+                        retry_hours=1)
+                    record_stage("gsc", "deferred", {"reason": "lease ocupado"})
                 else:
                     _checkpoint("gsc", success=False,
                                 error="etapa GSC/title incompleta", retry_hours=20)
@@ -2727,9 +2768,40 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             }, force_json=True)
             return 0
         last_heartbeat = 0.0
+        heartbeat_stop = threading.Event()
+        heartbeat_lost = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
+
+        def heartbeat_worker() -> None:
+            heartbeat_store: Storage | None = None
+            try:
+                heartbeat_store = Storage(config.sqlite_path)
+                while not heartbeat_stop.wait(_TITLE_ENGINE_LEASE_HEARTBEAT_SECONDS):
+                    try:
+                        renewed = heartbeat_store.renew_named_lease(
+                            _TITLE_ENGINE_LEASE_KEY, owner,
+                            ttl_seconds=_TITLE_ENGINE_LEASE_TTL_SECONDS)
+                    except Exception:
+                        renewed = False
+                    if not renewed:
+                        heartbeat_lost.set()
+                        return
+            except Exception:
+                heartbeat_lost.set()
+            finally:
+                if heartbeat_store is not None:
+                    heartbeat_store.close()
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_worker, name="title-engine-lease-heartbeat",
+            daemon=True)
+        heartbeat_thread.start()
 
         def lease_guard() -> None:
             nonlocal last_heartbeat
+            if heartbeat_lost.is_set():
+                raise TitleEngineLeaseLost(
+                    "title-engine perdeu o lease de análise; efeitos interrompidos")
             now = time.monotonic()
             if (last_heartbeat and
                     now - last_heartbeat < _TITLE_ENGINE_LEASE_HEARTBEAT_SECONDS):
@@ -2746,6 +2818,12 @@ def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
             args, config, lease_guard=lease_guard,
             lease_fence=(_TITLE_ENGINE_LEASE_KEY, owner))
     finally:
+        if acquired and heartbeat_thread is not None:
+            heartbeat_stop.set()
+            # `Storage` may be waiting on SQLite's 15s busy timeout. Join
+            # longer than that so the heartbeat cannot renew the lease after
+            # the owner releases it below.
+            heartbeat_thread.join(timeout=20)
         if acquired:
             store.release_named_lease(_TITLE_ENGINE_LEASE_KEY, owner)
         store.close()

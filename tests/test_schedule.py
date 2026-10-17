@@ -4,6 +4,8 @@ import argparse
 import dataclasses
 import datetime
 import json
+import threading
+import time
 
 from hermes_seo_agent.cli import _cmd_schedule, _cmd_title_engine, _emit
 from hermes_seo_agent.config import Config
@@ -233,6 +235,75 @@ def test_title_engine_lock_has_explicit_non_success_status(capsys, tmp_path):
     assert rc == 0
     assert result["status"] == "skipped_locked"
     assert result["summary"]["status"] == "skipped_locked"
+
+
+def test_title_engine_heartbeat_renews_during_long_analysis(monkeypatch, tmp_path):
+    db = tmp_path / "heartbeat-title-engine.db"
+    config = _config(db)
+    import hermes_seo_agent.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_TITLE_ENGINE_LEASE_HEARTBEAT_SECONDS", 0.01)
+    calls = []
+    started = threading.Event()
+    original_renew = Storage.renew_named_lease
+
+    def _renew(self, key, owner, *, ttl_seconds=3600):
+        calls.append(owner)
+        return original_renew(self, key, owner, ttl_seconds=ttl_seconds)
+
+    monkeypatch.setattr(Storage, "renew_named_lease", _renew)
+
+    def _long_impl(args, config, *, lease_guard=None, lease_fence=None):
+        started.set()
+        deadline = time.monotonic() + 1
+        while len(calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return 0
+
+    monkeypatch.setattr(cli_module, "_cmd_title_engine_impl", _long_impl)
+    assert _cmd_title_engine(argparse.Namespace(), config) == 0
+    assert started.is_set()
+    assert len(calls) >= 2
+    with Storage(str(db)) as storage:
+        assert storage.acquire_named_lease("title_engine:run", "after-worker",
+                                          ttl_seconds=60) is True
+
+
+def test_schedule_defers_locked_title_without_gsc_failure_backoff(
+        monkeypatch, capsys, tmp_path):
+    db = tmp_path / "deferred-title-engine.db"
+    _now_patch(monkeypatch, hour=6)
+    config = dataclasses.replace(_config(db), google_credentials="configured",
+                                 title_engine_mode="auto")
+    for name in ("_cmd_audit", "_cmd_refresh_data", "_cmd_inspect",
+                 "_cmd_post_audit", "_cmd_demand", "_cmd_outcomes",
+                 "_cmd_ga4", "_cmd_corpus", "_cmd_opportunities"):
+        monkeypatch.setattr(f"hermes_seo_agent.cli.{name}",
+                            lambda *a, **k: None)
+
+    def _locked_title(*args, **kwargs):
+        _emit({
+            "status": "skipped_locked",
+            "summary": {"command": "title-engine", "status": "skipped_locked"},
+            "findings": [], "safe_actions": [], "approval_required": [],
+        }, force_json=True)
+        return 0
+
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_title_engine", _locked_title)
+    monkeypatch.setattr("hermes_seo_agent.cli._cmd_lanes_run",
+                        lambda *a, **k: 0)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0),
+                         config) == 0
+    json.loads(capsys.readouterr().out)
+    with Storage(str(db)) as storage:
+        assert storage.get_setting("gsc:last_success", "") == ""
+        assert storage.get_setting("gsc:next_retry", "")
+        assert storage.get_setting("title-engine:next_retry", "")
+        run = storage.conn.execute(
+            "SELECT status FROM agent_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert run[0] == "success"
 
 
 def test_schedule_drena_aprovacoes_fora_do_modo_auto(monkeypatch, capsys, tmp_path):
