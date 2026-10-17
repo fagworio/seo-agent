@@ -879,6 +879,32 @@ def test_7a2_fencing_interrompe_lote_entre_decisoes(tmp_path):
         assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
 
 
+def test_7a2_fencing_antes_do_enqueue_nao_vira_erro_de_item(tmp_path):
+    """A perda entre persistência e enqueue interrompe sem ocultar o lease."""
+    db = str(tmp_path / "7a2-fencing-enqueue.db")
+    calls = 0
+
+    def fencing_check():
+        nonlocal calls
+        calls += 1
+        # antes da decisão, antes da persistência, depois da persistência e
+        # finalmente antes do enqueue — o quarto gate é o takeover.
+        if calls == 4:
+            raise RuntimeError("lease perdido antes do enqueue")
+
+    with Storage(db) as store:
+        decision = TD.decision_from_action(
+            _acao(), contract=_contrato(), live_title=LIVE)
+        with pytest.raises(RuntimeError, match="lease perdido antes do enqueue"):
+            TD.persist_actions(
+                store, [_acao()], contracts_by_url={URL: _contrato()},
+                live_titles={URL: LIVE}, fencing_check=fencing_check,
+            )
+
+        assert store.title_decision(decision.decision_id) is not None
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 0
+
+
 # ---------------------------------------------------------------------------
 # 7A.2.1 — os dois P1 latentes no caminho positivo
 # ---------------------------------------------------------------------------

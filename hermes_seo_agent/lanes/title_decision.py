@@ -582,12 +582,15 @@ def persist_actions(store: Any, actions: list[dict[str, Any]], *,
             continue
         if fencing_check is not None:
             fencing_check()
+        # This gate must remain outside the per-item boundary below. A stale
+        # worker may leave the durable decision for reconciliation, but it must
+        # never continue to enqueue an effect after losing the lease.
+        if r.get("executavel") and enqueue and fencing_check is not None:
+            fencing_check()
         try:
             criadas.append(d.decision_id)
             if r.get("executavel"):
                 if enqueue:
-                    if fencing_check is not None:
-                        fencing_check()
                     enqueue_execution(store, d)
                 executaveis.append(d.decision_id)
             else:
