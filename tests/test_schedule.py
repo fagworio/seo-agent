@@ -7,6 +7,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from hermes_seo_agent.cli import _cmd_schedule, _cmd_title_engine, _emit
 from hermes_seo_agent.config import Config
 from hermes_seo_agent.services.agent_runs import AgentRunService
@@ -267,6 +269,22 @@ def test_title_engine_heartbeat_renews_during_long_analysis(monkeypatch, tmp_pat
     with Storage(str(db)) as storage:
         assert storage.acquire_named_lease("title_engine:run", "after-worker",
                                           ttl_seconds=60) is True
+
+
+def test_title_engine_enqueue_boundary_propagates_lease_loss(monkeypatch, tmp_path):
+    """The motor boundary must not turn a lost lease into an item warning."""
+    import hermes_seo_agent.cli as cli_module
+    from hermes_seo_agent.lanes import title_decision
+
+    def _lost(*args, **kwargs):
+        raise cli_module.TitleEngineLeaseLost("lease perdido")
+
+    monkeypatch.setattr(title_decision, "persist_actions", _lost)
+    with pytest.raises(cli_module.TitleEngineLeaseLost, match="lease perdido"):
+        cli_module._persist_title_actions(
+            config=_config(tmp_path / "enqueue-boundary.db"), actions=[],
+            contracts_by_url={}, live_titles={}, fencing_check=lambda: None,
+        )
 
 
 def test_schedule_defers_locked_title_without_gsc_failure_backoff(

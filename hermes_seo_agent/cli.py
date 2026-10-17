@@ -2751,6 +2751,19 @@ class TitleEngineLeaseLost(RuntimeError):
     """The title engine lost its fencing lease before a durable effect."""
 
 
+def _persist_title_actions(*, config: Any, actions: list[dict[str, Any]],
+                           contracts_by_url: dict[str, dict[str, Any]],
+                           live_titles: dict[str, str],
+                           fencing_check: Any) -> dict[str, Any]:
+    """Persist title decisions through the lease-aware queue boundary."""
+    from .lanes.title_decision import persist_actions
+
+    with Storage(config.sqlite_path) as q_store:
+        return persist_actions(
+            q_store, actions, contracts_by_url=contracts_by_url,
+            live_titles=live_titles, fencing_check=fencing_check)
+
+
 def _cmd_title_engine(args: argparse.Namespace, config: Any) -> int:
     """Run one title-engine cycle under an exclusive SQLite lease."""
     owner = f"{os.getpid()}:{uuid.uuid4().hex}"
@@ -3603,14 +3616,11 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any, *,
         if owns and built["actions"]:
             _guard_lease()
             try:
-                from .lanes.title_decision import persist_actions
-                with Storage(config.sqlite_path) as q_store:
-                    queued = persist_actions(
-                        q_store, built["actions"],
-                        contracts_by_url={str(c.get("url") or ""): c
-                                          for c in review_contracts},
-                        live_titles=live_titles,
-                        fencing_check=lease_guard)
+                queued = _persist_title_actions(
+                    config=config, actions=built["actions"],
+                    contracts_by_url={str(c.get("url") or ""): c
+                                      for c in review_contracts},
+                    live_titles=live_titles, fencing_check=lease_guard)
                 write_summary["queued"] = {
                     "criadas": queued["counts"]["criadas"],
                     "executaveis": queued["counts"]["executaveis"],
