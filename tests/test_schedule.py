@@ -369,3 +369,36 @@ def test_schedule_treats_json_error_as_failed_stage(monkeypatch, capsys, tmp_pat
                          _config(db)) == 1
     result = json.loads(capsys.readouterr().out)
     assert any("status error" in error for error in result["summary"]["errors"])
+
+
+def test_schedule_treats_title_lease_loss_as_deferred(monkeypatch, capsys, tmp_path):
+    """A fencing loss retries soon and never becomes a generic 20h failure."""
+    db = tmp_path / "title-lease-loss-schedule.db"
+    _now_patch(monkeypatch, hour=6)
+    config = dataclasses.replace(
+        _config(db), google_credentials="configured", title_engine_mode="auto"
+    )
+    import hermes_seo_agent.cli as cli_module
+
+    for name in (
+        "_cmd_audit", "_cmd_refresh_data", "_cmd_reconcile_title_queue",
+        "_cmd_inspect", "_cmd_demand", "_cmd_outcomes", "_cmd_post_audit",
+        "_cmd_opportunities", "_cmd_ga4", "_cmd_corpus",
+    ):
+        monkeypatch.setattr(f"hermes_seo_agent.cli.{name}", lambda *a, **k: None)
+
+    def _lost(*_args, **_kwargs):
+        raise cli_module.TitleEngineLeaseLost("lease tomado por outro worker")
+
+    monkeypatch.setattr(cli_module, "_cmd_title_engine", _lost)
+    monkeypatch.setattr(cli_module, "_cmd_lanes_run", lambda *a, **k: 0)
+
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "partial"
+    assert set(result["summary"]["deferred"]) >= {"title-engine", "gsc"}
+    assert result["summary"]["errors"] == []
+    assert any("TitleEngineLeaseLost" in detail for detail in result["summary"]["deferred_details"])
+    with Storage(str(db)) as storage:
+        assert storage.get_setting("title-engine:next_retry", "")
+        assert storage.get_setting("gsc:next_retry", "")

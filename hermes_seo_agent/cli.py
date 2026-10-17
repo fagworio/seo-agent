@@ -1651,6 +1651,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     steps: list[str] = []
     errors: list[str] = []
     deferred_stages: list[str] = []
+    deferred_details: list[str] = []
     totals = {"urls": 0, "findings": 0, "opportunities": 0, "safe_fixes": 0, "executed": 0}
     with Storage(config.sqlite_path) as run_storage:
         run_service = AgentRunService(run_storage)
@@ -1711,6 +1712,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 errors.append(f"{func.__name__}: exit {code}")
                 return "failed"
             return "success"
+        except TitleEngineLeaseLost as exc:
+            # Lease loss is contention/control flow, not a title-analysis
+            # failure. Keep the detail visible, but let _run_stage schedule a
+            # short retry instead of applying the 20-hour GSC backoff.
+            deferred_details.append(f"{func.__name__}: TitleEngineLeaseLost: {exc}")
+            return "deferred"
         except Exception as exc:  # scheduler must always close its run
             errors.append(f"{func.__name__}: {exc}")
             return "failed"
@@ -2118,6 +2125,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
             "summary": {"command": "schedule", "steps": steps,
                         "hour": now.hour, "weekday": now.weekday(), "errors": errors,
                         "deferred": deferred_stages,
+                        "deferred_details": deferred_details,
                         "telemetry": telemetry},
             "findings": [],
             "safe_actions": [],
@@ -2129,6 +2137,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 status="partial" if errors or deferred_stages else "success", **totals,
                 summary={"steps": steps, "revalidation_window_days": 7,
                          "deferred": deferred_stages,
+                         "deferred_details": deferred_details,
                          "telemetry": telemetry},
             )
         _emit(result, force_json=True)
