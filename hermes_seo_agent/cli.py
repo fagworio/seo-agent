@@ -1650,6 +1650,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
     now = datetime.datetime.now(_local_tz)
     steps: list[str] = []
     errors: list[str] = []
+    deferred_stages: list[str] = []
     totals = {"urls": 0, "findings": 0, "opportunities": 0, "safe_fixes": 0, "executed": 0}
     with Storage(config.sqlite_path) as run_storage:
         run_service = AgentRunService(run_storage)
@@ -1877,6 +1878,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     record_stage(stage, "success")
                     return "success"
                 if result == "deferred":
+                    deferred_stages.append(stage)
                     detail = f"{func.__name__}: deferred (lease ocupado)"
                     _defer_checkpoint(stage, detail=detail,
                                       retry_hours=min(retry_hours, 1.0))
@@ -2006,6 +2008,7 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                     _defer_checkpoint(
                         "gsc", detail="GSC/title deferred (lease ocupado)",
                         retry_hours=1)
+                    deferred_stages.append("gsc")
                     record_stage("gsc", "deferred", {"reason": "lease ocupado"})
                 else:
                     _checkpoint("gsc", success=False,
@@ -2111,9 +2114,10 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                   force_json=True)
             return 0
         result = {
-            "status": "partial" if errors else "ok",
+            "status": "partial" if errors or deferred_stages else "ok",
             "summary": {"command": "schedule", "steps": steps,
                         "hour": now.hour, "weekday": now.weekday(), "errors": errors,
+                        "deferred": deferred_stages,
                         "telemetry": telemetry},
             "findings": [],
             "safe_actions": [],
@@ -2121,8 +2125,10 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
         }
         with Storage(config.sqlite_path) as run_storage:
             AgentRunService(run_storage).complete(
-                scheduled_run_id, status="partial" if errors else "success", **totals,
+                scheduled_run_id,
+                status="partial" if errors or deferred_stages else "success", **totals,
                 summary={"steps": steps, "revalidation_window_days": 7,
+                         "deferred": deferred_stages,
                          "telemetry": telemetry},
             )
         _emit(result, force_json=True)
@@ -3603,7 +3609,8 @@ def _cmd_title_engine_impl(args: argparse.Namespace, config: Any, *,
                         q_store, built["actions"],
                         contracts_by_url={str(c.get("url") or ""): c
                                           for c in review_contracts},
-                        live_titles=live_titles)
+                        live_titles=live_titles,
+                        fencing_check=lease_guard)
                 write_summary["queued"] = {
                     "criadas": queued["counts"]["criadas"],
                     "executaveis": queued["counts"]["executaveis"],

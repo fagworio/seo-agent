@@ -295,15 +295,18 @@ def test_schedule_defers_locked_title_without_gsc_failure_backoff(
 
     assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0),
                          config) == 0
-    json.loads(capsys.readouterr().out)
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "partial"
+    assert set(output["summary"]["deferred"]) >= {"title-engine", "gsc"}
     with Storage(str(db)) as storage:
         assert storage.get_setting("gsc:last_success", "") == ""
         assert storage.get_setting("gsc:next_retry", "")
         assert storage.get_setting("title-engine:next_retry", "")
         run = storage.conn.execute(
-            "SELECT status FROM agent_runs ORDER BY id DESC LIMIT 1"
+            "SELECT status, summary_json FROM agent_runs ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        assert run[0] == "success"
+        assert run[0] == "partial"
+        assert "title-engine" in run[1]
 
 
 def test_schedule_drena_aprovacoes_fora_do_modo_auto(monkeypatch, capsys, tmp_path):

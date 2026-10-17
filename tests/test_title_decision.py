@@ -846,6 +846,39 @@ def test_7a2_uma_url_estranha_nao_derruba_o_lote(tmp_path):
         assert "AttributeError" in r["erros"][0]["erro"] or r["erros"]
 
 
+def test_7a2_fencing_interrompe_lote_entre_decisoes(tmp_path):
+    """Um worker sem lease não pode materializar o restante do lote."""
+    db = str(tmp_path / "7a2-fencing.db")
+    first = _acao()
+    second = _acao(title="Outro título materializado antes da retomada")
+    calls = 0
+
+    def fencing_check():
+        nonlocal calls
+        calls += 1
+        # first: antes/depois da decisão, depois da persistência e antes do
+        # enqueue; o takeover acontece no primeiro gate do segundo item.
+        if calls == 5:
+            raise RuntimeError("lease perdido")
+
+    with Storage(db) as store:
+        with pytest.raises(RuntimeError, match="lease perdido"):
+            TD.persist_actions(
+                store, [first, second],
+                contracts_by_url={URL: _contrato()},
+                live_titles={URL: LIVE},
+                fencing_check=fencing_check,
+            )
+
+        first_decision = TD.decision_from_action(
+            first, contract=_contrato(), live_title=LIVE)
+        second_decision = TD.decision_from_action(
+            second, contract=_contrato(), live_title=LIVE)
+        assert store.title_decision(first_decision.decision_id) is not None
+        assert store.title_decision(second_decision.decision_id) is None
+        assert LaneQueue(store).stats(lane="title_execution")["pending"] == 1
+
+
 # ---------------------------------------------------------------------------
 # 7A.2.1 — os dois P1 latentes no caminho positivo
 # ---------------------------------------------------------------------------

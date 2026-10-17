@@ -537,7 +537,8 @@ def decision_from_action(action: dict[str, Any], *,
 def persist_actions(store: Any, actions: list[dict[str, Any]], *,
                     contracts_by_url: dict[str, dict[str, Any]] | None = None,
                     live_titles: dict[str, str] | None = None,
-                    enqueue: bool = True) -> dict[str, Any]:
+                    enqueue: bool = True,
+                    fencing_check: Any = None) -> dict[str, Any]:
     """Persiste cada acao como decisao e enfileira o que for executavel.
 
     Ordem deliberada (gate 8): `persist_decision` ANTES de `enqueue_execution`. Se
@@ -558,13 +559,35 @@ def persist_actions(store: Any, actions: list[dict[str, Any]], *,
         # unico item estranho estourava antes do `except` e levava o ciclo todo.
         url = (str(action.get("url") or "")
                if isinstance(action, dict) else "")
+        # A lease can be taken over while a large batch is being materialized.
+        # Fencing checks deliberately sit outside the per-item error boundary:
+        # losing the lease must stop the batch, never become a recoverable URL
+        # error that lets a stale worker continue writing/enqueuing.
+        if fencing_check is not None:
+            fencing_check()
         try:
             d = decision_from_action(action, contract=by_url.get(url),
                                      live_title=lives.get(url))
+        except Exception as exc:  # an invalid URL must not stop other items
+            erros.append({"url": url,
+                          "erro": f"{type(exc).__name__}: {exc}"})
+            continue
+        if fencing_check is not None:
+            fencing_check()
+        try:
             r = persist_decision(store, d)
+        except Exception as exc:  # persistence errors remain item-scoped
+            erros.append({"url": url,
+                          "erro": f"{type(exc).__name__}: {exc}"})
+            continue
+        if fencing_check is not None:
+            fencing_check()
+        try:
             criadas.append(d.decision_id)
             if r.get("executavel"):
                 if enqueue:
+                    if fencing_check is not None:
+                        fencing_check()
                     enqueue_execution(store, d)
                 executaveis.append(d.decision_id)
             else:
