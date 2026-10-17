@@ -1796,9 +1796,12 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
 
         if True:
             def _due(key: str, min_hours: float) -> bool:
-                # Checkpoints de sucesso são a fonte da verdade. Mantemos a
-                # chave antiga como fallback para não tornar bancos existentes
-                # imediatamente elegíveis após o deploy.
+                # ``key`` is the canonical stage name (gsc/ga4/corpus). A
+                # retry checkpoint is authoritative: once it expires, the
+                # stage is eligible even when its previous success is younger
+                # than the normal 20h/144h cadence. This is what makes a
+                # deferred lease loss a real short retry, not just a stored
+                # timestamp.
                 retry_raw = str(_daily_state.get_setting(
                     f"{key}:next_retry", "") or "")
                 if retry_raw:
@@ -1808,11 +1811,18 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                             retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
                         if datetime.datetime.now(datetime.timezone.utc) < retry_at:
                             return False
+                        return True
                     except Exception:  # noqa: BLE001 — checkpoint inválido é elegível
                         pass
+                # Preserve the pre-checkpoint aliases used by existing DBs.
+                legacy_success = {
+                    "gsc": "gsc:last_daily",
+                    "ga4": "ga4:last_daily",
+                    "corpus": "corpus:last_rebuild",
+                }.get(key, key)
                 raw = str(_daily_state.get_setting(
                     f"{key}:last_success",
-                    _daily_state.get_setting(key, ""),
+                    _daily_state.get_setting(legacy_success, ""),
                 ) or "")
                 if not raw:
                     return True
@@ -1898,9 +1908,9 @@ def _cmd_schedule(args: argparse.Namespace, config: Any) -> int:
                 record_stage(stage, "failed", {"error": detail})
                 return "failed"
 
-            _gsc_daily = _due("gsc:last_daily", 20)
-            _ga4_daily = _due("ga4:last_daily", 20)
-            _corpus_weekly = _due("corpus:last_rebuild", 144)
+            _gsc_daily = _due("gsc", 20)
+            _ga4_daily = _due("ga4", 20)
+            _corpus_weekly = _due("corpus", 144)
 
 
         # 1) Bounded audit + report (always).

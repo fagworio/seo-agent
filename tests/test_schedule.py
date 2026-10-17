@@ -402,3 +402,86 @@ def test_schedule_treats_title_lease_loss_as_deferred(monkeypatch, capsys, tmp_p
     with Storage(str(db)) as storage:
         assert storage.get_setting("title-engine:next_retry", "")
         assert storage.get_setting("gsc:next_retry", "")
+
+
+def test_schedule_respects_stage_retry_checkpoints_before_and_after_expiry(
+        monkeypatch, capsys, tmp_path):
+    """Retry timestamps gate all stages, then normal cadence resumes after success."""
+    db = tmp_path / "stage-retry-checkpoints.db"
+    config = dataclasses.replace(
+        _config(db), google_credentials="configured", title_engine_mode="auto"
+    )
+    real_datetime = datetime.datetime
+    clock = {"now": real_datetime(2026, 9, 8, 9, 0, tzinfo=datetime.timezone.utc)}
+
+    class _Clock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = clock["now"]
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(datetime, "datetime", _Clock)
+    with Storage(str(db)) as storage:
+        old_success = real_datetime(2026, 9, 8, 8, 0, tzinfo=datetime.timezone.utc).isoformat()
+        retry_at = real_datetime(2026, 9, 8, 10, 0, tzinfo=datetime.timezone.utc).isoformat()
+        storage.set_setting("gsc:last_daily", old_success)
+        storage.set_setting("ga4:last_daily", old_success)
+        storage.set_setting("corpus:last_rebuild", old_success)
+        storage.set_setting("gsc:next_retry", retry_at)
+        storage.set_setting("ga4:next_retry", retry_at)
+        storage.set_setting("corpus:next_retry", retry_at)
+
+    import hermes_seo_agent.cli as cli_module
+    calls = {"inspect": 0, "title": 0, "ga4": 0, "corpus": 0}
+
+    for name in (
+        "_cmd_audit", "_cmd_refresh_data", "_cmd_reconcile_title_queue",
+        "_cmd_demand", "_cmd_outcomes", "_cmd_post_audit",
+        "_cmd_opportunities",
+    ):
+        monkeypatch.setattr(f"hermes_seo_agent.cli.{name}", lambda *a, **k: None)
+
+    def _inspect(*_args, **_kwargs):
+        calls["inspect"] += 1
+
+    def _title(*_args, **_kwargs):
+        calls["title"] += 1
+
+    def _ga4(*_args, **_kwargs):
+        calls["ga4"] += 1
+
+    def _corpus(*_args, **_kwargs):
+        calls["corpus"] += 1
+
+    monkeypatch.setattr(cli_module, "_cmd_inspect", _inspect)
+    monkeypatch.setattr(cli_module, "_cmd_title_engine", _title)
+    monkeypatch.setattr(cli_module, "_cmd_ga4", _ga4)
+    monkeypatch.setattr(cli_module, "_cmd_corpus", _corpus)
+    monkeypatch.setattr(cli_module, "_cmd_lanes_run", lambda *a, **k: 0)
+
+    # The one-hour retry is still in the future: no stage runs.
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    capsys.readouterr()
+    assert calls == {"inspect": 0, "title": 0, "ga4": 0, "corpus": 0}
+
+    # Once the retry expires, all three stages run despite their recent legacy
+    # success aliases; successful checkpoints establish the canonical state.
+    clock["now"] = real_datetime(2026, 9, 8, 11, 0, tzinfo=datetime.timezone.utc)
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    capsys.readouterr()
+    assert calls == {"inspect": 1, "title": 1, "ga4": 1, "corpus": 1}
+    with Storage(str(db)) as storage:
+        assert storage.get_setting("gsc:next_retry", "") == ""
+        assert storage.get_setting("gsc:last_success", "")
+
+    # Normal cadence is restored after success: 30 minutes later nothing runs.
+    clock["now"] = real_datetime(2026, 9, 8, 11, 30, tzinfo=datetime.timezone.utc)
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    capsys.readouterr()
+    assert calls == {"inspect": 1, "title": 1, "ga4": 1, "corpus": 1}
+
+    # After 21h, daily GSC/GA4 are eligible again; weekly corpus is not.
+    clock["now"] = real_datetime(2026, 9, 9, 8, 0, tzinfo=datetime.timezone.utc)
+    assert _cmd_schedule(argparse.Namespace(inspect_hours="6", deep_weekday=0), config) == 0
+    capsys.readouterr()
+    assert calls == {"inspect": 2, "title": 2, "ga4": 2, "corpus": 1}
